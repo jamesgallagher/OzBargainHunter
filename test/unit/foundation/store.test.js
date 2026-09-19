@@ -19,9 +19,9 @@ function withStore(fn) {
   }
 }
 
-test('a fresh database is created at schema version 1 with all eleven tables', () => {
+test('a fresh database is created at schema version 2 with all eleven tables', () => {
   withStore((store) => {
-    assert.equal(store.schemaVersion, 1);
+    assert.equal(store.schemaVersion, 2);
     const expected = [
       'deals',
       'feed_state',

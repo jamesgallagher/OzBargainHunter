@@ -186,9 +186,9 @@ describe('match rule', () => {
 // 3. threshold.js — firing and the 24-hour window rejection
 // ---------------------------------------------------------------------------
 describe('threshold rule', () => {
-  it('fires when net votes reach the threshold', () => {
-    assert.equal(reachedThreshold({ threshold: 20 }, { votes_pos: 24, votes_neg: 0 }), true);
-    assert.equal(reachedThreshold({ threshold: 20 }, { votes_pos: 17, votes_neg: 0 }), false);
+  it('fires when net votes reach the threshold (unwindowed)', () => {
+    assert.equal(reachedThreshold({ threshold: 20 }, { votes_pos: 24, votes_neg: 0 }, '2026-09-19T07:30:00Z'), true);
+    assert.equal(reachedThreshold({ threshold: 20 }, { votes_pos: 17, votes_neg: 0 }, '2026-09-19T07:30:00Z'), false);
   });
 
   it('rejects a window over 24 hours at entry', () => {
@@ -198,12 +198,30 @@ describe('threshold rule', () => {
     assert.ok(MAX_WINDOW_MS === 24 * 60 * 60 * 1000);
   });
 
-  it('a threshold rule can never fire on a classifieds record', () => {
-    // No classifieds record carries a counter; the engine skips threshold on
-    // the classifieds surface entirely.
-    for (const r of classifieds) {
-      assert.equal(r.votes_pos, undefined);
-    }
+  it('C1: a windowed rule fires only while the deal is inside its window', () => {
+    // Deal posted 20 h before the poll, 10 net votes, {threshold: 10, windowHours: 6}:
+    // the window (6 h) has closed, so the rule must NOT fire — even though the
+    // vote count has reached the threshold.
+    const aged = { votes_pos: 10, votes_neg: 0, posted_at: '2026-09-18T11:30:00Z' };
+    assert.equal(reachedThreshold({ threshold: 10, windowHours: 6 }, aged, '2026-09-19T07:30:00Z'), false, 'aged out of the window: no fire');
+    // The same deal, posted 3 h before the poll (inside the 6 h window): fires.
+    const fresh = { votes_pos: 10, votes_neg: 0, posted_at: '2026-09-19T04:30:00Z' };
+    assert.equal(reachedThreshold({ threshold: 10, windowHours: 6 }, fresh, '2026-09-19T07:30:00Z'), true, 'inside the window: fires');
+    // A windowed rule with no posted_at never fires (cannot establish the window).
+    const noPost = { votes_pos: 10, votes_neg: 0 };
+    assert.equal(reachedThreshold({ threshold: 10, windowHours: 6 }, noPost, '2026-09-19T07:30:00Z'), false, 'no posted_at: no fire');
+  });
+
+  it('a threshold rule can never fire on a classifieds record (engine level)', () => {
+    // The engine skips threshold on the classifieds surface entirely: a
+    // threshold rule over the classifieds feed produces zero alerts.
+    const store = makeStore();
+    insertRule(store, { id: 1, type: 'threshold', parameters: { threshold: 1 }, surfaces: 'classifieds' });
+    const out = evaluatePoll({
+      feeds: [{ surface: 'classifieds', records: classifieds }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    assert.equal(out.alerts.filter((a) => a.rule_id === 1).length, 0, 'no threshold alert on classifieds');
   });
 });
 
@@ -371,6 +389,31 @@ describe('engine: cooldown', () => {
   });
 });
 
+describe('engine: priority (M4)', () => {
+  it('a front-page node alerts with priority high; a deals-only node with priority normal', () => {
+    const store = makeStore();
+    // Both rules use surfaces 'deals' (which covers the front feed too); the
+    // priority is set by whether the *node* is in the front feed, not the
+    // rule's surface. 975704 (ubiquiti) is on the front page; 975714 (weber)
+    // is deals-only.
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'ubiquiti' }, surfaces: 'deals' });
+    insertRule(store, { id: 2, type: 'match', parameters: { term: 'weber' }, surfaces: 'deals' });
+    const out = evaluatePoll({
+      feeds: [
+        { surface: 'deals', records: dealsPage0 },
+        { surface: 'front', records: frontFeed },
+      ],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    const highAlerts = out.alerts.filter((a) => a.node_id === 975704);
+    const normalAlerts = out.alerts.filter((a) => a.node_id === 975714);
+    assert.ok(highAlerts.length > 0, 'front-page node 975704 fired');
+    assert.ok(normalAlerts.length > 0, 'deals-only node 975714 fired');
+    for (const a of highAlerts) assert.equal(a.priority, 'high', 'front-page alert is priority high');
+    for (const a of normalAlerts) assert.equal(a.priority, 'normal', 'deals-only alert is priority normal');
+  });
+});
+
 describe('engine: repost suppression across every corpus pair', () => {
   it('975593 and 975574 score 0.667; no other classifieds pair reaches 0.60', () => {
     const titles = classifieds.map((r) => ({ id: r.node_id, title: r.title }));
@@ -487,6 +530,23 @@ describe('engine: freebies', () => {
     assert.equal(fb[0].poster, 'ausdkunst', 'names the poster');
     assert.equal(fb[0].priority, 'normal', 'normal priority');
   });
+
+  it('C2: a freebie notification carries a working unsubscribe link, not a dead /goto/ one', () => {
+    const store = makeStore();
+    const base = C.get(975712);
+    const freebie = { ...base, type: 'free' };
+    const out = evaluatePoll({
+      feeds: [{ surface: 'classifieds', records: [freebie] }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    const notifications = groupAndCompose(out.alerts);
+    const freebieN = notifications.find((n) => n.kind === 'freebie');
+    assert.ok(freebieN, 'a freebie notification was composed');
+    assert.ok(freebieN.unsubscribe, 'carries an unsubscribe control');
+    assert.ok(freebieN.unsubscribe.url.startsWith('/settings/'), 'unsubscribe points at the settings screen');
+    assert.ok(!freebieN.unsubscribe.url.includes('/goto/'), 'no /goto/ in the unsubscribe link');
+    assert.ok(!JSON.stringify(freebieN).includes('/goto/'), 'no /goto/ anywhere in the freebie notification');
+  });
 });
 
 describe('engine: cold start', () => {
@@ -593,6 +653,15 @@ describe('notify: fan-out and per-provider failure counting', () => {
     const mixed = [goodEmail, okMatrix, okNtfy];
     await fanout({ notifications: one, providers: mixed, store, clock: frozenClock(POLL_1_AT) });
     assert.equal(store.getProvider('email').consecutive_failures, 0, 'counter reset by a success');
+  });
+});
+
+describe('notify: priority (M4)', () => {
+  it('a front-page alert composes with priority high; a deals alert with priority normal', () => {
+    const [n] = groupAndCompose([{ rule_id: 1, ruleLabel: 'ubiquiti', node_id: 975704, title: 't', isFrontPage: true, pollAt: POLL_1_AT }]);
+    assert.equal(n.priority, 'high', 'front-page alert composes with priority high');
+    const [n2] = groupAndCompose([{ rule_id: 2, ruleLabel: 'torbox', node_id: 975666, title: 't', isFrontPage: false, pollAt: POLL_1_AT }]);
+    assert.equal(n2.priority, 'normal', 'deals alert composes with priority normal');
   });
 });
 
