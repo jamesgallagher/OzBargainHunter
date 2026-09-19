@@ -238,7 +238,7 @@ Matching runs over the deal title, description text and structured category labe
 
 **Items from the front-page feed are matched as well as items from the deals feed.** A deal that reaches the front page without ever appearing on deals pages 0–1 is therefore still matched, rather than silently ignored. (3.1)
 
-**On classifieds, only listings of type *Selling* are eligible.** The page carries exactly four types: *Selling*, *Freebie*, *Wanted* and *Swapping*. *Wanted* — someone seeking an item rather than offering one — and *Swapping* are never alerted on, and neither is any pinned listing, whatever it matches. A wanted advert is not an offer. *Freebie* is handled by its own notification class (6.6).
+**On classifieds, only listings of type "Selling" are eligible.** Listings marked *Wanted* — someone seeking an item rather than offering one — and any pinned listing are never alerted on, whatever they match. A wanted advert is not an offer.
 
 Normalisation: lower-cased, punctuation stripped, whitespace runs collapsed, so that `AMD R9700` and `amd  r9700` behave identically.
 
@@ -589,7 +589,7 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O15. Logo hosting**, since a private repository rules out `raw.githubusercontent.com`. Options: one unauthenticated icon route, or hosting the asset elsewhere.
 - **O16. Registry retention policy** — bounded growth of per-commit tags.
 - **O17. Dependency and image scanning** in CI.
-- **O18. Classifieds markup — RESOLVED.** The live page markup was captured and the parser is now fully specified in 3.6. Fields, type classes, the pinned marker and both timestamp formats are known. No longer blocking.
+- **O18. Classifieds markup capture** — the listing page's HTML has not been captured, so no parser can yet be written against it. The parser must extract, at minimum: the listing type (to restrict alerts to *Selling*), whether the listing is pinned, the bracketed category tag, the title, the poster and the timestamp.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
 - **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
 
