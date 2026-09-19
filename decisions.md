@@ -8,6 +8,13 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ---
 
+## Runtime and stack
+
+- **D60 — Application language and runtime.** **Next.js, with the front end in React**, on **Node.js 24 LTS**. Supersedes D36 (Python). Next.js is built on React, so this is one decision. **DECIDED**
+- **D61 — Two processes in one container.** Next.js has no scheduler, so the container runs **the Next.js server** and **a worker** — poller, rules engine, notifier — as two long-lived processes under a supervising entrypoint. The entrypoint forwards `SIGTERM`/`SIGINT` to both and exits non-zero if either child exits, so Docker restarts a half-dead container. The two share only the SQLite file. **Polling inside a route handler, middleware, instrumentation hook or revalidation is prohibited**: it would make the application poll only while somebody is watching it. Supersedes "one container, one process group" in design §2.2. **DECIDED**
+- **D63 — Access JWT verification lives in Next.js middleware.** One file, applied to every route by default, rather than a check each route handler must remember. Two consequences bind the implementation: the JWT library must verify RS256 against a remote JWKS using **Web Crypto** rather than Node's `crypto`, because of the middleware runtime; and the matcher **must not** use the conventional `/_next/static` exclusion, because acceptance criterion 11.2.4 requires static assets to be protected too. Implements D3. **SPECIFIED**
+- **D62 — Health-check authentication.** `/healthz` is behind the same middleware as everything else and authenticates with a **container-local shared secret** generated at container start. It is therefore not an exception to deny-by-default (design §8.3), and a LAN request without the secret is rejected like any other. **SPECIFIED**
+
 ## Delivery and packaging
 
 - **D1 — Repository visibility.** PRIVATE, accessed with a PAT. **DECIDED**
@@ -31,7 +38,8 @@ Update this file whenever a decision changes. Do not append history — replace 
 ## Data acquisition
 
 - **D14 — Client identity.** Honest, explicit self-identification. The tool represents the user and does not disguise itself: no browser impersonation, no TLS-fingerprint impersonation, no identity rotation, no proxies, no bypass tooling. On being blocked while identified honestly, it stops and surfaces the block rather than escalating. **DECIDED**
-- **D13 / D10 — Classifieds authentication.** The container performs the login itself, using a dedicated account created for the tool. **DECIDED**
+  - **Consequence of D60: the `curl_cffi` / `tls-client` question is moot.** Those tools were weighed when the stack was Python, and their only purpose is to imitate a browser's TLS handshake — which D14 already forbids. The platform's own HTTP client is therefore the correct one, on any stack, and under D60 that is Node's built-in `fetch`. Nothing about the stack change reopens this.
+- **D13 / D10 — Classifieds authentication.** The container performs the login itself, using a dedicated account created for the tool. **DECIDED, but BLOCKED (O21)** — it requires `/user/login`, which D14's deny list (design §3.4) forbids outright. v1 therefore takes the session cookie supplied through UI screen 9 (design §7.1) and does not build the self-login. James to resolve.
 - **D10b — OzBargain credential storage.** Environment variables in the container's `.env`, accepting the Unraid-template storage risk. **DECIDED**
 
 ## Alerting
@@ -84,8 +92,8 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Not yet decided at all
 
-- **D36 — Application language and runtime.** Python. **DECIDED**
-- **D37 — Classifieds markup.** Not captured, so no parser can be written. **OPEN (O18)**
+- **D36 — Application language and runtime.** **SUPERSEDED by D60.** Was Python; the owner has changed the stack to Next.js and React.
+- **D37 — Classifieds markup.** **SUPERSEDED by D50.** The markup was captured, O18 is closed, and the parser is specified in design §3.6 against it. The capture is `fixtures/http/classifieds-page.html`.
 - **D38 — Classifieds access for a brand-new account.** Evidence came from an established account. **OPEN (O19)**
 - **D39 — Threshold window versus feed reach.** A 7-day window exceeds the feed's ~22-hour reach. **OPEN (O12)**
 - **D40 — Dependency and image scanning** in CI. **OPEN (O17)**
@@ -94,7 +102,8 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Counts
 
-**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D36, D41, D42
-**SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34
-**OPEN:** D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D37–D40
+**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D41, D42, D60, D61
+**SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34, D62, D63
+**OPEN:** D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D38, D39, D40
+**SUPERSEDED:** D11 (by D22), D36 (by D60), D37 (by D50)
 **DEFERRED:** D28

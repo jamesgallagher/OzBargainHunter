@@ -45,13 +45,23 @@ The application is a single container running five internal components:
 2. **Store** — SQLite database holding deals, counter observations, rules, the alert ledger and acquisition state.
 3. **Rules engine** — evaluates configured rules against newly observed data.
 4. **Notifier** — delivers alerts through one or more configured providers.
-5. **Web UI** — a server-rendered or SPA interface for rule CRUD, delivery configuration and acquisition status.
+5. **Web UI** — a **React** interface, served by **Next.js**, for rule CRUD, delivery configuration and acquisition status.
 
 ### 2.2 Runtime
 
-- One container. One process group. No sidecars and no separate database container.
-- **Python.**
-- The application binds port **8000** inside the container.
+- **Next.js, with the user interface in React**, on Node.js. One container. No sidecars and no separate database container.
+- **The container runs two long-lived processes**, supervised by its entrypoint:
+  1. **The Next.js server** — serves the web UI and its routes, and nothing else.
+  2. **The worker** — owns the poll loop, and with it the poller, the rules engine and the notifier.
+
+**Next.js has no scheduler.** Nothing in the framework runs a job every five minutes, and the request lifecycle is the wrong place to look for one. The poll loop therefore lives in the worker, which runs whether or not anybody is looking at the UI.
+
+- **Polling is never driven by an HTTP request.** A poll performed inside a route handler, a middleware, an instrumentation hook or an on-demand revalidation happens only when somebody visits the application — which is exactly when the user does not need it, and never at 3 a.m. when the deal is posted. **This is a build error, not a matter of taste.**
+- **The two processes share the SQLite database (4.3) and nothing else.** There is no socket, queue or RPC between them. Both open the same file, so both set a busy timeout; WAL mode (4.3) is what keeps the UI's reads out of the worker's way.
+- **The entrypoint supervises both.** It propagates `SIGTERM` and `SIGINT` to each child, and **if either process exits, the container exits non-zero** so Docker restarts it. A half-running container — UI up, poller dead — is the failure this prevents, and from the outside it is indistinguishable from a quiet day (6.7).
+- **A user-initiated action may still send a notification in the Next.js process** — the test-send button in delivery configuration (7.1) is a request, not a schedule. Scheduled delivery belongs to the worker.
+- The application binds port **8000** inside the container. The worker binds no port.
+- `/healthz` is served by the Next.js process and reports on state the worker wrote (3.7). It is an acquisition-health endpoint, not a liveness probe of the process answering it.
 - No inbound dependency: the poller only makes outbound requests.
 
 ### 2.3 Data flow
@@ -366,6 +376,8 @@ This exists because of the failure that matters most: **an alerting tool that ha
 
 ## 7. Web UI
 
+**The UI is a React application served by Next.js**, running in the Next.js process (2.2). It reads and writes the same SQLite database the worker uses, and it performs no acquisition work of its own.
+
 ### 7.1 Screens
 
 The UI contains the following screens. Nothing else.
@@ -405,6 +417,11 @@ The application **never infers** that a request came through Access from the net
 
 **This verification is the application's primary access control**, because the LAN path exists by design (8.4).
 
+**Verification belongs in Next.js middleware.** One file, applied to every route by default, is the only placement that makes "without exception" structurally true rather than a rule each new route handler has to remember. Two constraints follow from that placement and are binding:
+
+- **The middleware's runtime decides the JWT library.** Middleware does not run with the full Node.js API surface available, so a library built on Node's `crypto` module is not a candidate. The library chosen must verify the signature against Cloudflare's remote JWKS using Web Crypto, and must cache the fetched keys rather than fetching them on every request.
+- **The matcher must not exempt static assets.** The conventional Next.js middleware matcher excludes `/_next/static` and friends. Acceptance criterion 11.2.4 requires that a static asset requested with no session is not a `200`, so that exclusion cannot be used here. Only the exceptions enumerated in 8.3 are exempt.
+
 ### 8.3 Deny by default
 
 Every path requires a verified JWT. Unauthenticated access to any path is an explicit, documented, reviewed exception, enumerated here and nowhere else.
@@ -413,7 +430,7 @@ Current exceptions:
 
 - **The icon route**, if the logo cannot be served from a public location (see Open Item O15).
 
-Health checks do not require an exception: the container health check calls `127.0.0.1:8000` from inside the container and never crosses the edge.
+Health checks do not require an exception: the container health check calls `127.0.0.1:8000` from inside the container and never crosses the edge. Because the middleware (8.2) sees that request like any other, the health check authenticates with a **container-local shared secret**, generated at container start and never leaving it. `/healthz` is therefore not an unauthenticated path — it accepts a second credential that only something inside the container holds — and a request to it from the LAN without that secret is rejected exactly like any other path.
 
 ### 8.4 LAN posture
 
@@ -497,13 +514,17 @@ The Unraid template's repository field reads `ghcr.io/jamesgallagher/ozbargainhu
 
 Workflow jobs, in order:
 
-1. Lint / format check
-2. Unit tests
+1. **Lint / format check** — ESLint over the Next.js project
+2. **Unit tests** — Node.js's built-in test runner. No third-party test framework
 3. Build the image — on every trigger, including pull requests
 4. **Smoke test the built image** — run the container, wait for health, make one HTTP request, assert a sane response
 5. Publish — only on `main`, and **only if 1–4 passed**
 
 Pull requests run 1–4 and never publish.
+
+The workflow runs on **Node.js 24 LTS**, the same major version the image is built from, and installs with `npm ci` from the committed lockfile so CI and the image resolve identical dependencies.
+
+**The smoke test does not touch `ozbargain.com.au`.** The feed URLs are configuration (9.1), so the job points them at a fixture server on loopback. That is not a convenience: the health check reports unhealthy until a poll has succeeded (3.7), so a smoke test with no reachable feed could only pass by making the health check meaningless. It also lets the job assert the thing that matters most about the runtime split (2.2) — **that the database gains observations while no HTTP request is made to the application at all.**
 
 The workflow sets a **concurrency group keyed on the branch reference with cancel-in-progress enabled**, so two rapid pushes cannot finish out of order and leave `:latest` pointing at the older commit.
 
@@ -593,7 +614,7 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 
 **Owner: James — decision required**
 
-None. Every decision that required the owner is currently closed.
+- **O21. The classifieds login conflicts with the deny list.** 3.6 says the application performs the login itself (D13). 3.4 says `/user/login` is on the hard-coded deny list and is *"never requested by any part of the application, including future features"*. Both are normative and they cannot both hold. Screen 9 in 7.1 already contemplates the third path — the user supplying a session cookie — which requires no request to `/user/login` at all. **Until this is resolved, v1 acquires the classifieds session from a cookie supplied through the UI**, and the self-login is not built. Resolving it means either removing `/user/login` from the deny list on the grounds that authenticating as yourself is not crawling, or standing down D13.
 
 **Owner: design/implementation — to be resolved by research or probe**
 
@@ -606,4 +627,6 @@ None. Every decision that required the owner is currently closed.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
 - **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
 
-**Deliberately left to implementation** (recorded so their absence is not mistaken for an oversight): the UI's routes and endpoint shapes, the Python framework, and the specific test framework and coverage expectations.
+**Deliberately left to implementation** (recorded so their absence is not mistaken for an oversight): the UI's routes and endpoint shapes, and coverage expectations.
+
+**No longer open.** The language and runtime are decided — **Next.js and React on Node.js 24 LTS** (D60), with the two-process container runtime described in 2.2 (D61). The test runner is Node.js's built-in one; the test corpus, its fixtures and the exact per-card commands are fixed by `cards.json` and `fixtures/README.md` rather than by this document.

@@ -1,0 +1,11 @@
+HTTP/2 403 
+date: Sat, 19 Sep 2026 06:18:47 GMT
+content-type: text/html; charset=utf-8
+server: cloudflare
+vary: Accept-Encoding
+set-cookie: PHPSESSID=30tf4n9k8hh38tle15o2ev7e4g; expires=Fri, 18 Dec 2026 06:18:47 GMT; Max-Age=7776000; path=/; secure; HttpOnly
+last-modified: Sat, 19 Sep 2026 06:18:47 GMT
+cache-control: no-store, no-cache, must-revalidate
+cf-cache-status: DYNAMIC
+cf-ray: a3d6799fdb882bdf-MEL
+

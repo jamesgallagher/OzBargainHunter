@@ -1,0 +1,942 @@
+{
+  "source": "fixtures/http/cmp_front.xml",
+  "surface": "front",
+  "fixture_now": "2026-09-19T06:20:00Z",
+  "records": [
+    {
+      "node_id": 975704,
+      "title": "[WA] Ubiquiti Unifi Dream Router 7 (UDR7) $399 + Delivery ($0 WA C&C/ in-Store) @ PLE",
+      "url": "https://www.ozbargain.com.au/node/975704",
+      "author": "zbmat",
+      "posted_at": "2026-09-19T05:51:15Z",
+      "expiry_at": "2026-09-20T14:00:00Z",
+      "merchant_url": "https://www.ple.com.au/products/674101/ubiquiti-unifi-dream-router-7",
+      "goto_url": "https://www.ozbargain.com.au/goto/975704",
+      "image_url": "https://files.ozbargain.com.au/n/04/975704l.jpg?h=1b74c47d",
+      "votes_pos": 23,
+      "votes_neg": 0,
+      "comment_count": 4,
+      "click_count": 495,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "computing",
+          "label": "Computing"
+        },
+        {
+          "kind": "brand",
+          "slug": "ubiquiti",
+          "label": "Ubiquiti"
+        },
+        {
+          "kind": "product",
+          "slug": "ubiquiti-unifi-dream-router-7",
+          "label": "Ubiquiti Unifi Dream Router 7"
+        },
+        {
+          "kind": "tag",
+          "slug": "wi-fi",
+          "label": "Wi-Fi"
+        },
+        {
+          "kind": "tag",
+          "slug": "wi-fi-7",
+          "label": "Wi-Fi 7"
+        },
+        {
+          "kind": "tag",
+          "slug": "wireless-router",
+          "label": "Wireless Router"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/04/975704l.jpg?h=1b74c47d\"/></div><p>UDR7 on a good price @PLE as part of their 35 year anniversary celebration. Personally I found this super easy to setup and create multiple networks to isolate my devices and have granular control on …</p>"
+    },
+    {
+      "node_id": 975699,
+      "title": "Catan New Energies $35 (RRP $70) + Delivery ($0 C&C/ in-Store/ OnePass/ $60 Order) @ Target",
+      "url": "https://www.ozbargain.com.au/node/975699",
+      "author": "redsprites",
+      "posted_at": "2026-09-19T04:30:23Z",
+      "expiry_at": null,
+      "merchant_url": "https://www.target.com.au/p/catan-new-energies/73360858",
+      "goto_url": "https://www.ozbargain.com.au/goto/975699",
+      "image_url": "https://files.ozbargain.com.au/n/99/975699l.jpg?h=d2f3a043",
+      "votes_pos": 23,
+      "votes_neg": 0,
+      "comment_count": 10,
+      "click_count": 1943,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "toys-kids",
+          "label": "Toys & Kids"
+        },
+        {
+          "kind": "tag",
+          "slug": "board-game",
+          "label": "Board Game"
+        },
+        {
+          "kind": "product",
+          "slug": "catan",
+          "label": "CATAN"
+        },
+        {
+          "kind": "brand",
+          "slug": "catan-studio",
+          "label": "Catan Studio"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/99/975699l.jpg?h=d2f3a043\"/></div><p>It&#039;s the 21st Century and Catan is at a crossroads. Long gone is the agrarian society of the island&#039;s Viking ancestors. Today&#039;s Catanians need energy to keep society moving and …</p>"
+    },
+    {
+      "node_id": 975677,
+      "title": "Backbone One Gen 2 USB-C Mobile Gaming Controller $69 Delivered @ Big W",
+      "url": "https://www.ozbargain.com.au/node/975677",
+      "author": "iknowboonie",
+      "posted_at": "2026-09-19T03:16:10Z",
+      "expiry_at": null,
+      "merchant_url": "https://www.bigw.com.au/product/backbone-one-mobile-gaming-controller-for-android-and-iphone-15-series-2nd-generation-black/p/523630",
+      "goto_url": "https://www.ozbargain.com.au/goto/975677",
+      "image_url": "https://files.ozbargain.com.au/n/77/975677l.jpg?h=ecbf717b",
+      "votes_pos": 27,
+      "votes_neg": 0,
+      "comment_count": 12,
+      "click_count": 1549,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "gaming",
+          "label": "Gaming"
+        },
+        {
+          "kind": "brand",
+          "slug": "backbone-brand-",
+          "label": "Backbone (Brand)"
+        },
+        {
+          "kind": "product",
+          "slug": "backbone-one-2nd-gen",
+          "label": "Backbone One (2nd Gen)"
+        },
+        {
+          "kind": "tag",
+          "slug": "game-controller",
+          "label": "Game Controller"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/77/975677l.jpg?h=ecbf717b\"/></div><p>Big W has the Backbone One Gen 2 USB-C on clearance for $69. The PlayStation edition is also the same price. JB Hifi price matched when I bought in-store. PlayStation …</p>"
+    },
+    {
+      "node_id": 975675,
+      "title": "Philips LED Bulb B22 8W with Motion Sensor - $24.95 @Reduction Revolution (Price Beat Guarantee Bunnings - $22.45)",
+      "url": "https://www.ozbargain.com.au/node/975675",
+      "author": "sunface",
+      "posted_at": "2026-09-19T02:58:21Z",
+      "expiry_at": null,
+      "merchant_url": "https://reductionrevolution.com.au/products/motion-sensor-light-bulb-b22?country=AU&currency=AUD&variant=32180840005734",
+      "goto_url": "https://www.ozbargain.com.au/goto/975675",
+      "image_url": "https://files.ozbargain.com.au/n/75/975675l.jpg?h=7d0e7c77",
+      "votes_pos": 35,
+      "votes_neg": 0,
+      "comment_count": 21,
+      "click_count": 1246,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "home-garden",
+          "label": "Home & Garden"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/75/975675l.jpg?h=7d0e7c77\"/></div><p>My first Deal here. Needed to buy a motion sensor light for my laundry and walk in robes. It was cheaper than Bunnings in this website. I tried my luck with Price Beat Guarantee at Bunnings and staff …</p>"
+    },
+    {
+      "node_id": 975670,
+      "title": "OnePass Mobile: 350GB 12-Month Plan $169, Plus 20% Cashback ($33.80) @ TopCashback AU",
+      "url": "https://www.ozbargain.com.au/node/975670",
+      "author": "nocure",
+      "posted_at": "2026-09-19T01:49:33Z",
+      "expiry_at": "2026-09-29T14:00:00Z",
+      "merchant_url": "https://onepassmobile.com.au/product/data-71",
+      "goto_url": "https://www.ozbargain.com.au/goto/975670",
+      "image_url": "https://files.ozbargain.com.au/n/70/975670l.jpg?h=9d44ffcc",
+      "votes_pos": 37,
+      "votes_neg": 0,
+      "comment_count": 43,
+      "click_count": 777,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "mobile",
+          "label": "Mobile"
+        },
+        {
+          "kind": "tag",
+          "slug": "cashback",
+          "label": "Cashback"
+        },
+        {
+          "kind": "tag",
+          "slug": "membership",
+          "label": "Membership"
+        },
+        {
+          "kind": "tag",
+          "slug": "prepaid-mobile-plan",
+          "label": "Prepaid Mobile Plan"
+        },
+        {
+          "kind": "tag",
+          "slug": "sim-card",
+          "label": "SIM Card"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/70/975670l.jpg?h=9d44ffcc\"/></div><p>TopCashback link: (1) SIM must be activated within 30 days of purchase and must remain connected on a OnePass Mobile plan for a minimum 75 days to be eligible for cashback. (2) Cashback is …</p>"
+    },
+    {
+      "node_id": 975666,
+      "title": "20% off new TorBox Subscriptions: Yearly Essential Plan US$26.40 / A$37.02 (All Payment Methods) + 84 Days via Referral @ TorBox",
+      "url": "https://www.ozbargain.com.au/node/975666",
+      "author": "zmv",
+      "posted_at": "2026-09-19T00:48:09Z",
+      "expiry_at": "2026-09-30T14:00:00Z",
+      "merchant_url": "https://torbox.app/",
+      "goto_url": "https://www.ozbargain.com.au/goto/975666",
+      "image_url": "https://files.ozbargain.com.au/n/66/975666l.jpg?h=c8d0ee84",
+      "votes_pos": 114,
+      "votes_neg": 0,
+      "comment_count": 83,
+      "click_count": 1341,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "internet",
+          "label": "Internet"
+        },
+        {
+          "kind": "tag",
+          "slug": "bittorrent",
+          "label": "Bittorrent"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/66/975666l.jpg?h=c8d0ee84\"/></div><p>Temporary discount for 1 million signed up users, as well as TorBox&#039;s belated 3rd birthday, posted on their Discord. New accounts only. Works with all payment methods, not just crypto. Using a …</p>"
+    },
+    {
+      "node_id": 975662,
+      "title": "Coolabah Kamado Ceramic BBQ $149 @ ALDI",
+      "url": "https://www.ozbargain.com.au/node/975662",
+      "author": "nocure",
+      "posted_at": "2026-09-19T00:30:35Z",
+      "expiry_at": "2026-10-09T13:00:00Z",
+      "merchant_url": "https://www.aldi.com.au/product/coolabah-kamado-cermaic-bbq-000000000000739177",
+      "goto_url": "https://www.ozbargain.com.au/goto/975662",
+      "image_url": "https://files.ozbargain.com.au/n/62/975662l.jpg?h=9fc7d5ae",
+      "votes_pos": 29,
+      "votes_neg": 0,
+      "comment_count": 33,
+      "click_count": 3635,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "home-garden",
+          "label": "Home & Garden"
+        },
+        {
+          "kind": "tag",
+          "slug": "barbeque",
+          "label": "Barbeque"
+        },
+        {
+          "kind": "tag",
+          "slug": "coolabah",
+          "label": "Coolabah"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/62/975662l.jpg?h=9fc7d5ae\"/></div><p> Product Details: This Kamado Ceramic BBQ features a stainless steel grill rack, bamboo handles and built-in temperature gauge. Multifunctional – it can be used to smoke, chargrill, bake, …</p>"
+    },
+    {
+      "node_id": 975657,
+      "title": "Xiaomi 33W Magnetic Power Bank 10,000mAh w/ Integrated Cable $29.50 (RRP $79.50) + Delivery ($0 with $69 Spend) @ Xiaomi AU",
+      "url": "https://www.ozbargain.com.au/node/975657",
+      "author": "Ultralift",
+      "posted_at": "2026-09-18T23:18:53Z",
+      "expiry_at": null,
+      "merchant_url": "https://www.mi.com/au/product/xiaomi-33w-magnetic-power-bank-10000-integrated-cable/",
+      "goto_url": "https://www.ozbargain.com.au/goto/975657",
+      "image_url": "https://files.ozbargain.com.au/n/57/975657l.jpg?h=c5639248",
+      "votes_pos": 35,
+      "votes_neg": 0,
+      "comment_count": 20,
+      "click_count": 3159,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "electrical-electronics",
+          "label": "Electrical & Electronics"
+        },
+        {
+          "kind": "tag",
+          "slug": "10000mah",
+          "label": "10000mAh"
+        },
+        {
+          "kind": "tag",
+          "slug": "power-bank",
+          "label": "Power Bank"
+        },
+        {
+          "kind": "tag",
+          "slug": "wireless-charger",
+          "label": "Wireless Charger"
+        },
+        {
+          "kind": "brand",
+          "slug": "xiaomi",
+          "label": "Xiaomi"
+        },
+        {
+          "kind": "product",
+          "slug": "xiaomi-wpb1007mi",
+          "label": "Xiaomi WPB1007MI"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/57/975657l.jpg?h=c5639248\"/></div><p>Product model WPB1007MI Battery type Lithium-ion battery Rated capacity* 5,900mAh (5V/3A) Battery power 37Wh: The product has two built-in 5,000mAh batteries Wireless output 7.5W MAX Input …</p>"
+    },
+    {
+      "node_id": 975654,
+      "title": "[QLD] Border Ranges Pastoral - Grass Fed Beef Box 5kg $100 Delivered to SE QLD @ Farmer To Fridge",
+      "url": "https://www.ozbargain.com.au/node/975654",
+      "author": "F2F",
+      "posted_at": "2026-09-18T22:40:38Z",
+      "expiry_at": null,
+      "merchant_url": "https://farmertofridge.com.au/product/182437/5kg-try-see-beef-pack",
+      "goto_url": "https://www.ozbargain.com.au/goto/975654",
+      "image_url": "https://files.ozbargain.com.au/n/54/975654l.jpg?h=2f1542d2",
+      "votes_pos": 12,
+      "votes_neg": 0,
+      "comment_count": 19,
+      "click_count": 648,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "groceries",
+          "label": "Groceries"
+        },
+        {
+          "kind": "tag",
+          "slug": "beef",
+          "label": "Beef"
+        },
+        {
+          "kind": "tag",
+          "slug": "meat",
+          "label": "Meat"
+        },
+        {
+          "kind": "tag",
+          "slug": "minced-meat",
+          "label": "Minced Meat"
+        },
+        {
+          "kind": "tag",
+          "slug": "sausage",
+          "label": "Sausage"
+        },
+        {
+          "kind": "tag",
+          "slug": "steak",
+          "label": "Steak"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/54/975654l.jpg?h=2f1542d2\"/></div><p>Use code Free delivery at checkout (shown on page) price will drop to $100. Delivery area map. 5kg Try and See Beef Mixed Box - Grass Fed What&#039;s in the box? Mixed 5kg may contain a mix of the …</p>"
+    },
+    {
+      "node_id": 975652,
+      "title": "[QLD] EGO LM1703E 56V 42cm Push Mower Kit + Free LB6150E Blower (via Redemption) $629.30 + Delivery ($0 C&C) @ ALS",
+      "url": "https://www.ozbargain.com.au/node/975652",
+      "author": "derpdeder",
+      "posted_at": "2026-09-18T21:46:57Z",
+      "expiry_at": "2026-09-19T14:00:00Z",
+      "merchant_url": "https://www.australianlandscapesupplies.com.au/collections/ego-power-56v-mowers/products/ego-lm1703e",
+      "goto_url": "https://www.ozbargain.com.au/goto/975652",
+      "image_url": "https://files.ozbargain.com.au/n/52/975652l.jpg?h=9829324b",
+      "votes_pos": 24,
+      "votes_neg": 0,
+      "comment_count": 16,
+      "click_count": 1161,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "home-garden",
+          "label": "Home & Garden"
+        },
+        {
+          "kind": "tag",
+          "slug": "56v",
+          "label": "56V"
+        },
+        {
+          "kind": "tag",
+          "slug": "5ah",
+          "label": "5Ah"
+        },
+        {
+          "kind": "tag",
+          "slug": "battery-charger",
+          "label": "Battery Charger"
+        },
+        {
+          "kind": "tag",
+          "slug": "blower",
+          "label": "Blower"
+        },
+        {
+          "kind": "tag",
+          "slug": "cordless",
+          "label": "Cordless"
+        },
+        {
+          "kind": "tag",
+          "slug": "cordless-mower",
+          "label": "Cordless Mower"
+        },
+        {
+          "kind": "tag",
+          "slug": "cordless-tool",
+          "label": "Cordless Tool"
+        },
+        {
+          "kind": "brand",
+          "slug": "ego-tools",
+          "label": "EGO Tools"
+        },
+        {
+          "kind": "tag",
+          "slug": "lawn-mower",
+          "label": "Lawn Mower"
+        },
+        {
+          "kind": "tag",
+          "slug": "power-tool",
+          "label": "Power Tool"
+        },
+        {
+          "kind": "tag",
+          "slug": "rechargeable-battery",
+          "label": "Rechargeable Battery"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/52/975652l.jpg?h=9829324b\"/></div><p>Australian Landscaping Supplies are running a EGO Power+ promo. The LM1703E model is 30% off and is included in the EGO Power+ Spring Redemption promo where you can get a bonus LB6150E blower …</p>"
+    },
+    {
+      "node_id": 975650,
+      "title": "TCL 98\" P8LS QD-MiniLED TV $2995 + Delivery ($0 within 30km of Store/ In-Store) @ The Good Guys",
+      "url": "https://www.ozbargain.com.au/node/975650",
+      "author": "flashkobalt",
+      "posted_at": "2026-09-18T21:17:25Z",
+      "expiry_at": "2026-09-20T14:00:00Z",
+      "merchant_url": "https://www.thegoodguys.com.au/tcl-98-inches-p8ls-qd-mini-led-google-tv-with-gemini-2026-98p8ls",
+      "goto_url": "https://www.ozbargain.com.au/goto/975650",
+      "image_url": "https://files.ozbargain.com.au/n/50/975650l.jpg?h=20348eaf",
+      "votes_pos": 48,
+      "votes_neg": 0,
+      "comment_count": 21,
+      "click_count": 1537,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "electrical-electronics",
+          "label": "Electrical & Electronics"
+        },
+        {
+          "kind": "tag",
+          "slug": "98inch",
+          "label": "98inch"
+        },
+        {
+          "kind": "tag",
+          "slug": "lcd-tv",
+          "label": "LCD TV"
+        },
+        {
+          "kind": "tag",
+          "slug": "mini-led-tv",
+          "label": "Mini LED TV"
+        },
+        {
+          "kind": "tag",
+          "slug": "smart-tv",
+          "label": "Smart TV"
+        },
+        {
+          "kind": "brand",
+          "slug": "tcl",
+          "label": "TCL"
+        },
+        {
+          "kind": "product",
+          "slug": "tcl-98p8ls",
+          "label": "TCL 98P8LS"
+        },
+        {
+          "kind": "tag",
+          "slug": "tv",
+          "label": "TV"
+        },
+        {
+          "kind": "tag",
+          "slug": "uhd-tv",
+          "label": "UHD TV"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/50/975650l.jpg?h=20348eaf\"/></div><p>This seems like an impressive bang-for-buck choice. 98&quot; for under $3k. $2985 via Price Check button. Bonus standard delivery and installation is available within 30km of a The Good Guys store. …</p>"
+    },
+    {
+      "node_id": 975647,
+      "title": "[PC, Steam] Free - PAPERHEAD EP.0 @ Steam",
+      "url": "https://www.ozbargain.com.au/node/975647",
+      "author": "Hiphopopotamus",
+      "posted_at": "2026-09-18T20:09:36Z",
+      "expiry_at": "2026-09-24T17:00:00Z",
+      "merchant_url": "https://store.steampowered.com/app/3008200/PAPERHEAD_EP0/",
+      "goto_url": "https://www.ozbargain.com.au/goto/975647",
+      "image_url": "https://files.ozbargain.com.au/n/47/975647l.jpg?h=0eede5c8",
+      "votes_pos": 118,
+      "votes_neg": 0,
+      "comment_count": 9,
+      "click_count": 2256,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "gaming",
+          "label": "Gaming"
+        },
+        {
+          "kind": "brand",
+          "slug": "hypetrain-digital",
+          "label": "HypeTrain Digital"
+        },
+        {
+          "kind": "product",
+          "slug": "paperhead-ep-0",
+          "label": "PAPERHEAD EP.0"
+        },
+        {
+          "kind": "tag",
+          "slug": "pc-game",
+          "label": "PC Game"
+        },
+        {
+          "kind": "tag",
+          "slug": "steam-game",
+          "label": "Steam Game"
+        },
+        {
+          "kind": "tag",
+          "slug": "video-game",
+          "label": "Video Game"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/47/975647l.jpg?h=0eede5c8\"/></div><p>PAPERHEAD &quot;EP.0&quot; is a mix of a fast-paced movement boomer shooter and an adventure horror game, featuring a unique soundtrack. In &quot;EP.0&quot; (Episode 0), you wake up in a prison …</p>"
+    },
+    {
+      "node_id": 975645,
+      "title": "[PC, Steam] Free - Deadshot @ Steam",
+      "url": "https://www.ozbargain.com.au/node/975645",
+      "author": "Hiphopopotamus",
+      "posted_at": "2026-09-18T17:01:56Z",
+      "expiry_at": "2026-09-23T17:00:00Z",
+      "merchant_url": "https://store.steampowered.com/app/2484180/Deadshot/",
+      "goto_url": "https://www.ozbargain.com.au/goto/975645",
+      "image_url": "https://files.ozbargain.com.au/n/45/975645l.jpg?h=c9b63f83",
+      "votes_pos": 128,
+      "votes_neg": 0,
+      "comment_count": 0,
+      "click_count": 2702,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "gaming",
+          "label": "Gaming"
+        },
+        {
+          "kind": "product",
+          "slug": "deadshot",
+          "label": "Deadshot"
+        },
+        {
+          "kind": "tag",
+          "slug": "pc-game",
+          "label": "PC Game"
+        },
+        {
+          "kind": "tag",
+          "slug": "steam-game",
+          "label": "Steam Game"
+        },
+        {
+          "kind": "brand",
+          "slug": "v0lt",
+          "label": "v0lt"
+        },
+        {
+          "kind": "tag",
+          "slug": "video-game",
+          "label": "Video Game"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/45/975645l.jpg?h=c9b63f83\"/></div><p>You wake up as an army soldier in the middle of a mutant apocalypse, trying to figure out what the hell happened and blasting some heads on the way. Deadshot is a retro styled first person shooter …</p>"
+    },
+    {
+      "node_id": 975640,
+      "title": "Switch with Econnex & Stay 45 Days for Cashback: $200 Electricity, $120 Gas, $120 Broadband @ TopCashback AU",
+      "url": "https://www.ozbargain.com.au/node/975640",
+      "author": "Hiphopopotamus",
+      "posted_at": "2026-09-18T14:28:25Z",
+      "expiry_at": "2026-09-19T13:59:00Z",
+      "merchant_url": "https://www.topcashback.com.au/econnex/",
+      "goto_url": "https://www.ozbargain.com.au/goto/975640",
+      "image_url": "https://files.ozbargain.com.au/n/40/975640l.jpg?h=e1ea34a2",
+      "votes_pos": 50,
+      "votes_neg": 4,
+      "comment_count": 59,
+      "click_count": 700,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "home-garden",
+          "label": "Home & Garden"
+        },
+        {
+          "kind": "tag",
+          "slug": "broadband",
+          "label": "Broadband"
+        },
+        {
+          "kind": "tag",
+          "slug": "cashback",
+          "label": "Cashback"
+        },
+        {
+          "kind": "tag",
+          "slug": "comparison-service",
+          "label": "Comparison Service"
+        },
+        {
+          "kind": "tag",
+          "slug": "electricity",
+          "label": "Electricity"
+        },
+        {
+          "kind": "tag",
+          "slug": "energy-supply",
+          "label": "Energy Supply"
+        },
+        {
+          "kind": "tag",
+          "slug": "gas-supply",
+          "label": "Gas Supply"
+        },
+        {
+          "kind": "tag",
+          "slug": "nbn",
+          "label": "nbn"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/40/975640l.jpg?h=e1ea34a2\"/></div><p> Cashback is eligible only on Energy (electricity &amp; gas), Broadband, and Solar products on a completed purchase &amp; payment of a policy. A completed quote is not an eligible purchase and will …</p>"
+    },
+    {
+      "node_id": 975639,
+      "title": "6 Weeks Free Hospital & Extras Cover & 25k/50k Live Better Points For Job Candidates (New Customers Only) @ Medibank Private",
+      "url": "https://www.ozbargain.com.au/node/975639",
+      "author": "OzBargaineer69",
+      "posted_at": "2026-09-18T14:16:02Z",
+      "expiry_at": null,
+      "merchant_url": "https://www.medibank.com.au/health-insurance/c/candidate-offer",
+      "goto_url": "https://www.ozbargain.com.au/goto/975639",
+      "image_url": "https://files.ozbargain.com.au/n/39/975639l.jpg?h=90c8c0bc",
+      "votes_pos": 25,
+      "votes_neg": 0,
+      "comment_count": 26,
+      "click_count": 1153,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "financial",
+          "label": "Financial"
+        },
+        {
+          "kind": "tag",
+          "slug": "ancillary-health-insurance",
+          "label": "Ancillary Health Insurance"
+        },
+        {
+          "kind": "tag",
+          "slug": "health-insurance",
+          "label": "Health Insurance"
+        },
+        {
+          "kind": "tag",
+          "slug": "insurance",
+          "label": "Insurance"
+        },
+        {
+          "kind": "tag",
+          "slug": "reward-points",
+          "label": "Reward Points"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/39/975639l.jpg?h=90c8c0bc\"/></div><p>Initial 6 weeks free cover &amp; 25,000/50,000 Live Better rewards points Must maintain direct debit, Must hold eligible cover for 42 consecutive days from the policy start date, The initial 6 …</p>"
+    },
+    {
+      "node_id": 975635,
+      "title": "Apple iPhone 18 Pro/Pro Max Case: Clear/Silicone $63.20, TechWoven $79.20 | FineWoven Wallet $79.20, Wrist Strap $36 @ Amazon AU",
+      "url": "https://www.ozbargain.com.au/node/975635",
+      "author": "HansW",
+      "posted_at": "2026-09-18T11:23:45Z",
+      "expiry_at": "2026-10-01T14:00:00Z",
+      "merchant_url": "https://www.amazon.com.au/b?_encoding=UTF8&node=222073184051&pf_rd_p=92aa6385-6028-4a7e-a0df-482d74c2b497&pf_rd_r=4MER064XAQD2YM90VYCY&ref_=cct_cg_Apple_1a1",
+      "goto_url": "https://www.ozbargain.com.au/goto/975635",
+      "image_url": "https://files.ozbargain.com.au/n/35/975635l.jpg?h=1c472b05",
+      "votes_pos": 70,
+      "votes_neg": 0,
+      "comment_count": 42,
+      "click_count": 5467,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "mobile",
+          "label": "Mobile"
+        },
+        {
+          "kind": "brand",
+          "slug": "apple",
+          "label": "Apple"
+        },
+        {
+          "kind": "product",
+          "slug": "apple-clear-case-with-magsafe",
+          "label": "Apple Clear Case with Magsafe"
+        },
+        {
+          "kind": "product",
+          "slug": "apple-silicone-case-with-magsafe",
+          "label": "Apple Silicone Case with Magsafe"
+        },
+        {
+          "kind": "product",
+          "slug": "apple-techwoven-case-with-magsafe",
+          "label": "Apple TechWoven Case with Magsafe"
+        },
+        {
+          "kind": "tag",
+          "slug": "iphone-accessory",
+          "label": "iPhone Accessory"
+        },
+        {
+          "kind": "tag",
+          "slug": "iphone-case",
+          "label": "iPhone Case"
+        },
+        {
+          "kind": "tag",
+          "slug": "magsafe",
+          "label": "MagSafe"
+        },
+        {
+          "kind": "tag",
+          "slug": "mobile-phone-case",
+          "label": "Mobile Phone Case"
+        },
+        {
+          "kind": "tag",
+          "slug": "phone-strap",
+          "label": "Phone Strap"
+        },
+        {
+          "kind": "tag",
+          "slug": "wallet",
+          "label": "Wallet"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/35/975635l.jpg?h=1c472b05\"/></div><p>20% off will be applied at checkout. Included times: iPhone 18 Pro and 18 Pro Max Apple Silicone &amp; Clear Cases $63.20 (was $79). iPhone 18 Pro and 18 Pro Max Apple TechWoven Cases $79.20 (was …</p>"
+    },
+    {
+      "node_id": 975631,
+      "title": "[iOS, Android] Free Charmander Wearing Friede’s Goggles with a Special Background Timed Research @ Pokémon GO",
+      "url": "https://www.ozbargain.com.au/node/975631",
+      "author": "RichardL",
+      "posted_at": "2026-09-18T10:43:30Z",
+      "expiry_at": "2026-09-22T10:00:00Z",
+      "merchant_url": "https://store.pokemongo.com/offer-redemption?passcode=0004POKEMONGO",
+      "goto_url": "https://www.ozbargain.com.au/goto/975631",
+      "image_url": "https://files.ozbargain.com.au/n/31/975631l.jpg?h=1871d2a9",
+      "votes_pos": 96,
+      "votes_neg": 0,
+      "comment_count": 5,
+      "click_count": 2211,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "gaming",
+          "label": "Gaming"
+        },
+        {
+          "kind": "tag",
+          "slug": "downloadable-content",
+          "label": "Downloadable Content"
+        },
+        {
+          "kind": "tag",
+          "slug": "free-to-play-video-game-",
+          "label": "Free to Play (Video Game)"
+        },
+        {
+          "kind": "brand",
+          "slug": "niantic",
+          "label": "Niantic"
+        },
+        {
+          "kind": "brand",
+          "slug": "pokemon",
+          "label": "Pokémon"
+        },
+        {
+          "kind": "product",
+          "slug": "pok-mon-go",
+          "label": "Pokémon Go"
+        },
+        {
+          "kind": "tag",
+          "slug": "video-game",
+          "label": "Video Game"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/31/975631l.jpg?h=1871d2a9\"/></div><p>Free Charmander Wearing Friede’s Goggles with a Special Background Timed Research. Redeem Here Research Tasks Catch 10 Pokémon Catch 20 Pokémon Use 5 Berries to help catch Pokémon Make 10 …</p>"
+    },
+    {
+      "node_id": 975630,
+      "title": "Free Haldiram's Tandoori Plain Naan 16-Pack at Woolworths @ Everyday Rewards App",
+      "url": "https://www.ozbargain.com.au/node/975630",
+      "author": "KP2015",
+      "posted_at": "2026-09-18T10:39:23Z",
+      "expiry_at": "2026-09-22T14:00:00Z",
+      "merchant_url": "https://files.ozbargain.com.au/upload/146875/131742/img_20260918_203207.jpg",
+      "goto_url": "https://www.ozbargain.com.au/goto/975630",
+      "image_url": "https://files.ozbargain.com.au/n/30/975630.jpg?h=54072809",
+      "votes_pos": 16,
+      "votes_neg": 0,
+      "comment_count": 21,
+      "click_count": 688,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "groceries",
+          "label": "Groceries"
+        },
+        {
+          "kind": "brand",
+          "slug": "haldiram-s",
+          "label": "Haldiram's"
+        },
+        {
+          "kind": "tag",
+          "slug": "naan",
+          "label": "Naan"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/30/975630.jpg?h=54072809\"/></div><p>Checked my Rewards app earlier and surprised to see this come up as a freebie. Already went to Woolies and got a packet. </p>"
+    },
+    {
+      "node_id": 975629,
+      "title": "D-Link Eagle Pro AI AX1500 Mesh Router 3-Pack M15-3PK $80 Delivered (New Customers Only) @ Appliance Online",
+      "url": "https://www.ozbargain.com.au/node/975629",
+      "author": "ozrain101",
+      "posted_at": "2026-09-18T10:28:44Z",
+      "expiry_at": null,
+      "merchant_url": "https://www.appliancesonline.com.au/product/d-link-eagle-pro-ai-ax1500-mesh-system-3-pack-m15-3pk/",
+      "goto_url": "https://www.ozbargain.com.au/goto/975629",
+      "image_url": "https://files.ozbargain.com.au/n/29/975629l.jpg?h=f3b3c024",
+      "votes_pos": 13,
+      "votes_neg": 0,
+      "comment_count": 12,
+      "click_count": 1571,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "computing",
+          "label": "Computing"
+        },
+        {
+          "kind": "brand",
+          "slug": "d-link",
+          "label": "D-Link"
+        },
+        {
+          "kind": "product",
+          "slug": "d-link-m15",
+          "label": "D-Link M15"
+        },
+        {
+          "kind": "tag",
+          "slug": "mesh-network",
+          "label": "Mesh Network"
+        },
+        {
+          "kind": "tag",
+          "slug": "wi-fi",
+          "label": "Wi-Fi"
+        },
+        {
+          "kind": "tag",
+          "slug": "wi-fi-6",
+          "label": "Wi-Fi 6"
+        },
+        {
+          "kind": "tag",
+          "slug": "wireless-router",
+          "label": "Wireless Router"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/29/975629l.jpg?h=f3b3c024\"/></div><p>Not the newest router out there but wifi 6, suitable enough for home use with 5ghz and 2.4ghz on 500/50 NBN. Comes as a 3 pack so will have good coverage of dead zones. Price is $100 but got it for …</p>"
+    },
+    {
+      "node_id": 975627,
+      "title": "Japan Dec-Mar Return: Sapporo MEL $1074, PER $1197, BNE $1203, SYD $1239; Tokyo SYD $1041, MEL $1070, ADL $1077 @ Skyspy",
+      "url": "https://www.ozbargain.com.au/node/975627",
+      "author": "Skyspy",
+      "posted_at": "2026-09-18T10:09:59Z",
+      "expiry_at": "2027-03-17T13:00:00Z",
+      "merchant_url": "https://skyspy.deals/?date=2027-03-08&from=MEL&return=2027-03-17&to=CTS",
+      "goto_url": "https://www.ozbargain.com.au/goto/975627",
+      "image_url": "https://files.ozbargain.com.au/n/27/975627l.jpg?h=b42ac077",
+      "votes_pos": 20,
+      "votes_neg": 0,
+      "comment_count": 10,
+      "click_count": 1768,
+      "categories": [
+        {
+          "kind": "cat",
+          "slug": "travel",
+          "label": "Travel"
+        },
+        {
+          "kind": "tag",
+          "slug": "airfare",
+          "label": "Airfare"
+        },
+        {
+          "kind": "tag",
+          "slug": "hakuba",
+          "label": "Hakuba"
+        },
+        {
+          "kind": "tag",
+          "slug": "niseko",
+          "label": "Niseko"
+        }
+      ],
+      "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/27/975627l.jpg?h=b42ac077\"/></div><p>It&#039;s ski booking season and nobody&#039;s posted Japan snow fares since April, so I ran every capital to Sapporo and Tokyo for December through March. The cheap weeks are late February and …</p>"
+    }
+  ]
+}
