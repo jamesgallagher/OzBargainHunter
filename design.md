@@ -175,6 +175,8 @@ Because the tool represents the user, its conduct is his conduct:
 **`deals`** — one row per OzBargain node, keyed on the integer node ID.
 Fields: node ID, title, URL, author, posted timestamp, categories (including brand/product/tag classification), merchant URL, expiry, first-seen timestamp, and **front-page first-seen timestamp** (nullable). The front-page timestamp cannot be recovered once missed, because OzBargain's feeds publish only the original posting time in both feeds.
 
+**The node ID is the identity of a deal across every feed, and cross-feed de-duplication depends on it.** A deal appears in the deals feed and in the front-page feed under the *same* node ID, with an identical `guid` of the form `<node id> at https://www.ozbargain.com.au`. It therefore occupies one row and produces one ledger entry regardless of how many feeds it appears in. Without this, a deal present in both feeds would alert twice.
+
 **`observations`** — one row per deal per poll.
 Fields: deal ID, `votes-pos`, `votes-neg`, `comment-count`, `click-count`, observed timestamp. This history is the only reason any trend or threshold calculation is possible.
 
@@ -280,6 +282,8 @@ Provider configuration lives in the web UI, not in a config file.
 ### 6.3 Content
 
 Every alert carries: the deal title; current net votes and the rate over the configured window; which rule fired and which term matched; and a link **directly to the OzBargain node page** — never the `/goto/` redirect.
+
+**Front-page alerts carry the highest delivery priority.** Every other alert is normal priority. Front-page presence is the strongest available indicator that a deal is good, and it is the one alert class that should be able to interrupt.
 
 ### 6.4 Controls
 
