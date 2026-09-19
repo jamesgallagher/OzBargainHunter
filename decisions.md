@@ -46,6 +46,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D46 — Comment counts are stored from both feeds.** Observations are written for every item seen in any feed, including the front-page feed. Stored now because no other rule consumes them yet but a counter never recorded cannot be recovered. **DECIDED**
 - **D47 — No spidering, no link following.** The front-page feed, the deals feed and the classifieds listing page are the only surfaces read. No node pages, no comments, no profiles, no HTML home page, no crawling. **DECIDED**
 - **D48 — Classifieds eligibility.** Only listings of type *Selling* may alert. *Wanted* listings and pinned listings never alert. **DECIDED**
+- **D49 — Freebie notifications.** A configuration checkbox, **"Always notify on freebie"**, defaulting to **on**. When on, every new *Freebie* classified listing notifies immediately without matching any rule. Pinned listings are excluded even if free, as are *Wanted* listings. Notification names the poster and the listing. Normal priority. De-duplicated per node ID, seeded silently on cold start, and expired freebies are not announced. **DECIDED**
 - **D25 — Per-rule cooldown.** Default 24 hours, configurable per rule. **SPECIFIED**
 - **D26 — Cold-start seeding.** First run against an empty database seeds silently and sends zero notifications. **SPECIFIED** (D15 in `rationale.md`)
 - **D27 — Dead-man's switch.** Alert if no poll succeeds for 30 minutes; repeat at a decaying rate. **SPECIFIED** (D16 in `rationale.md`)

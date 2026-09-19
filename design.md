@@ -318,6 +318,20 @@ The *behaviour* is fixed:
 
 Grouping across rules into a single notification is prohibited: it would leave the unsubscribe control without an unambiguous target, and a control that silently disables the wrong rule is worse than no control.
 
+### 6.6 Freebie notifications
+
+A configuration option, **"Always notify on freebie"**, lives in the notification settings and **defaults to on**.
+
+When enabled, **every new classified listing of type *Freebie* produces a notification immediately, without needing to match any rule.** Freebies are not a rule; they are their own notification class.
+
+- **Pinned listings are excluded, even when they are freebies.** A pinned freebie never notifies.
+- **Wanted listings are excluded**, as everywhere else (5.1).
+- The notification names the poster and summarises the listing — *"<user> has just listed a new freebie — <title>"* — with a link to the listing.
+- It carries the same two controls as any other alert (6.4).
+- Priority is normal. Only front-page alerts outrank it (6.3).
+- **De-duplication applies unchanged**: a listing notifies once, keyed on its node ID (5.2), and the cold-start seeding rule (5.4) suppresses the initial batch rather than announcing every freebie already on the board at first run.
+- Expiry is respected: an already-expired freebie is not announced (5.3).
+
 ---
 
 ## 7. Web UI
@@ -414,6 +428,7 @@ The following values are configurable without a code change or a rebuild. Exact 
 - Per-rule cooldowns and surface selection
 - Poll intervals
 - Notification providers and their configuration
+- **"Always notify on freebie"** — a checkbox, on by default (6.6)
 
 Rule configuration must be editable from the UI, which requires it to live in the database rather than in environment variables. **This is Open Item O3 and is not yet decided.**
 
