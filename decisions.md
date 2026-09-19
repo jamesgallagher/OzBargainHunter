@@ -1,0 +1,81 @@
+# OzBargain Hunter — Decision Register
+
+The living document. One line per decision: what it is, its current answer, and its status.
+
+**Statuses:** `DECIDED` — answered by James. `SPECIFIED` — specified by the design lane and carried into `design.md`; not objected to, but not explicitly confirmed either. `OPEN` — unresolved; see the matching `O` item in `design.md` §12.
+
+Update this file whenever a decision changes. Do not append history — replace the line.
+
+---
+
+## Delivery and packaging
+
+- **D1 — Repository visibility.** PRIVATE, accessed with a PAT. **DECIDED**
+- **D2 — Production tag.** `:stable`, promoted deliberately by pushing a git tag. Not `:latest`. **DECIDED**
+- **D7 — Beta tag semantics.** `beta` branch owns `:beta`; `main` keeps `:latest`/`:main-<sha>`. Two distinct images, never the same image carrying both tags. **SPECIFIED**
+- **D8 — Build-to-live latency.** How long between a green build and a running container. **OPEN (O9)**
+- **D12 — Poll cadence.** Feeds every 5–10 minutes, never below 5. Classifieds every 60 minutes (interpretation pending). **DECIDED**, sub-item **OPEN (O13)**
+- **D6 — Beta container alongside production.** **OPEN (O5)**
+- **D16 — Registry retention policy** for per-commit tags. **OPEN (O16)**
+
+## Exposure and access control
+
+- **D3 — Authentication architecture.** Cloudflare Access at the edge, with the application verifying the Access JWT on every request. **SPECIFIED**
+- **D4 — Network placement.** Published host port, reachable on the LAN *and* through the tunnel. Accepted consequence: the "no back door" requirement cannot be literally true, and the application's JWT verification becomes the primary control. **DECIDED**
+- **D5 — Public hostname.** Proposed `ozb.gallagherhome.au`. **OPEN (O2)**
+- **D17 — One-click unsubscribe mechanism.** Ordinary authenticated URL (no exception, may cost a login bounce) versus scoped single-use expiring capability token (guaranteed one tap, one documented exception). **OPEN (O1)**
+- **D21 — Notification topic lockdown.** The topic must not be world-readable. Requirement carried as acceptance criterion 11.3.7. **SPECIFIED**
+
+## Data acquisition
+
+- **D14 — Client identity.** Honest self-identifying User-Agent, with no TLS-fingerprint impersonation. **CONTESTED** — conflicts with the owner's stated tooling preference. **OPEN (O6)**
+- **D13 / D10 — Classifieds authentication.** The container performs the login itself, using a dedicated account created for the tool. **DECIDED**
+- **D10b — OzBargain credential storage.** Environment variables in the container's `.env`, accepting the Unraid-template storage risk. **DECIDED**
+
+## Alerting
+
+- **D11 — Trend alert.** **SUPERSEDED.** The velocity rule is reclassified as a dynamic rule and deferred. Replaced by the threshold-in-window rule (D22).
+- **D22 — Day-one rule set.** Two static types: a **match rule** (product/company term, over deals *and* classifieds) and a **threshold rule** ("X upvotes within Y hours/days", multiple instances, deals only). **DECIDED**
+- **D23 — Alert identity.** Ledger keyed on `(node ID, rule ID)`; a rule fires at most once per deal, ever. A deal may alert more than once if more than one rule fires. **SPECIFIED**
+- **D24 — Threshold values.** The starting X and Y for each threshold rule. **OPEN** — the old velocity numbers no longer apply directly.
+- **D25 — Per-rule cooldown.** Default 24 hours, configurable per rule. **SPECIFIED**
+- **D26 — Cold-start seeding.** First run against an empty database seeds silently and sends zero notifications. **SPECIFIED** (D15 in `rationale.md`)
+- **D27 — Dead-man's switch.** Alert if no poll succeeds for 30 minutes; repeat at a decaying rate. **SPECIFIED** (D16 in `rationale.md`)
+- **D20 — Alert grouping.** One notification per `(rule, poll)`. Grouping across rules is prohibited. **SPECIFIED**
+- **D28 — Dynamic rules** ("rapidly rising", "highly commented on"). **DEFERRED** by explicit decision.
+
+## Notifications
+
+- **D29 — Provider model.** Provider-abstract behind one interface. **DECIDED**
+- **D30 — Provider order.** Email first. Matrix, ntfy and WhatsApp to follow. Which comes second is **OPEN (O8)**.
+- **D31 — WhatsApp.** Desired if it can be done cheaply. **OPEN (O11)** — feasibility research required.
+- **D32 — Alert content and controls.** Title, votes and rate, firing rule and matched term, node-page link. Exactly two controls: rule-scoped unsubscribe, and a "Manage alerts" link. **SPECIFIED**
+
+## Product and UI
+
+- **D18 / D19 — Web UI scope.** Nine screens (status, rules list, rule CRUD, rule state control, alert history, near-miss log, threshold config, delivery config, classifieds session status). **OPEN (O4)**
+- **D19 — Rule configuration storage.** Database rather than environment variables. **OPEN (O3)**
+- **D33 — CSRF protection** on every state-changing request, not relying on cookie `SameSite`. **SPECIFIED**
+
+## Naming and assets
+
+- **D9 — Project name.** "OzBargain" is a live third-party brand. **OPEN (O10)**
+- **D34 — Logo asset set.** `logo.svg` master, 512/256 px transparent PNGs, favicon derivatives; no text in the mark; legible at 32 px; readable on dark. **SPECIFIED**
+- **D35 — Logo hosting.** Cannot use `raw.githubusercontent.com` (private repository). **OPEN (O15)**
+
+## Not yet decided at all
+
+- **D36 — Application language and runtime.** **OPEN (O21)**
+- **D37 — Classifieds markup.** Not captured, so no parser can be written. **OPEN (O18)**
+- **D38 — Classifieds access for a brand-new account.** Evidence came from an established account. **OPEN (O19)**
+- **D39 — Threshold window versus feed reach.** A 7-day window exceeds the feed's ~22-hour reach. **OPEN (O12)**
+- **D40 — Dependency and image scanning** in CI. **OPEN (O17)**
+
+---
+
+## Counts
+
+**DECIDED:** D1, D2, D4, D10, D10b, D12, D13, D22, D29
+**SPECIFIED:** D3, D7, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34
+**OPEN:** D5, D6, D8, D9, D11(replaced), D14, D15(old), D17, D18, D19, D24, D30(partial), D31, D35, D36–D40
+**DEFERRED:** D28
