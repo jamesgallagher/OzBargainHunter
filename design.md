@@ -225,6 +225,9 @@ Fields: URL, last `ETag`, last `Last-Modified`.
 - **SQLite, a single file**, on the bind mount at `/mnt/user/appdata/ozbargain-hunter/`, mounted at `/data` in the container.
 - **WAL mode enabled**, so UI reads do not block the poller's writes.
 - **Schema migrations from version 1.** The schema will change as thresholds are tuned; losing counter history to a schema change is unacceptable.
+- **All timestamps are stored in UTC** and displayed in the user's local zone (Australia/Melbourne). Feed timestamps arrive with a `+1000` offset and are normalised on ingest.
+- **Backup is entirely external.** The host's own backup service covers the application's data directory; the application implements no backup of its own.
+- **A consistent snapshot is written periodically, so that a file-level backup captures a valid database.** SQLite in WAL mode holds recent writes in a separate `-wal` file, so a backup that copies only the `.db` file can capture a stale or inconsistent database — and the problem surfaces only when a restore is attempted. The application therefore writes a clean single-file snapshot on a schedule, and that snapshot is what an external backup service is expected to capture.
 
 ---
 
@@ -289,16 +292,18 @@ Dynamic rules — "rapidly rising", "highly commented on" — are out of scope f
 
 ### 6.1 Provider model
 
-Delivery is **provider-abstract**. All providers implement one internal interface taking a title, a body, a URL, a priority and tags. Adding a provider must not require changes to the rules engine.
+Delivery is **provider-abstract and multi-select**. All providers implement one internal interface taking a title, a body, a URL, a priority and tags. Adding a provider must not require changes to the rules engine.
+
+**Providers are a choice, not a ladder.** The user selects any combination of configured providers, and **every alert is delivered through every selected provider**. There is no priority order and no fallback chain: if email and Matrix are both selected, one alert produces both. Configuration is a precondition for selection — a provider that is selected but not configured is not a provider.
 
 ### 6.2 Providers
 
-- **Email — the first provider.**
+- **Email.**
 - **Matrix** — an explicit target. A homeserver already runs on the host (`matrix` container, client-server API on port 8008). Delivery is a single HTTP request to the client-server API. An access token must be created.
 - **ntfy** — supported as a provider. Note the hosted service is `ntfy.sh`, and no ntfy instance currently runs on the host.
 - **WhatsApp** — desired if it can be done cheaply. Feasibility is unresolved (Open Item O11).
 
-Provider configuration lives in the web UI, not in a config file.
+**Any number of these may be enabled simultaneously**, each configured independently in the web UI rather than in a config file. Which is implemented first is an implementation matter; the design accommodates all four.
 
 ### 6.3 Content
 
@@ -345,6 +350,17 @@ When enabled, **every new classified listing of type *Freebie* produces a notifi
 - Priority is normal. Only front-page alerts outrank it (6.3).
 - **De-duplication applies unchanged**: a listing notifies once, keyed on its node ID (5.2), and the cold-start seeding rule (5.4) suppresses the initial batch rather than announcing every freebie already on the board at first run.
 - Expiry is respected: an already-expired freebie is not announced (5.3).
+
+### 6.7 Notifier failure
+
+Failure is counted **per provider**, on consecutive delivery attempts.
+
+- **After five consecutive failures that provider is disabled automatically** and stops being attempted until the user re-enables it.
+- **A notice appears in the web UI**, so the user sees it the next time he logs in. It names the provider, when it was disabled, and the last error.
+- Disabling is per provider and never affects the others. With several selected, one failing leaves the rest delivering.
+- **The UI notice is the backstop of last resort.** If every provider is disabled there is no push channel left, so the on-screen notice and the acquisition status panel (7.1) are the only surfaces that can tell the user alerting has stopped.
+
+This exists because of the failure that matters most: **an alerting tool that has silently stopped alerting looks exactly like a quiet day.**
 
 ---
 
@@ -444,7 +460,7 @@ The following values are configurable without a code change or a rebuild. Exact 
 - Notification providers and their configuration
 - **"Always notify on freebie"** — a checkbox, on by default (6.6)
 
-Rule configuration must be editable from the UI, which requires it to live in the database rather than in environment variables. **This is Open Item O3 and is not yet decided.**
+Rule configuration is stored in the SQLite database, not in environment variables, so that the UI can edit it. Environment variables hold only values that require a restart to change (9.1).
 
 ---
 
@@ -452,6 +468,7 @@ Rule configuration must be editable from the UI, which requires it to live in th
 
 ### 10.1 Repository
 
+- **Project name: OzBargain Hunter.** The application is private and personal, and the name derives from a live third-party brand. The owner has decided to keep it and will rename if asked to.
 - **GitHub repository `jamesgallagher/OzBargainHunter`, private**, accessed with a PAT.
 - **One long-lived branch: `main`.** There is no integration or beta branch; the tool serves one person and does not need one.
 - Short-lived branches: `feature/*`, `fix/*`.
@@ -526,7 +543,8 @@ Unraid detects updates by comparing the registry's manifest digest behind the ta
 - Assets: `logo.svg` (master), `icon-512.png`, `icon-256.png` (transparent, 512 and 256 square), plus favicon derivatives.
 - Design constraints: square; legible at 32 pixels; **no text in the mark**; no hairline strokes; readable on a dark background; transparent background.
 - The mark must not imitate or evoke OzBargain's own branding.
-- The Unraid template's `<Icon>` field points at a hosted copy of `icon-256.png`. **Because the repository is private, the icon cannot be served from `raw.githubusercontent.com`** — see Open Item O15.
+- The Unraid template's `<Icon>` field points at a hosted copy of `icon-256.png`. **Because the repository is private, the icon cannot be served from `raw.githubusercontent.com`** — hosting is awaited (Open Item O15).
+- **The mark itself** depicts hunting for deals to save money, within the constraints above. It is produced separately and is not yet final.
 
 ---
 
@@ -575,29 +593,17 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 
 **Owner: James — decision required**
 
-- **O3. Rule configuration storage** — database versus environment. The UI requirement makes the database the natural answer.
-- **O4. UI scope for v1** — the nine screens in 7.1 are the proposed set.
-- **O7. Secret storage.** Accepted as environment variables by the owner. Residual risks: credential reuse elsewhere, and plaintext storage in Unraid template backups.
-- **O8. Notification channel priority** — which provider to build first beyond email.
-- **O10. Naming and trademark** — "OzBargain" is a live third-party brand.
+None. Every decision that required the owner is currently closed.
 
 **Owner: design/implementation — to be resolved by research or probe**
 
 - **O11. WhatsApp feasibility**, including whether routing through the existing Matrix homeserver removes the need for a direct integration.
-- **O13. Cadence interpretation.** Whether the two stated intervals (60 minutes, 5–10 minutes) mean classifieds and feeds respectively.
+- **O13. Cadence interpretation** — confirming that the two stated intervals mean classifieds every 60 minutes and feeds every 5–10.
 - **O14. Icon caching** by Unraid, which may delay a changed logo appearing.
-- **O15. Logo hosting**, since a private repository rules out `raw.githubusercontent.com`. Options: one unauthenticated icon route, or hosting the asset elsewhere.
+- **O15. Logo hosting.** To be decided; the private repository rules out `raw.githubusercontent.com`.
 - **O16. Registry retention policy** — bounded growth of per-commit tags.
 - **O17. Dependency and image scanning** in CI.
-- **O18. Classifieds markup — RESOLVED.** The live page markup was captured and the parser is now fully specified in 3.6. Fields, type classes, the pinned marker and both timestamp formats are known. No longer blocking.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
 - **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
-
-**Gaps identified in the completeness audit. Not yet designed.**
-
-- **O23. Notifier failure handling.** No behaviour is specified for a provider that fails to deliver — no retry, no backoff, and no alert when alerting itself is broken.
-- **O24. Database backup and restore.** The application's entire state is one SQLite file. No backup procedure, schedule or restore path is specified.
-- **O25. Timezone handling.** Feed timestamps carry `+1000` offsets. Nothing states how times are stored and in which zone they are displayed.
-- **O26. The logo mark itself.** §10.7 fixes the asset set and the constraints, but the mark has not been designed and is not covered by any other item here.
 
 **Deliberately left to implementation** (recorded so their absence is not mistaken for an oversight): the UI's routes and endpoint shapes, the Python framework, and the specific test framework and coverage expectations.

@@ -48,6 +48,15 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D48 — Classifieds eligibility.** Four listing types exist: *Selling*, *Freebie*, *Wanted*, *Swapping*. Only *Selling* may alert. *Wanted*, *Swapping* and pinned listings never alert. *Freebie* is handled by D49. **DECIDED**
 - **D50 — Classifieds parser.** Specified against captured live markup (3.6): node ID from `h2.title@id`, title from `data-title`, type from the `classified-type-tag` CSS class, pinned from `classified-sticky`, poster from the `/user/` link (may be absent), timestamp in either an absolute or a relative format, optional price and thumbnail. **DECIDED**
 - **D49 — Freebie notifications.** A configuration checkbox, **"Always notify on freebie"**, defaulting to **on**. When on, every new *Freebie* classified listing notifies immediately without matching any rule. Pinned listings are excluded even if free, as are *Wanted* listings. Notification names the poster and the listing. Normal priority. De-duplicated per node ID, seeded silently on cold start, and expired freebies are not announced. **DECIDED**
+- **D51 — Rule configuration lives in the database** (SQLite), not environment variables, so the UI can edit it. Environment variables hold only restart-time values. **DECIDED**
+- **D52 — UI scope.** All nine screens in 7.1 ship in v1. Nothing cut. **DECIDED**
+- **D53 — Notifications are multi-select, not a ladder.** Any combination of configured providers may be enabled, and every alert is delivered through all of them simultaneously. No priority order, no fallback chain. **DECIDED**
+- **D54 — Backup is external.** Handled by the host's third-party backup service; the application implements none. It writes a periodic consistent single-file snapshot so file-level backup captures a valid database despite WAL mode. **DECIDED**
+- **D55 — Notifier failure.** Counted per provider; after five consecutive failures that provider is auto-disabled and a notice appears in the UI for the next login. Other providers are unaffected. **DECIDED**
+- **D56 — Timestamps** are stored in UTC and displayed in Australia/Melbourne. **DECIDED**
+- **D57 — Project name** stays *OzBargain Hunter*. Private and personal; the owner will rename if asked. **DECIDED**
+- **D58 — Front-page alert semantics: presence.** Fire once per deal whenever it is observed on the front-page feed, rather than only on a transition into it. **DECIDED**
+- **D59 — Logo.** The mark depicts hunting for deals to save money, produced separately within the constraints in 10.7. **DECIDED**; hosting remains **OPEN (O15)**.
 - **D25 — Per-rule cooldown.** Default 24 hours, configurable per rule. **SPECIFIED**
 - **D26 — Cold-start seeding.** First run against an empty database seeds silently and sends zero notifications. **SPECIFIED** (D15 in `rationale.md`)
 - **D27 — Dead-man's switch.** Alert if no poll succeeds for 30 minutes; repeat at a decaying rate. **SPECIFIED** (D16 in `rationale.md`)
