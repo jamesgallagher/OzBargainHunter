@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="OzBargain Hunter">
+  <title>OzBargain Hunter</title>
+
+  <!--
+    "The Struck Coin" — a coin that is also a bird of prey.
+
+    The disc is the cranium and carries the coin reading; the hooked beak is
+    the only thing that breaks the circle, so the silhouette stays distinctive
+    at 32px. Fills only, no strokes: nothing here thins away on downscale.
+
+    Construction: bright disc, shadow laid over it and trimmed to the circle,
+    then the beak drawn back on top in the bright tone, so the only visible
+    shadow boundary is the brow line and the beak's own outline does the
+    separating.
+
+    Palette: #FFC44F lit gold / #DD8519 shadow gold / #221304 eye.
+  -->
+
+  <defs>
+    <clipPath id="cranium">
+      <circle cx="241" cy="249" r="182"/>
+    </clipPath>
+  </defs>
+
+  <!-- Cranium -->
+  <circle cx="241" cy="249" r="182" fill="#FFC44F"/>
+
+  <!-- Everything below the brow line. The curve hugs the top-left arc, so the
+       lit gold left behind reads as a crescent on a curved face rather than a
+       flat diagonal cut; it then breaks 80 degrees at the brow and drops to
+       365,257 — the beak's own top vertex — and from there runs down the
+       beak's leading edge, so the two shapes hand off without a seam. That
+       hard corner is the whole difference between predatory and cute. Only a
+       1.8:1 step from the lit gold, so at 32px the two average back into one
+       coin instead of fragmenting the silhouette. -->
+  <path clip-path="url(#cranium)" fill="#DD8519"
+        d="M10 270C70 180 170 140 348 156L365 257L303 387L470 470L10 470Z"/>
+
+  <!-- Beak. 85px across at the base so it survives when the tip antialiases
+       away; the hook undercuts far enough to notch the silhouette at 32px. -->
+  <path d="M365 257C431 269 483 343 425 445C425 417 393 385 303 387Z" fill="#FFC44F"/>
+
+  <!-- Eye, tucked under the brow. Solid rather than knocked out, so it stays
+       a hole on light backgrounds too. 68px across = 4.3px at 32px. -->
+  <circle cx="306" cy="216" r="34" fill="#221304"/>
+  <circle cx="294" cy="204" r="11" fill="#FFC44F"/>
+</svg>
