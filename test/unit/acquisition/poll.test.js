@@ -148,3 +148,55 @@ test('an unparseable 200 body is recorded as a failure and nothing is upserted f
     close();
   }
 });
+
+test('node 975666 appears in the deals feed and the front-page feed at poll 1 and produces one row in deals', async () => {
+  const { store, close } = await runSingle(POLL_1_AT, P1);
+  try {
+    // 975666 is in r0.xml (deals page 0) and feed_feed.xml (front). The
+    // cross-feed de-duplication means it occupies exactly one row in deals.
+    const deal = store.getDeal(975666);
+    assert.ok(deal, '975666 should be in deals');
+    // One row: count the deals rows for this node via the store.
+    const rows = store.getDb().prepare('SELECT COUNT(*) AS n FROM deals WHERE node_id = ?').get(975666);
+    assert.equal(rows.n, 1);
+  } finally {
+    close();
+  }
+});
+
+test('mid-cycle 304 at poll 2: all three requests are made, page 1 is not_modified, the other two are processed', async () => {
+  const { transport, store, result, close } = await runSingle(POLL_2_AT, P2);
+  try {
+    // All three URLs were requested, in order.
+    assert.equal(transport.requestLog.length, 3);
+    assertNoPage2(transport);
+    // Page 1 (the 304) contributed nothing; page 0 (cmp_deals, 30) and the
+    // front feed (a subset) did. 304 is not an error, so no failures row.
+    assert.equal(result.failures, 0);
+    assert.equal(result.lastResponseClass, 'ok');
+    // poll_state records the last response class and a clean success.
+    const state = store.getPollState();
+    assert.equal(state.last_response_class, 'ok');
+    assert.ok(state.last_success_at, 'last_success_at should be set');
+    assert.equal(state.consecutive_failures, 0);
+  } finally {
+    close();
+  }
+});
+
+test('promoted front feed at poll 1: 975122 is in deals with front_page_first_seen set, though it is on neither deals page', async () => {
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/derived/front-feed-promoted.xml' },
+  };
+  const { store, close } = await runSingle(POLL_1_AT, routes);
+  try {
+    // 975122 appears only in the promoted front feed, so it is a new deal.
+    const deal = store.getDeal(975122);
+    assert.ok(deal, '975122 should be in deals');
+    assert.ok(deal.front_page_first_seen, '975122 front_page_first_seen should be set');
+  } finally {
+    close();
+  }
+});
