@@ -488,11 +488,14 @@ describe('engine: muted rules', () => {
 });
 
 describe('engine: classifieds eligibility', () => {
-  it('a broad match rule alerts on at most the 8 sell listings, never want/swap/pinned', () => {
+  it('a broad match rule alerts the matching sell listings, never want/swap/pinned', () => {
     const store = makeStore();
-    // 'online' appears in 3 sell listings and 1 pinned want listing. The
-    // engine must alert only the sell ones and exclude the want.
-    insertRule(store, { id: 1, type: 'match', parameters: { term: 'online' }, surfaces: 'classifieds' });
+    // 'online' appears in the three Nintendo Switch Online sell listings
+    // (975593, 975574, 975696) and one pinned want listing (975209). With a
+    // zero cooldown the engine must alert the matching sell listings and
+    // exclude the want. 975574 is a repost of 975593 (Jaccard 0.667 > 0.60),
+    // so it is suppressed — the remaining sell alerts are 975593 and 975696.
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'online' }, surfaces: 'classifieds', cooldownSeconds: 0 });
     const out = evaluatePoll({
       feeds: [{ surface: 'classifieds', records: classifieds }],
       store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
@@ -503,7 +506,14 @@ describe('engine: classifieds eligibility', () => {
     }
     const alerted = new Set(out.alerts.map((a) => a.node_id));
     assert.ok(alerted.size <= 8, 'at most the 8 sell listings');
+    // Strengthened: a zero-alert engine must not pass. The two non-repost
+    // matching sell listings must actually alert.
+    assert.ok(alerted.has(975593), '975593 (Nintendo Switch Online) is alerted');
+    assert.ok(alerted.has(975696), '975696 (Nintendo Online) is alerted');
     assert.ok(!alerted.has(975209), 'the matching want listing is never alerted');
+    // The repost (975574) is suppressed, not alerted.
+    assert.ok(!alerted.has(975574), 'the repost 975574 is not alerted');
+    assert.ok(out.suppressions.some((s) => s.node_id === 975574 && s.kind === 'repost'), '975574 recorded as a repost suppression');
   });
 });
 
@@ -531,7 +541,7 @@ describe('engine: freebies', () => {
     assert.equal(fb[0].priority, 'normal', 'normal priority');
   });
 
-  it('C2: a freebie notification carries a working unsubscribe link, not a dead /goto/ one', () => {
+  it('C2: a composed freebie names the poster and carries a working unsubscribe, not a dead /goto/ one', () => {
     const store = makeStore();
     const base = C.get(975712);
     const freebie = { ...base, type: 'free' };
@@ -542,8 +552,11 @@ describe('engine: freebies', () => {
     const notifications = groupAndCompose(out.alerts);
     const freebieN = notifications.find((n) => n.kind === 'freebie');
     assert.ok(freebieN, 'a freebie notification was composed');
+    // The composed body (what the user receives) names the poster, not just
+    // the raw alert field.
+    assert.ok(freebieN.body.includes('ausdkunst'), 'the composed body names the poster');
     assert.ok(freebieN.unsubscribe, 'carries an unsubscribe control');
-    assert.ok(freebieN.unsubscribe.url.startsWith('/settings/'), 'unsubscribe points at the settings screen');
+    assert.ok(freebieN.unsubscribe.url.startsWith('/settings/'), 'unsubscribe points at the settings screen, not a rule');
     assert.ok(!freebieN.unsubscribe.url.includes('/goto/'), 'no /goto/ in the unsubscribe link');
     assert.ok(!JSON.stringify(freebieN).includes('/goto/'), 'no /goto/ anywhere in the freebie notification');
   });
@@ -688,6 +701,27 @@ describe('notify: grouping', () => {
     ];
     const ns = groupAndCompose(alerts);
     assert.equal(ns.length, 2, 'two notifications, one per rule');
+  });
+
+  it('engine-driven: a zero-cooldown match rule groups its matches into one notification', () => {
+    // Strengthened: drive the grouping AC through the engine, not hand-built
+    // alert objects. Cooldown 0 + term 'online' over the classifieds corpus
+    // alerts 975696 and 975593 (975574 is suppressed as a repost of 975593),
+    // which compose into one notification listing both, with exactly one
+    // unsubscribe control.
+    const store = makeStore();
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'online' }, surfaces: 'classifieds', cooldownSeconds: 0 });
+    const out = evaluatePoll({
+      feeds: [{ surface: 'classifieds', records: classifieds }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    const ruleAlerts = out.alerts.filter((a) => a.rule_id === 1);
+    assert.equal(ruleAlerts.length, 2, 'two matching sell listings alert');
+    const [n] = groupAndCompose(ruleAlerts);
+    assert.equal(n.nodeIds.length, 2, 'one notification lists both deals');
+    assert.ok(n.nodeIds.includes(975696) && n.nodeIds.includes(975593), 'lists 975696 and 975593');
+    assert.ok(n.unsubscribe, 'exactly one unsubscribe control');
+    assert.ok(!n.goto, 'no /goto/ link');
   });
 });
 
