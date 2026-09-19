@@ -39,7 +39,10 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D11 — Trend alert.** **SUPERSEDED.** The velocity rule is reclassified as a dynamic rule and deferred. Replaced by the threshold-in-window rule (D22).
 - **D22 — Day-one rule set.** Two static types: a **match rule** (product/company term, over deals *and* classifieds) and a **threshold rule** ("X upvotes within Y hours/days", multiple instances, deals only). **DECIDED**
 - **D23 — Alert identity.** Ledger keyed on `(node ID, rule ID)`; a rule fires at most once per deal, ever. A deal may alert more than once if more than one rule fires. **SPECIFIED**
-- **D24 — Threshold values.** The starting X and Y for each threshold rule. **OPEN** — the old velocity numbers no longer apply directly.
+- **D43 — Front-page items are a matching surface.** Items from the front-page feed are matched against match rules exactly as deals-feed items are, so a deal promoted to the front page without appearing on deals pages 0–1 still matches. **DECIDED**
+- **D24 — Threshold values.** The starting X for each threshold rule. **OPEN** — the old velocity numbers no longer apply directly.
+- **D44 — Threshold windows.** Optional. If set, capped at 24 hours and **rejected at entry beyond that** rather than silently never firing. Unset means "reached X votes while visible". **Decaying deals are not alerted on**: a deal that has left pages 0–1 is decaying by definition, because OzBargain ranks by voting. **DECIDED**
+- **D45 — Expired deals never alert.** Including a deal that becomes expired after it was first seen. Expiry is evaluated before an alert is emitted. **DECIDED**
 - **D25 — Per-rule cooldown.** Default 24 hours, configurable per rule. **SPECIFIED**
 - **D26 — Cold-start seeding.** First run against an empty database seeds silently and sends zero notifications. **SPECIFIED** (D15 in `rationale.md`)
 - **D27 — Dead-man's switch.** Alert if no poll succeeds for 30 minutes; repeat at a decaying rate. **SPECIFIED** (D16 in `rationale.md`)

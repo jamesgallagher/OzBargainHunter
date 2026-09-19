@@ -215,17 +215,21 @@ Fields: URL, last `ETag`, last `Last-Modified`.
 
 Matching runs over the deal title, description text and structured category labels, and over the classifieds title, category tag and type badge.
 
+**Items from the front-page feed are matched as well as items from the deals feed.** A deal that reaches the front page without ever appearing on deals pages 0–1 is therefore still matched, rather than silently ignored. (3.1)
+
 Normalisation: lower-cased, punctuation stripped, whitespace runs collapsed, so that `AMD R9700` and `amd  r9700` behave identically.
 
 Default matching mode is **all tokens present, in any order, word-boundary anchored**. A keyword rule uses **any token present**. Word boundaries are mandatory.
 
 If a term is pinned to a confirmed `/product/`, `/brand/` or `/tag/` slug, matching against that slug is exact and additive.
 
-**Threshold rule.** "Has reached X upvotes within Y hours or days since posting." Multiple instances are configured independently.
+**Threshold rule.** "Has reached X upvotes." Multiple instances are configured independently, each with its own threshold.
 
-Examples: 10 upvotes in 6 hours; 50 upvotes in 12 hours.
+**The window is optional.** Unset, the rule fires when a deal is seen to reach X votes at any point while it is visible. If set, it means "reached X votes within Y of posting", and **Y may not exceed 24 hours** — anything longer is rejected at entry rather than accepted, because it could never be satisfied and would present as a rule that silently never fires.
 
-**The window cannot exceed the observation window of roughly 24 hours**, because a deal leaves the two-page index after about that long (3.1). See Open Item O12.
+Examples: **10 upvotes in 6 hours** — a fast-rise rule, where the short window is precisely what makes it specific; and **100 upvotes** with no window, which fires on any deal that gets big, and in practice therefore fires on deals that are still climbing.
+
+**Visibility is the decay filter, and it is why a long window is unnecessary.** OzBargain ranks deals by voting, so a deal rises while it is receiving votes and falls when it stops. **A deal that has dropped off pages 0–1 is decaying, and decaying deals are not alerted on.** A deal that would reach 100 votes over several days would still be receiving votes throughout and would therefore still be visible.
 
 - **Threshold rules apply to deals only.** Classified listings carry no vote, comment or click counts, so a threshold rule can never fire on them.
 - **Each threshold is its own rule with its own ID.** A 10-vote rule and a 50-vote rule are two rules, not one rule with a parameter. A deal clearing both produces two alerts, which is the intended behaviour and is what makes "mute the noisy one" possible.
@@ -242,7 +246,7 @@ Editing a rule's definition retains its ID and its ledger history. Resetting a r
 
 - **Per-rule cooldown.** After a rule fires, it does not fire again for its cooldown period, default 24 hours, configurable **per rule**. Rare terms may be set to zero; busy terms may be set to days.
 - **Repost suppression.** If a new deal's normalised title closely matches one already alerted under the same rule within 30 days, the alert is suppressed and recorded in the UI rather than sent.
-- **Expired deals are never alerted.** A deal marked expired in its feed metadata is suppressed.
+- **Expired deals are never alerted, in any circumstance.** A deal whose feed metadata marks it expired produces no alert — including a deal that becomes expired after it was first seen. Expiry is evaluated before an alert is emitted, not only when the deal is first recorded.
 - **Muted rules continue to evaluate and continue writing ledger entries; they send nothing.** This is deliberate: it makes re-enabling a rule quiet rather than a burst of stale alerts, and it lets the UI report how many matches occurred while muted.
 
 ### 5.4 Gaps
@@ -536,7 +540,6 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O7. Secret storage.** Accepted as environment variables by the owner. Residual risks: credential reuse elsewhere, and plaintext storage in Unraid template backups.
 - **O8. Notification channel priority** — which provider to build first beyond email.
 - **O10. Naming and trademark** — "OzBargain" is a live third-party brand.
-- **O12. Threshold window ceiling.** The two-page cap (3.1) gives an observation window of about 30 hours, so **no threshold window can exceed roughly 24 hours**. The original example of "100 upvotes in 7 days" is not supportable. Options: cap windows at ~24 hours; or drop the window entirely on high thresholds and evaluate "reached X votes while visible", which is unaffected by the reach limit.
 
 **Owner: design/implementation — to be resolved by research or probe**
 
@@ -552,7 +555,6 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 
 **Gaps identified in the completeness audit. Not yet designed.**
 
-- **O22. The front-page feed as a matching surface.** §5.1 matches terms against deals; the front-page feed (3.1) is a separate source. A deal that appears on the front page without ever appearing on deals pages 0–1 would be matched by nothing. Whether front-page items are also matched, and against which rules, is undecided.
 - **O23. Notifier failure handling.** No behaviour is specified for a provider that fails to deliver — no retry, no backoff, and no alert when alerting itself is broken.
 - **O24. Database backup and restore.** The application's entire state is one SQLite file. No backup procedure, schedule or restore path is specified.
 - **O25. Timezone handling.** Feed timestamps carry `+1000` offsets. Nothing states how times are stored and in which zone they are displayed.
