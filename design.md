@@ -1,9 +1,10 @@
 # OzBargain Hunter — Design
 
 **Author:** design lane (Claude Opus 5)
-**Date:** 19 September 2026 (AEST)
-**Status:** Draft for James's approval. Nothing has been built. No files other than this one have been created.
+**Date:** 19 September 2026 (AEST). Revised the same day, after the application premise and the R24 classifieds update arrived.
+**Status:** Draft for James's approval. Nothing has been built. The only files created are this one and `research.md`.
 **Input:** `BRIEF.md` in this repository, which records James's requirements verbatim plus environment facts that were each verified by running a command.
+**Companion:** `research.md` — the raw evidence behind sections 2 and 16–20, with every URL and command output. This document is the argument; that one is the proof. Where they disagree, `research.md` is right.
 
 ---
 
@@ -23,7 +24,7 @@ One meta-point before the content. The brief was assembled by an agent with **no
 
 ---
 
-## 1. Executive summary — the five things I would change
+## 1. Executive summary — the things I would change
 
 If you read nothing else, read this. These are the points where the brief, implemented literally, produces something other than what you asked for.
 
@@ -37,26 +38,64 @@ If you read nothing else, read this. These are the points where the brief, imple
 
 5. **Your existing Unraid templates point `<Icon>` at the app's own public URL. Combine that with "JWT on every page" and the Unraid dashboard will show a broken image**, because the icon request gets redirected to a login screen. Host the icon out of the repository instead. Section 9. This is small, but it is a good illustration of requirements R3, R8 and R9 colliding in a way nobody notices until it is live.
 
+### 1.1 Added after the premise arrived — the three things that matter most from the research
+
+Points 1–5 above concern delivery and hosting and are unchanged. These three come from actually going to the site and reading what is there, and they are the ones that change what gets built.
+
+6. **Do not build a scraper. Build a feed reader.** OzBargain publishes a large family of RSS feeds carrying *more* structured data than the HTML pages — vote counts, click counts, comment counts, expiry, and brand/product/tag classification, all as machine-readable attributes. The site owner told developers in 2017 that the feed is the answer to "is there an API", and in March 2026 he **deliberately unblocked `*/feed` URLs in his Cloudflare rules** so that automated feed clients would keep working. Meanwhile I found a live Cloudflare ban sitting on Python's default HTTP client identity. There is no trade-off here: the polite route is also the more robust route and it yields better data. Sections 2.2 and 16.4.
+
+7. **Your trend alert is easier than you thought, and you described it exactly right.** You said it would be a deal appearing "on the 'new deals' page as well as the front page". Those are two separate RSS feeds — `/deals/feed` and `/feed`. Front-page promotion is a directly observable event, about 10 a day. One correction: placement is **not** a vote threshold — I measured a 9-vote deal on the front page and a 43-vote deal off it — so it must be observed rather than predicted. I have added a velocity rule for early warning before promotion, with thresholds justified against 120 real deals. Section 17.3.
+
+8. **The classifieds decision is the one to think hardest about, and it needs thirty seconds of your time first.** `robots.txt` explicitly disallows `/user/login`; the classifieds gate exists specifically to keep non-members out because of scams; none of the 102 public OzBargain projects has ever logged in. But **`/classified` itself is not disallowed — only the login endpoint is**, which opens a middle path where you authenticate as a human and the app only reads. And underneath it all, **nobody has actually proved that having an account unlocks the classifieds at all.** Before deciding anything, open `ozbargain.com.au/classified` in your normal logged-in browser and see whether you get listings. That either unblocks the work or closes the question entirely. Section 18.
+
 ---
 
-## 2. The product surface — deliberately unfinished
+## 2. The product surface
 
-**OPEN — and this is the largest open item in the document.**
+**This section was a marked placeholder in Stage 0. The premise has now landed and it is replaced below.**
 
-The application premise has not been supplied. James has said it arrives in a later message. I am not going to invent one, because a plausible guess here would silently set the data model, the storage requirements, the external network egress, the auth granularity and the port layout, and every one of those would then be quietly wrong.
+**Reading order note.** Sections 3–15 were written before the premise and remain valid — they cover delivery, packaging, exposure and access control, none of which the premise changes. The new material sits in **sections 16–20**, which could not be numbered earlier without renumbering things already referenced. If you are reading for the new work, read section 2, then jump to 16. Sections 13, 14 and 15 have been updated in place.
 
-What stays undecided until the premise lands:
+### 2.1 What it is
 
-- What the app actually does, and therefore what "a page" is.
-- Whether it has persistent state at all, and if so whether that is a file, SQLite, or a database container.
-- Whether it makes outbound network calls (scraping, APIs, notifications) and to where. This matters for egress rules and for rate-limit/etiquette questions against any third-party site.
-- Whether it needs scheduled background work (a scraper loop, a digest email) or is purely request-driven. Background work changes the container's restart behaviour and its health check.
-- Whether there is more than one user, or one class of user. Everything in section 7 assumes a small, known set of humans — if this needs public signup, section 7 changes completely and Cloudflare Access is the wrong tool.
-- The runtime and language. Nothing below depends on it, deliberately.
+OzBargain Hunter watches ozbargain.com.au and sends James a notification when something he cares about appears or starts moving. Three alert types:
 
-What is decidable *without* the premise, and is decided below: the repository layout, the build and publish pipeline, the tagging scheme, the host update mechanism, the exposure path, the access-control architecture, and the logo asset pipeline. That is the whole of this document, and it is why this stage is useful even with a hole in the middle of it.
+- **Trending (R19)** — a recently posted deal that is climbing unusually fast, or that has just been promoted to the front page.
+- **Watchlist (R20)** — a saved product or company term, his example being "AMD R9700", matched against new deals.
+- **Keyword (R21)** — a saved free-text term, his example being "ChatGPT", matched against new deals.
 
-**One thing I will flag now rather than later.** "OzBargain" is a live third-party brand — ozbargain.com.au. If this application consumes that site, then naming the project after it, publishing the image publicly on GHCR, and putting a logo on it are three separate decisions that each carry a small trademark and terms-of-use question. I am not a lawyer and this is not a refusal; it is a thing you should decide knowingly rather than discover. It also interacts with the public/private repository decision in section 8. Listed as **OPEN** in section 14 (D9).
+It runs as a background poller with a small web UI for managing watchlist terms and seeing what it has done. Alerts go out over a notification channel (section 20.5).
+
+### 2.2 The one thing I am changing in the premise, up front
+
+James wrote: *"OzBargain Hunter is a scraper for OzBargain.com.au… the correct method for scraping needs to be researched."*
+
+I researched it. **The correct method is not to scrape.** I am saying that plainly because he asked to be challenged and because this is the single most useful finding of the research pass.
+
+OzBargain publishes a large family of RSS feeds that carry *more* structured data than the HTML pages do — vote counts, click counts, comment counts, expiry timestamps, and brand/product/tag classification, all as machine-readable attributes. The site owner has twice stated in public that the feed is the intended route for exactly this use case, and in March 2026 he **specifically exempted `*/feed` URLs from his Cloudflare bot rules** so that automated feed clients would keep working. Meanwhile my own testing found a live Cloudflare ban sitting on Python's default HTTP client identity.
+
+So the choice is not "scrape carefully versus scrape recklessly". It is:
+
+- **Scrape HTML** — parse a layout that changes without warning, on paths defended by rules the owner tunes continuously, to recover data that is *already available in a cleaner form* somewhere else.
+- **Consume the feeds** — structured, stable, explicitly protected for automated clients, and richer.
+
+The second is less work, more robust, better-mannered, and produces better data. There is no trade-off to weigh here; the polite option is also the superior engineering option, which is a pleasant and fairly rare situation.
+
+**DECISION — this application is a feed consumer, not a scraper. It makes no HTML requests to ozbargain.com.au in v1.** Evidence in section 16; the acquisition design is section 17.
+
+The word "scraper" can stay in conversation if he likes it. The behaviour will not be scraping.
+
+### 2.3 What this settles that was open in Stage 0
+
+- **It has persistent state, and that state is load-bearing.** Detecting "rising quickly" means comparing now against then, which means remembering then. Section 19.
+- **It makes outbound calls** — to ozbargain.com.au and to a notification endpoint. Nothing inbound is required for the product to work.
+- **It needs scheduled background work.** A poll loop is the heart of it. This changes the container's health check and restart behaviour (section 20.4).
+- **One user.** James. Cloudflare Access as designed in section 7 fits without modification; no public signup.
+- **Storage is SQLite on the existing bind mount** (section 19.4). No database container.
+
+### 2.4 The naming question, still open
+
+"OzBargain" is a live third-party brand. Naming the project after it, publishing the image publicly on GHCR, and putting a logo on it are three separate decisions that each carry a small trademark and terms-of-use question. Now that the app is confirmed to consume that site, this is slightly more pointed than it was at Stage 0 — though it is worth recording that OzBargain's Terms of Use contain no clause about automated access at all (section 16.4), and that 102 public GitHub repositories already use the name. Still **OPEN** as D9 in section 14. Decide it knowingly rather than discover it.
 
 ---
 
@@ -250,7 +289,7 @@ The knob is the plugin's schedule. If the plugin will not go below daily and you
 
 Recreating a container from a template throws away everything written inside the container that is not on a mapped volume. That is by design and it is fine, provided the app never writes anything it cares about to a non-mapped path. The template maps:
 
-- `/mnt/user/appdata/ozbargain-hunter/` → a path inside the container, exact target **OPEN** until the premise lands (section 2).
+- `/mnt/user/appdata/ozbargain-hunter/` → `/data` in the container. **This was OPEN at Stage 0 and is now decided** (section 19.4): it holds the SQLite database, and — if section 18 proceeds — a `secrets/` subdirectory mode `0600` for the OzBargain session cookie, which deliberately does not live in the Unraid template (18.5, 7.6).
 
 This is the same shape as the verified `ForcedEnglishSubs` template, which maps `/mnt/user/appdata/stremio-forced-subs/data` → `/data` (FACT).
 
@@ -468,7 +507,7 @@ The product premise is unknown, so the *content* of the tests is **OPEN**. The *
 
 **DECISION — pull requests run 1–4 and never publish.** Keeps the registry clean and makes the pull request a real check rather than a formality.
 
-**OPEN — dependency and image scanning.** Trivy or Dependabot would be sensible additions. I have not decided because it depends on the language and dependency surface, which depends on the premise. Not blocking; revisit after the premise.
+**OPEN — dependency and image scanning.** Trivy or Dependabot would be sensible additions. Still open, but the premise narrows it: this application parses untrusted XML fetched from the internet, so whatever it is written in, the XML parser is the dependency most worth watching (17.2). Not blocking.
 
 ### 8.6 Repository layout
 
@@ -481,7 +520,7 @@ The product premise is unknown, so the *content* of the tests is **OPEN**. The *
 - `Dockerfile`
 - `unraid/my-OzBargainHunter.xml` — canonical template (section 6.6)
 - `assets/logo/` — logo sources and exports (section 9)
-- application source, layout **OPEN** pending the premise
+- application source, layout **OPEN** — the runtime and language are still deliberately undecided (nothing in this design depends on them), but the shape is now known from sections 17–20: a poll loop, a rules engine, a SQLite store with migrations, a notifier behind a one-method interface, and a small web UI
 
 None of these exist yet and none will be created at this stage.
 
@@ -509,7 +548,7 @@ The Unraid template's `<Icon>` field takes a URL to an image that Unraid renders
 - Must read on a **dark background** — Unraid's default theme is dark, and this is the single most common way home-lab icons end up looking broken.
 - Transparent background, not white.
 
-**OPEN — what the mark actually depicts.** I am not designing the mark before I know what the application does. A logo that means nothing is worse than a placeholder, because it gets used and then never revisited. Until then, a plain monogram or solid-colour placeholder is fine and honest.
+**Now unblocked — what the mark depicts.** The app watches for deals that are climbing and alerts on them. That gives three honest directions that all survive the 32-pixel test in the constraints above: an upward trend arrow, a stylised radar or sonar sweep (watching, detecting), or a simple alert/bell form. My preference is the **trend arrow**, because it is the one idea that reads at 32px with a single heavy stroke, it says "rising" which is the distinctive thing this tool does, and it is the furthest from anything resembling OzBargain's own mark. Still **OPEN** as a choice — this is the sort of thing you will have an opinion on, and it is cheap to change now.
 
 **OPEN, flagged in section 2 and repeated here because it lands specifically on this deliverable —** the mark must not copy, imitate or evoke OzBargain's own branding. Combined with the naming question (D9), this is worth thinking about before an artist, a generator or I produce anything.
 
@@ -583,6 +622,11 @@ These are read-only. None of them changes state. They resolve the OPEN items tha
 - **P7 — Is Cloudflare Zero Trust / Access already enabled on the account?** Is there a team domain? Determines how much of section 7.4 is setup versus configuration.
 - **P8 — GitHub plan tier.** Determines whether branch protection is available for a private repository. Section 8.3.
 
+**Added after the premise. These two are not read-only in the same sense — P9 is something James does in a browser, not something an agent runs.**
+
+- **P9 — Does an OzBargain account actually unlock `/classified`? (U7)** James opens `https://www.ozbargain.com.au/classified` in his normal logged-in browser, then again in a logged-out private window. Thirty seconds, no automation, no risk. Blocks R22, R24 and the whole of section 18. **This is the highest-value probe in the list**, because a negative result closes an entire workstream before any of it is designed in detail.
+- **P10 — Is there an ntfy instance already running on this host?** The note passed to the design lane says there is one serving Uptime Kuma, but that is not in the verified-facts record and I have not confirmed it. Determines whether D13 is free or costs a container.
+
 ---
 
 ## 12. Staged plan
@@ -590,10 +634,11 @@ These are read-only. None of them changes state. They resolve the OPEN items tha
 Each stage ends at a human approval gate. No stage starts before the previous one is signed off.
 
 - **Stage 0 — now.** This document. Nothing built. Awaiting your review and your answers in section 14.
-- **Stage 1 — probes.** Run P1–P8. Report raw output. Update this document's OPEN items with facts. Still nothing built.
+- **Stage 1 — probes.** Run P1–P8. Report raw output. Update this document's OPEN items with facts. Still nothing built. **Add P9: settle U7 — open `ozbargain.com.au/classified` in your logged-in browser and report what you see (section 18.6).** It takes thirty seconds and it decides whether Stage 5 exists at all.
 - **Stage 2 — the pipeline skeleton.** Repository created, remote added, a trivial "hello" container, Dockerfile, build workflow, tagging scheme, GHCR publish. **The entire delivery loop is proven with a placeholder application before any product code exists.** This is deliberate: it means when the real app arrives, the delivery path is already known-good and any failure is unambiguously in the app. Ends with the section 10 acceptance test passing.
 - **Stage 3 — exposure and access control.** Hostname, ingress edit, Cloudflare Access application, JWT verification in the placeholder app, Unraid template, logo. Ends with the section 10 access-control test passing.
-- **Stage 4 — the actual product.** Requires the premise (section 2). Not designed. Not estimated.
+- **Stage 4 — the actual product: the deals side.** The premise has landed, so this is now designed rather than deferred — sections 2 and 17 through 20. Feed acquisition, SQLite state, the three alert rules, de-duplication, the notification channel, the dead-man's switch and the web UI. **Needs no OzBargain account and no credential**, so it is not blocked by anything in section 18 and delivers R16–R21 and R23 on its own. Still not estimated.
+- **Stage 5 — classifieds, only if it survives.** Contingent on P9 settling U7 and on your answer to D10. If U7 comes back negative, this stage does not exist. If it comes back positive and you choose Option B, it is small. If you choose Option C, it is much larger than Stage 4 and carries the risk argued in section 18.3. **Deliberately last**, so that the whole product is working and useful before anything touches an account.
 
 **The case for building Stage 2 against a placeholder app**, since it may look like busywork: it separates "is my delivery pipeline correct?" from "is my application correct?". Debug those together and every failure has two possible causes. Debug them apart and every failure has one. It also means the first time you push real product code, it deploys to your house automatically and correctly, which is a good day.
 
@@ -603,7 +648,14 @@ Each stage ends at a human approval gate. No stage starts before the previous on
 
 In order of how much they block.
 
-- **B1 — the application premise (R15).** Blocks Stage 4 entirely, and blocks several specifics in earlier stages: the volume mount target, whether there is a database, egress requirements, the logo's subject matter. Stages 1 through 3 can proceed without it. You have said it is coming.
+- **B1 — the application premise (R15). RESOLVED.** The premise landed on 19 September 2026 and is designed in sections 2 and 16–20. The specifics it was blocking are now settled: the volume mount target is `/data`, storage is SQLite (no database container), egress is to ozbargain.com.au and one notification endpoint, and the logo now has a subject to depict.
+
+**New blockers arising from the premise:**
+
+- **B7 — U7: nobody has demonstrated that an OzBargain account actually unlocks `/classified`.** Blocks R22 and R24 completely. Everything about the classifieds design is contingent on an unproven assumption. It costs about thirty seconds to settle and must be settled before any classifieds work is scoped. Section 18.6.
+- **B8 — D10: the R24 policy decision.** Whether to authenticate to OzBargain at all, and if so how. This is James's call, not mine and not the orchestrator's. It is the most consequential decision in the project and it is argued in section 18. Blocks R22/R24 only; the whole of the deals side (R19, R20, R21) proceeds regardless.
+- **B9 — U4/D13: where notifications go.** Blocks the last hop of every alert. Cheap to answer. My recommendation is ntfy (section 20.5), and there is a specific thing to verify: whether the ntfy instance reportedly already running on this host for Uptime Kuma is real. It is not in the verified-facts record.
+- **B10 — U6/D11: the trend threshold numbers.** Does not block a build — I have proposed defaults justified against real measured data (section 17.3) and made them configurable. It blocks *acceptance*, in the sense that only James can say whether ~3.5 alerts a day is the right volume.
 - **B2 — tunnel management mode (P1).** Blocks the recommended exposure design. Without this, section 7.2 Option 1 cannot even be attempted.
 - **B3 — hostname routing ownership (P2, P3).** Blocks R7. If you do not administer `192.168.0.173`, the design narrows sharply.
 - **B4 — repository visibility (D1).** Blocks the branch-protection decision (8.3/8.4), the logo hosting decision (9.2), and interacts with the naming question (D9). One decision, three downstream consequences.
@@ -639,6 +691,24 @@ Each has my recommendation and the reason. Answer these and Stage 1 can start.
 
 - **D9 — The name.** "OzBargain" is a third party's brand. Publishing a public repository and a public container image under a name derived from theirs, with a logo, is a decision rather than an oversight. I am not telling you not to; I am telling you to decide it on purpose. It also feeds D1.
 
+**Decisions arising from the premise. D1–D9 are unchanged and keep their numbers.**
+
+- **D10 — The big one: do we authenticate to OzBargain for the classifieds (R24), and if so how?**
+  *Recommendation: not by driving the login form. If you want classifieds, supply the session cookie yourself.* Three options are laid out in full in section 18.4. In short: OzBargain's `robots.txt` names `/user/login` as disallowed, the classifieds gate exists specifically to keep non-members out because of scams, the site owner tunes Cloudflare rules against bots continuously, none of the 102 public OzBargain projects has ever done this, and the account at risk is your personal one. The middle option — you log in as a human in your own browser and paste the resulting session cookie into the app — gets you the classifieds without the app ever touching the disallowed endpoint. **Read section 18 before answering this one.** It is the decision I most want you to make deliberately.
+
+- **D11 — The trend thresholds (R19).** *Recommendation: alert when a deal is under 6 hours old, has at least 10 net votes, and is running at 5.0+ net votes/hour; and separately whenever a deal is promoted to the front page.* Measured against 120 real deals, that fires about 3.5 times a day plus about 10 front-page promotions a day. All four numbers are environment variables and I expect you to move them in week one. Justification and the measured distribution: section 17.3.
+
+- **D12 — Poll interval.** *Recommendation: 5 minutes.* Two feeds, conditional requests, which means ~576 requests a day of which almost all return 304 with a zero-byte body. Your trend detection can never be finer-grained than this number, and that relationship is stated honestly in section 17.6. Faster is possible and I would not go below 2 minutes.
+
+- **D13 — Notification channel (U4).** *Recommendation: ntfy, behind a one-method internal interface* so that swapping to Discord, Apprise or email later touches one file. Reasoning in section 20.5.
+
+- **D14 — Identify the bot honestly in the User-Agent, rather than impersonating a browser.**
+  *Recommendation: yes, identify honestly.* Every prior-art project I read spoofs either Chrome or curl. I am recommending against that, and the reasoning is in section 20.2. It carries a real risk, which is that an honest bot is easier to block deliberately than a hidden one. I think that risk is worth taking and I have verified that an honest User-Agent returns 200 today.
+
+- **D15 — Seed on first run; do not alert on history.** *Recommendation: on a cold start with an empty database, record everything the feeds currently show as already-seen and send zero alerts.* Otherwise your first launch fires 120 notifications for deals from two days ago. Section 19.3.
+
+- **D16 — A dead-man's switch is part of the product, not an optional extra.** *Recommendation: if no poll has succeeded for 30 minutes, send an alert saying so.* A silent broken alerter is worse than no alerter, because you will trust it. Section 20.4.
+
 ---
 
 ## 15. Requirement-by-requirement verdict
@@ -658,5 +728,518 @@ Faithful coverage of `BRIEF.md` section 2, with my position on each.
 - **R11 — Every commit automatically builds.** Agreed, with two precisions: the trigger is a *push*, one run per push not per commit; and a concurrency group is required or `latest` can end up pointing at the older of two rapid commits. Section 4.4, 4.5.
 - **R12 — Every version tagged `latest`; `beta` alongside when branching.** **Challenged.** Kept as vocabulary, changed in substance: immutable `main-<sha>` and `beta-<sha>` tags so rollback is possible, exactly one branch owning `:beta`, and a promoted `:stable` for production. Section 5.
 - **R13 — Push → build → host pulls and stays updated.** **Half agreed.** The build-and-publish half is exactly as you describe. The "then Unraid pulls it" half is a poll from your side, not a push from GitHub's, because the push version would require the inbound path that R9 forbids. Section 4.2.
-- **R14 — Produce `design.md`, no build.** Done. This file is the only thing created. No Dockerfile, no workflow, no scaffolding, no application code.
-- **R15 — Premise supplied later.** Respected. Section 2 is a marked placeholder and I have not invented a product to fill it.
+- **R14 — Produce `design.md`, no build.** Done. This file and `research.md` are the only things created. No Dockerfile, no workflow, no scaffolding, no application code.
+- **R15 — Premise supplied later.** Respected at Stage 0, and now **satisfied** — the premise arrived and section 2 is written from it rather than from a guess.
+
+**R16–R24, from the premise and the mid-research update. Same style, same honesty.**
+
+- **R16 — A scraper/aggregator for OzBargain.com.au.** **Challenged on the method, agreed on the goal.** It will aggregate OzBargain, but it will not scrape. The site publishes RSS feeds that carry more structured data than the HTML does, and the owner deliberately exempted `*/feed` from his Cloudflare bot rules to keep automated feed clients working. Scraping would be more fragile, more hostile and would yield worse data. Section 2.2, evidence in 16.4.
+- **R17 — Criteria to surface "the best" or targeted deals.** **Partly agreed, partly not yet testable.** "Targeted" is fully specified by R20/R21 and is designed in 17.4 and 17.5. "The best" is not yet a number — U6 is still open. I have given the trend rule concrete defaults justified against measured data (17.3) rather than leave it hand-wavy, but whether they match your idea of "best" is yours to say.
+- **R18 — Method chosen with Cloudflare anti-bot protection in mind.** **Agreed, and this drove the whole design.** The empirical boundary is in 16.2: Cloudflare blocks by client signature — Python's default `urllib` identity is banned outright — while the feeds are explicitly protected. The design stays entirely on permitted paths, identifies itself honestly, uses conditional requests, and treats a Cloudflare block and an application denial as different events with different responses (20.3).
+- **R19 — Trending alert.** **Agreed, and it turned out to be easier and more literal than expected.** You described it as a deal appearing "on the 'new deals' page as well as the front page". Those are two separate RSS feeds — `/deals/feed` and `/feed` — so front-page promotion is a directly observable event, not something to infer. Combined with a vote-velocity rule for early warning before promotion. Section 17.3. One correction to your mental model: front-page placement is **not** derivable from vote counts — I measured a 9-vote deal on the front page and a 43-vote deal off it — so this has to be observed, not predicted.
+- **R20 — Watchlist match on a saved term ("AMD R9700").** **Agreed, with the obvious implementation rejected on evidence.** The appealing design is to subscribe to the structured `/product/<slug>/feed`. It cannot be the primary mechanism: a product slug only exists once a deal for that product has been posted, and I verified there is no slug for the R9700 today. Waiting for the R9700 by subscribing to the R9700 feed requires the thing you are waiting for to have already happened. Text matching is primary; slugs are a precision enhancement. Section 17.4.
+- **R21 — Keyword match ("ChatGPT").** **Agreed.** Mechanically the same pipeline as R20 with looser matching and different suppression. One constraint worth naming: `robots.txt` disallows `/search/`, so the site's own search engine is off-limits and all matching happens locally against feed content. That is fine — it is also faster and it is one less dependency. Section 17.5.
+- **R22 — Classifieds in scope for alerts.** **Not achievable as originally stated, and superseded by R24.** Verified: there is no classifieds feed at any path (`/classified/feed` → 404), and `/classified` returns OzBargain's own 403 page reading "You do not have permission to access this page". The fact-sheet framing of "blocked" is wrong; the correct framing is "members-only". That is a different problem with a different answer. Section 18.
+- **R23 — Alerts delivered as notifications.** **Agreed; channel still your call.** Recommending ntfy behind a one-method interface so the choice is cheap to revisit. Section 20.5. Still OPEN as U4/D13.
+- **R24 — The bot authenticates with a user account, then searches the classifieds.** **This is the one I am pushing back on hardest, and you should expect that given you asked to be challenged.** I am not refusing it and it is your call to make. But: `robots.txt` explicitly names `/user/login` as disallowed; the classifieds gate exists specifically to keep non-members out because of scams; the owner tunes Cloudflare rules against bots continuously; none of the 102 public OzBargain projects has ever done this, so there is no proven path to copy; and the account at risk is your personal one, not a throwaway. There is also a middle path that gets you the classifieds without the app ever touching the login form — you authenticate as a human in your browser and hand the app the resulting session cookie. Critically, `/classified` itself is **not** robots-disallowed; only `/user/login` is. That distinction is what makes the middle path coherent rather than a fudge. And underneath all of it sits U7: **nobody has actually demonstrated that having an account unlocks `/classified` at all.** Settle that first, for free, before deciding anything. The full argument and the authentication architecture — for if you say yes — are in section 18.
+
+---
+
+## 16. What the research found
+
+You said the expectation is that the designer does the research — goes to the site, looks at what is there, and finds out whether anyone has solved this before — rather than designing from what you said. That was a fair criticism of the last pass. This section is the answer to it.
+
+I made about 60 requests to ozbargain.com.au over roughly 25 minutes, one at a time, spaced 4–6 seconds apart. I read the site's wiki, its terms of use, its robots.txt and four forum threads including two where the site owner answers exactly the questions we were asking. I searched GitHub and found 102 projects in this space and read the source of the most relevant eight.
+
+**The full evidence, with every URL and command output, is in `research.md` in this repository.** This section is the argument; that file is the proof. It is deliberately separate so this document stays readable and so the evidence can be audited without wading through prose.
+
+### 16.1 How I behaved on somebody else's site, and why it is a design input
+
+Three things I deliberately did not do, because how to behave on a third party's production site is itself part of the design and the research should model the application's manners:
+
+- **I did not request `/user/login`.** `robots.txt` disallows it, and it is the exact endpoint whose acceptability is the open question in R24. Probing it in order to advise on whether probing it is acceptable would have been circular.
+- **I did not request anything under `/api/`.** Disallowed. A convenient JSON endpoint exists there and a prior-art project uses it. I did not need to fetch it to conclude we should not use it.
+- **I did not request anything under `/search/`.** Disallowed, and this has a real consequence for R21 — the site's own search cannot be used, so keyword matching happens locally.
+
+This is the standard the application should hold itself to: stay on permitted paths, go slowly, one request at a time, and do not probe the thing you have been asked not to touch.
+
+### 16.2 The anti-bot boundary, measured rather than assumed
+
+This is where the fact sheet's framing was leading us wrong, and the distinction matters enormously because the two cases demand opposite responses.
+
+**There are two entirely different refusals on this site.**
+
+**Cloudflare blocking a client signature.** Requesting `/deals/feed` with Python's default `Python-urllib/3.x` User-Agent returns **HTTP 403 with a 17-byte body: `error code: 1010`**. No HTML, no OzBargain branding, no session cookie. That is Cloudflare, at the edge, banning a browser signature. The request never reached OzBargain.
+
+**OzBargain's application denying permission.** Requesting `/classified` with a normal Chrome User-Agent returns **HTTP 403 with 1,016 bytes of OzBargain's own styled error page**, loading the site's stylesheets, setting a PHP session cookie, and saying: *"You do not have permission to access this page."* The request reached the application, which considered it and said no.
+
+Both are HTTP 403. Both carry `server: cloudflare`. They are trivially separable by body size and content, and the application **must** separate them, because one means "change how you identify yourself and back off" and the other means "you are not a member" — and confusing the two produces either a pointless retry storm or a silently abandoned feature.
+
+**The block is narrow and surgical, not a general anti-automation posture.** Same URL, varying only the User-Agent:
+
+- `Python-urllib/3.x` (library default) → **403, error code 1010**
+- no User-Agent header at all → 200
+- `python-requests/2.32.3` → 200
+- `Go-http-client/1.1` → 200
+- `Wget/1.21.4` → 200
+- `curl/8.5.0` → 200
+- `GPTBot/1.1` → 200
+- Chrome 140 → 200
+- `OzBargainHunter/0.1 (+github url)` → **200**
+
+Two things follow. First, **the most common default HTTP client identity in the most likely implementation language is already banned** — a build using Python's `urllib` with defaults would have failed on day one with a 17-byte body and an error code that appears nowhere in the fact sheet. Second, **an honest self-identifying bot User-Agent is not blocked today**, which is the evidence behind D14.
+
+**This corrects F1.** F1 concluded the feed path was clear of Cloudflare obstacles. Broadly true, but there is a live UA ban sitting directly across the most probable implementation choice, and we would have walked into it.
+
+### 16.3 The feed surface is far larger than the fact sheet knew
+
+All of these return 200 with `application/rss+xml`:
+
+`/deals/feed` (New Deals, 30 items) · `/feed` (**Front Page Deals**, 20 items) · `/deals/popular/feed` (Popular, last 30 days) · `/freebies/feed` · `/cat/<slug>/feed` · `/brand/<slug>/feed` · `/product/<slug>/feed` · `/tag/<slug>/feed` · `/live/feed` (an event stream — see 17.3).
+
+**The discovery that matters most: `/feed` is the front-page feed.** The fact sheet recorded it as "a second, distinct feed" of unverified relationship. It is the Front Page — its channel title is literally `OzBargain | Front Page Deals`. You described the trend alert as a deal appearing "on the 'new deals' page as well as the front page". Those are two RSS feeds. Your alert is a set-membership test between them, and that is a great deal more reliable than any heuristic I would have invented.
+
+**F6 is correct in full and it is the foundation of the design.** Every item in both feeds carries `<ozb:meta>` with `votes-pos`, `votes-neg`, `comment-count`, `click-count` and (optionally) `expiry` and `starting`, plus the merchant's own product URL. So yes — a "rising quickly" alert can be built from feed deltas, without touching a deal page. Two caveats I found that the fact sheet did not: `expiry`/`starting` are optional and must be nullable, and **the counters are not monotonic** — I watched a comment count go *down* by 4 between two polls, because comments get deleted. Delta arithmetic that assumes counters only rise will produce negative rates and, unguarded, nonsense alerts.
+
+**Conditional requests work and this is a bigger deal than it sounds.** The feeds send `etag` and `last-modified`, and re-requesting with `If-None-Match`/`If-Modified-Since` returns **304 with zero bytes of body**. A 5-minute poll of an unchanged feed costs OzBargain a 304 instead of serialising and shipping 49 KB. This single mechanism is most of what separates a polite poller from a rude one, and it was not in the fact sheet at all.
+
+### 16.4 There is a sanctioned path, and the site owner spelled it out
+
+This is the most important thing I found, and it is why section 2.2 rejects the word "scraper".
+
+**scotty (site owner), 29/12/2017**, asked directly whether OzBargain has an API:
+
+> "Not really. You can get the data from RSS feed. There are some extra XML elements containing extra data (votes, comments, etc)."
+
+That is the owner pointing developers at the feed *and specifically at the `<ozb:meta>` extras we intend to use*.
+
+**scotty, 24/03/2026**, after a Cloudflare rule caught RSS readers in the crossfire:
+
+> "We decided to block some older Chrome browser versions because bots and script kiddies hard coded them when they scrap OzBargain that causes excessive load. However some RSS apps also identify themselves by those old Chrome versions (and did not provide a way to change that), which then got blocked on CloudFlare as well. **We have now unblocked those old Chrome versions on `*/feed` URLs, i.e. where all our RSS lives**, so hopefully those RSS apps will keep on working."
+
+He weakened his own anti-bot protection, specifically on feed URLs, specifically so that automated clients would keep working. That is about as close to a sanctioned machine-readable path as a site without an API can offer.
+
+**And there is no contractual prohibition.** I pulled OzBargain's Terms of Use and searched the text: zero occurrences of scrape, crawl, robot, spider, harvest, RSS or machine. The only hit for "automat" is about their own ad serving. The wiki's "Guide for Third-Party Site Operators" turns out to be about manual deal-posting etiquette and says nothing about programmatic access.
+
+So the governing signals, in order of authority, are: `robots.txt` (specific and machine-readable), the owner's public statements (unusually clear), and no terms-of-use clause either way.
+
+**What this does not mean.** It does not mean we are safe. F11 is correct and I am not softening it: the owner tunes rules against scrapers continuously, and my own `error code: 1010` result is a live instance of that tuning. The right reading is *the feed is the one surface with a public commitment behind it, and even that commitment is maintained by hand and could change tomorrow.* Design for breakage anyway — section 20.4.
+
+### 16.5 Prior art: 102 projects, and the one thing none of them does
+
+GitHub returns **102 repositories** for "ozbargain", spanning about a decade. This is well-trodden ground and the shape of what you want is clearly viable.
+
+**The most instructive is `eckyecky/ozbargain-ntfy-live-bridge`** (TypeScript/Bun, Docker, ntfy, active March 2026) — almost exactly this project. Four things from its source, three of them warnings:
+
+- It polls `/api/live`, which **`robots.txt` disallows**. A convenient endpoint exists; it is off-limits. We take the same data from permitted feeds.
+- It **spoofs `curl/8.5.0`** as its User-Agent rather than identifying itself.
+- It **shells out to the `curl` binary instead of using its own runtime's HTTP client**, and its error handling explicitly tests for `"Just a moment..."` — the Cloudflare interstitial. Nobody writes that code speculatively. This is an author who got blocked by client signature and worked around it by delegating to a binary whose signature passes. That is independent corroboration of my 1010 finding, from a different language.
+- It has an **`OZBARGAIN_COOKIES`** option — "allow passing the full cookie string … or a fresh one". It contemplates running with a session cookie *handed to it*, not one it obtained by driving a login form. **That distinction is the basis of my R24 recommendation.**
+
+**`TT-RB/OzBargain_Scraper`** (Python, April 2026) uses RSS plus keywords plus Discord, with a per-user 3600-second cooldown and duplicate suppression per deal — direct prior art for section 20.1. Its README also admits *"Upvote scraping is heuristic; changes to OzBargain layout may require updates"* — they parse upvotes out of HTML while `votes-pos` sits in the feed they are already fetching. A concrete example of the cost of not reading the feed properly.
+
+**`harinder83Aus/ozbargain-monitor`** (Flask/PostgreSQL/Docker) is the closest architectural analogue — RSS feeds, search-term management, matching, web dashboard, docker-compose. Confirms the overall shape. Its 6-hour poll is far too slow for R19; you cannot detect a deal rising quickly on a 6-hour interval.
+
+**`Accurate0/ozb`** (Rust, May 2026) and **`jojo-data/ozbargain-tracker`** (Python, September 2026 — the most recently active) are both small, alive, feed-based keyword alerters. The latter parses with `defusedxml` rather than stdlib `ElementTree`; safely parsing untrusted XML is a real concern and we should copy that.
+
+**`Givo29/ozbargain-scraper`** (8 stars) scrapes `/search/node/...` with cheerio — a **robots-disallowed path**. A popular project doing the thing we should not do.
+
+**And the finding you specifically asked for: nobody logs in.** I looked across 102 repository names and descriptions, the file trees and source of the eight most relevant, and targeted web searches for OzBargain plus login/session/authentication/classifieds. **I found no open-source project that authenticates to OzBargain programmatically, and none that touches the classifieds at all.** The closest is that `OZBARGAIN_COOKIES` variable, which is a human-supplied cookie.
+
+That absence is itself a finding. With 102 projects over a decade, classifieds are an obvious thing to want, and nobody has published a way to get them. It is weak evidence but it points one way: either people tried and it did not work well enough to publish, or people looked at a members-only anti-scam section and decided against. **R24 has no proven path and no prior art to copy.**
+
+**One more thing, so nobody suggests it later.** The standard Cloudflare bypass tools — `cloudscraper`, `cfscrape`, `puppeteer-stealth`, `playwright-stealth`, `FlareSolverr` — are now widely reported as obsolete or detected on sight, with `cloudscraper` abandoned and `FlareSolverr` stalled. That closes off "just bypass it" as an *engineering* matter before anyone has to argue it as an ethical one. Adopting one would mean a maintenance dependency on a losing arms race, to do something the owner is actively tuning against, while a protected feed carrying better data sits right there.
+
+### 16.6 Verdict on the fact sheet: F1–F14
+
+You should know which of the handed-down "facts" survived contact. Full detail in `research.md` section 7.
+
+**Confirmed, reproduced myself:** F2 (and extended — the relationship is now known), F4, F5, **F6 in full**, F7, F12, **F13 byte for byte**, F14.
+
+**Confirmed but incomplete in ways that would have hurt:**
+- **F1** — feed works as described, but missed the live Cloudflare ban on `Python-urllib`. Would have broken the build on day one.
+- **F3** — pagination works and pages do not overlap, both true. Missed that **pagination is zero-indexed**: `?page=1` is the *second* page. A loop over pages 1..N silently skips the 30 newest deals, which is the exact data this app exists to watch.
+- **F8** — substance right (no classifieds feed, 403 on `/classified`), framing superseded. "Not obtainable" is wrong; "members-only" is right, and it is a different problem.
+
+**Corrected — the fact sheet is wrong:**
+- **F9, three errors.** The live `robots.txt` is 253 bytes and I quoted it in full. There is **no `DataForSeoBot` rule**. There are **no `GPTBot`/`ChatGPT-User`/`CriteoBot` rules and no `Crawl-delay` directive anywhere in the file**. There is **no `Sitemap:` declaration** (the sitemap file exists and returns 200, but robots.txt does not point at it). I verified the file is not varied by client — identical 253 bytes and identical SHA-256 for Chrome, curl, GPTBot and an honest bot UA. **This matters because U3 reasons from the non-existent crawl-delay** to conclude that single-digit-second delays are within tolerance. That inference must be withdrawn; my cadence recommendation in 17.6 is built on different grounds.
+- **F10** — `/deals?sort=votes` returns 200 but **does not sort**. Identical node ordering to `/deals`; the parameter is ignored. A design that fetched it believing it was getting top-voted deals would get new deals in date order and never notice. The real popularity surface is `/deals/popular/feed`. Also, the forum path is `/forum`, singular, which returns 200.
+
+**Not re-tested:** **F11**, the owner's continuous anti-scraper tuning. I did not re-fetch node 946105, but it is corroborated by his March 2026 statements which I did fetch, and by my own 1010 result. Treat as confirmed.
+
+**New facts not in the fact sheet at all:** `/feed` is the Front Page feed · `/product/`, `/brand/`, `/tag/`, `/cat/`, `/deals/popular/`, `/freebies/` all have feeds · `/live/feed` is a per-event stream with a ~23-minute window · conditional GET returns 304 with zero bytes · front-page placement is not derivable from vote counts · counters are not monotonic · the Terms of Use contain no anti-automation clause · scotty deliberately exempted `*/feed` from Cloudflare rules · no product slug exists for a product nobody has posted yet · no prior-art project logs in.
+
+---
+
+## 17. Data acquisition design
+
+Grounded in section 16, not in general scraping advice.
+
+### 17.1 What we fetch, and nothing else
+
+**DECISION — v1 fetches exactly two URLs on a timer:**
+
+- `https://www.ozbargain.com.au/deals/feed` — new deals, 30 items, ~22 hours of history
+- `https://www.ozbargain.com.au/feed` — front page deals, 20 items
+
+Plus, on demand and rarely, `/product/<slug>/feed`, `/brand/<slug>/feed` and `/tag/<slug>/feed` for watchlist terms that have a slug (17.4).
+
+**DECISION — paths this application never requests, permanently:** `/api/`, `/ozbapi/`, `/search/`, `/comment/`, `/goto/`, `/privatemsg/`, `/user/login`. Those are the seven `robots.txt` disallows. They are a hard-coded deny list in the HTTP client, not a convention — the point is that a future feature cannot casually reach one of them. Note that `/goto/` is the outbound click-tracking redirect that appears in `ozb:meta/@link`: we display it as a link for you to click in a browser, and the application itself never follows it.
+
+**DECISION — no HTML parsing of ozbargain.com.au in v1.** Everything needed for R19, R20 and R21 is in the feeds. This is the single biggest robustness decision in the document: HTML layout changes without warning and breaks parsers, while the feed is a stable published contract that the owner protects.
+
+### 17.2 The poll
+
+Every 5 minutes (D12), sequentially, never in parallel:
+
+1. `GET /deals/feed` with `If-None-Match`/`If-Modified-Since` from the last response.
+2. Wait a few seconds.
+3. `GET /feed` with the same.
+4. Classify each response (20.3). On 304, there is nothing new in that feed and we move on.
+5. Parse with a hardened XML parser — `defusedxml` or equivalent, following `jojo-data`'s lead. This is untrusted input from the internet and stdlib XML parsers have known entity-expansion problems.
+6. Upsert each item into the deals table; append a counter observation for each.
+7. Evaluate the three rules.
+8. Emit alerts that survive de-duplication (20.1).
+9. Record a successful-poll timestamp — this is what the dead-man's switch watches.
+
+### 17.3 R19 — turning "suddenly starts to rise very quickly" into something mechanical
+
+You gave no threshold and asked for one. Here it is, with the measurements behind it.
+
+**Signal 1 — front-page promotion. This is the literal thing you described, and it is free.**
+
+You said: *"Possibly this would be a new deal, that suddenly finds itself on the 'new deals' page as well as the front page."* `/deals/feed` is the new-deals page. `/feed` is the front page. So:
+
+> **A deal we have already seen in `/deals/feed` appears in `/feed` for the first time.**
+
+That is a discrete, unambiguous, observable event. No threshold, no tuning, no heuristic.
+
+**A correction to the mental model, though.** I checked whether front-page placement is just a vote threshold. It is not: at one instant I recorded a deal with **9 net votes on the front page** and a deal with **43 net votes, posted inside the same time window, not on it**. Placement is an editorial/algorithmic decision by OzBargain that we can observe but cannot compute. That is good news — we watch for the event rather than trying to predict it, and OzBargain's own judgement about what is interesting comes along for free.
+
+Measured frequency: 20 of 120 deals in a 48.5-hour sample were on the front page — about **10 promotions per day**.
+
+**Signal 2 — velocity, to catch a deal *before* promotion.** Promotion is the confirmation; you also want the early warning. The rule:
+
+> **Alert when a deal is under 6 hours old, has at least 10 net votes, and is running at 5.0 or more net votes per hour since posting.**
+
+Why these numbers, from 120 real deals across 48.5 hours:
+
+- The distribution of net votes per hour is **median 0.79, p75 1.90, p90 4.79, p95 8.56, max 18.04**. A 5.0/hour threshold is approximately the 90th percentile — genuinely unusual, not merely above average.
+- **The 10-vote floor exists to kill a specific artefact.** A deal 7 minutes old with a single vote computes to 8.56 votes/hour and lands in the 95th percentile. Velocity is unstable when the denominator is tiny. Without a floor this rule fires on every new deal that gets one sympathy vote. This is the trap in the obvious implementation and it is why a pure rate threshold is wrong.
+- The 6-hour age cap keeps it about *new* deals rising, which is what you asked for, rather than an old deal grinding upward.
+
+**Measured alert volume for that rule: 7 of 120 deals, about 3.5 alerts per day.** Two of the seven were not yet on the front page at the time — genuine early warning, which is the point. Deals arrive at about 59 per day, so this fires on roughly the top 6%.
+
+For calibration, alternative settings against the same sample: requiring 15 votes gives ~3.0/day; extending to 12 hours gives ~4.0/day; tightening to 20 votes and 8.0/hour gives ~1.5/day.
+
+**Mark this as a knob you will tune.** All four numbers — max age, minimum votes, minimum rate, and whether promotion alerts separately — are environment variables. My sample was a Saturday afternoon, which is quiet; a weekday evening will run hotter and you may want the threshold higher. Expect to move these in week one. The app should log, for every poll, how close the top few deals came to firing, so you can tune from your own data instead of guessing.
+
+**Why not use vote deltas per poll?** I measured that too, and it does not work well: over an 8.7-minute interval, **24 of 29 deals moved zero votes**. Votes are a low-rate signal and a per-poll delta is reading mostly zeroes. Velocity since posting is the more stable measure. Worth noting that **`click-count` is roughly an order of magnitude more responsive** — one deal took +119 clicks in the same interval it took +0 votes — so if the vote rule proves too slow in practice, clicks are the obvious second input. I have not put clicks in the v1 rule because I have no baseline distribution for them yet and I would rather not invent a threshold I cannot justify. Gathering that baseline is a natural week-two task.
+
+**On `/live/feed`.** There is a third surface — an event stream of individual votes, comments and posts, timestamped to the second. It is tempting for velocity. I am **not** using it in v1 and the reason is a measurement: its 75-item window covered only **23.4 minutes** when I sampled it on a quiet Saturday. It is a *sliding window*, so any poll gap longer than the window loses events permanently and silently. The feed counters are *cumulative*, so a missed poll widens the delta window but loses nothing. That robustness difference is worth more than the extra resolution. Revisit if the trend rule proves too coarse, and if we do, it needs lap detection.
+
+### 17.4 R20 — watchlist match, and why the elegant answer is wrong
+
+Your example is "AMD R9700". The question is whether to match free text or the structured `/product/`, `/brand/` and `/tag/` slugs that the feed carries.
+
+The structured answer is very appealing. Each feed item carries its classification as machine-readable categories, so `/product/amd-radeon-ai-pro-r9700/feed` would be an exact, false-positive-free subscription.
+
+**I tested it, and it does not work as the primary mechanism:**
+
+- `/brand/amd/feed` → 200, exists
+- `/tag/graphics-card/feed` → 200, exists
+- `/product/amd-radeon-ai-pro-r9700/feed` → **404**
+- `/product/amd-r9700/feed` → **404**
+
+**A product slug only comes into existence when somebody posts and tags a deal for that product.** For a product nobody has posted yet, there is no slug — and that is exactly the moment you want to be alerted about. The elegant design requires the thing you are waiting for to have already happened.
+
+**DECISION — text matching is primary; structured slugs are a precision enhancement.**
+
+A watchlist term is stored with:
+- **The match text**, normalised: lower-cased, punctuation stripped, runs of whitespace collapsed, so that "AMD R9700", "amd r9700" and "AMD  R-9700" all behave the same. Matching runs over the item title, the description text, and the category *labels*.
+- **Optional required-tokens semantics.** "AMD R9700" as a phrase will miss "Radeon AI PRO R9700 by AMD". Default is **all tokens present, in any order, word-boundary matched** — so "amd" and "r9700" both appear somewhere. Word boundaries matter: a naive substring search for "amd" hits "Amderma" and every "AMD-compatible" accessory.
+- **An optional slug subscription**, added later. Once a real R9700 deal appears, its `<category>` elements reveal the canonical slug; the UI offers to pin the term to it. From then on, matching is exact and also catches deals whose title does not contain your string.
+
+So the flow is: text match catches the first one; the slug makes every subsequent one precise. You get both, in the order that actually works.
+
+**A caveat worth stating: this will produce false positives and you should expect them.** "AMD R9700" is specific enough to be fine. A term like "Apple" will match constantly. The UI should show a term's recent match count so a too-broad term is obvious before it becomes annoying, and every alert should carry a one-tap way to mute the term.
+
+### 17.5 R21 — keyword match
+
+Mechanically the same pipeline as R20 with two differences.
+
+Your example is "ChatGPT", which is a product nobody will tag as a `/product/` slug in the normal way — it is a subject that turns up in deal titles. So this is the free-text path, permanently.
+
+- **Matching is looser:** any token match rather than all-tokens, case-insensitive, word-boundary anchored, over title + description + category labels.
+- **Suppression is tighter,** because a topical keyword recurs far more than a specific product does. Section 20.1.
+
+**A constraint worth naming explicitly:** `robots.txt` disallows `/search/`, so OzBargain's own search engine is off-limits to this application. All matching is local, against feed content we have already fetched. That is not a compromise — it is faster, it adds no requests, and it removes a dependency. But it does mean **we only match against the ~22 hours of deals the feed window covers**, not the whole site history. For an alerting tool that is exactly right; for "has there ever been a ChatGPT deal?" it is not, and that is a search feature we are not building.
+
+### 17.6 Polling cadence, politeness, and the latency you are buying
+
+Stated honestly, because it is a genuine limit and not a detail:
+
+> **A trend cannot be detected at a resolution finer than the poll interval.** At a 5-minute poll, a deal that goes from nothing to front-page in 90 seconds is seen 5 minutes later at the earliest. Every alert carries up to one poll interval of latency, and every rate we compute is an average over an interval we did not observe the inside of.
+
+This is inherent. The only way to reduce it is to poll more often, which costs OzBargain more requests. That is the entire trade and you should set the dial knowingly.
+
+**DECISION — 5 minutes.** The arithmetic: two feeds, every 5 minutes, is 576 requests per day. Nearly all return **304 with a zero-byte body**, because the feeds serve `etag` and `last-modified` and we send conditional requests. On a quiet night the whole application's daily footprint is a few hundred 304s.
+
+Set against real behaviour: front-page promotions happen about 10 times a day, so a 5-minute poll catches each within 5 minutes and is nowhere near being flooded. Vote velocity is computed since posting rather than per-poll, so it does not degrade at this interval.
+
+**What I explicitly did not do — and a correction.** U3 in `BRIEF.md` reasons that a polite rate can be inferred from the `Crawl-delay: 5` that `robots.txt` supposedly sets for GPTBot. **There is no `Crawl-delay` directive anywhere in `robots.txt`** (16.6). That inference is withdrawn. The 5-minute figure is instead justified by: no published crawl-delay exists, so we choose conservatively; conditional requests make the marginal cost near zero; it comfortably beats the ~10/day event rate we need to catch; and it is 5× slower than the prior-art project that polls every 60 seconds.
+
+**I would not go below 2 minutes**, and if you ever want faster, the right answer is not a shorter interval but `/live/feed` with lap detection.
+
+---
+
+## 18. The classifieds, and the decision I need you to make (R22, R24)
+
+This is the most consequential judgement in the project. I am putting it to you rather than designing around it silently, and I am going to argue against part of it, because you asked to be challenged and this is where the challenge earns its keep.
+
+### 18.1 What is verified
+
+- **There is no classifieds feed.** `/classified/feed` → 404, and every plural variant → 404. The RSS route that makes the rest of this project clean simply does not exist here.
+- **`/classified` returns OzBargain's own 403 page**, styled, with a PHP session cookie, reading *"You do not have permission to access this page."* This is the application denying permission, **not** a Cloudflare challenge. F13 confirmed byte for byte. Your reading of this — that it is an authorised-only section — is correct.
+- **`robots.txt` disallows `/user/login`.** It is named alongside `/privatemsg/` and `/search/`. This is the site telling automated clients not to drive its login form, and it predates this project.
+- **`/classified` itself is NOT disallowed by `robots.txt`.** Only the login endpoint is. **This distinction is the hinge of the whole section** and I will come back to it.
+- **The gate exists specifically to keep non-members out, because of scams.** Moderator *moocher*, 12/02/2019: *"we will not be bringing it back as it is a public page, and we no longer want to expose classifieds to non-members due to incidents of scams."* And the next day, diagnosing a user's 403: *"Were you accessing the section from a guest session (i.e. not logged in)?"*
+- **No prior art.** None of the 102 public OzBargain projects logs in, and none touches classifieds (16.5).
+- **No terms-of-use prohibition.** OzBargain's ToS has no anti-automation clause at all (16.4). So automating the login would breach `robots.txt` but would not breach any stated term. I want that stated accurately rather than dramatised in either direction.
+
+### 18.2 What is NOT verified, and it is the foundation of everything
+
+**U7 — nobody has demonstrated that having an account actually unlocks `/classified`.**
+
+The evidence leans your way: a moderator said classifieds are hidden from non-members and diagnosed a 403 by asking whether the user was logged out. But the official wiki rules I found are about **posting** — one year of membership, private messaging enabled, one post per 24 hours — and say nothing about **viewing**. It remains possible that viewing carries a requirement nobody has written down, in which case an account does not deliver R22 and all the work below is wasted.
+
+**Building anything before settling this would be building on an assumption.** See 18.6 — it costs about thirty seconds.
+
+### 18.3 My honest assessment of R24 as written
+
+You wrote: *"classified is a authorised only section, so we will likely need to create a user login for this. The bot will need to authenticate, then search that section."*
+
+The diagnosis is right. The proposed remedy is where I push back, on four grounds:
+
+1. **`robots.txt` names `/user/login` as disallowed.** That is the clearest, most specific signal this site gives about automated access, it is machine-readable, and it predates us. Everywhere else this design leans on `robots.txt` as the authority for what is permitted — sections 16.1, 17.1 and 17.5 all defer to it, and 17.5 gives up site search because of it. We do not get to treat it as binding where convenient and advisory where inconvenient.
+
+2. **The gate's stated purpose is to keep exactly this out.** Classifieds are hidden from non-members because of scams. An automated client harvesting that section is close to the thing the gate was built to prevent. This is different in kind from the deals side, where the owner *deliberately protected* automated access.
+
+3. **The account at risk is your personal one (U9).** Not a throwaway. If automated access is detected, plausible outcomes run from a Cloudflare challenge on the session through to suspension. Nobody has published a case of exactly this, so the probability is genuinely unknown — but the asset is a real account with real history, and 18.1 establishes that the section is tied to membership standing. Losing it costs more than the feature is worth.
+
+4. **There is no proven path and no prior art.** With 102 projects over a decade, nobody has published this. You would be doing original work, against a login form sitting behind Cloudflare, maintained by an owner who tunes rules against bots continuously — to reach a section whose gate is explicitly anti-automation.
+
+**None of that is a refusal.** It is your site account, your risk and your call. But you asked not to be told "yes sir, three bags full", and a design that quietly implemented an automated login against an explicit `robots.txt` disallow would be exactly that.
+
+### 18.4 Three options — D10
+
+**Option A — do not do classifieds. Ship the deals side.**
+R19, R20 and R21 all work today on explicitly-protected feeds with no account, no credential and no policy question. This is most of the value of the product. R22 gets recorded as "not available via a sanctioned route" and you lose classified coverage of your watchlist terms.
+*Cost:* you do not get the thing you asked for.
+*Risk:* none.
+
+**Option B (recommended) — you authenticate as a human; the app only reads.**
+
+This is the middle path and it turns on the distinction in 18.1: **`/user/login` is robots-disallowed; `/classified` is not.**
+
+You log in to OzBargain in your own browser, as a human, the way you already do. You copy the resulting session cookie out of your browser and paste it into the app's settings once. The application then requests `/classified` — a permitted path — with that cookie, at the same polite cadence as everything else. **The application never touches the login form, never holds your password, and never drives an endpoint `robots.txt` names.**
+
+Why I like this:
+- It respects the one clear instruction the site gives, precisely and not approximately.
+- There is no password anywhere in the system. This matters given section 7.6: Unraid template variables are plaintext XML on the flash drive and in every flash backup. A session cookie is bad to leak; a password is much worse.
+- There is prior art for the shape — `eckyecky`'s `OZBARGAIN_COOKIES` does exactly this.
+- It is honest about what it is. A human authenticated; a tool the human runs then reads a page that human is entitled to read.
+
+*Cost:* the session expires and you re-paste the cookie periodically. How often is unknown — OzBargain's `PHPSESSID` is sent with a **90-day** `Max-Age`, which is promising but is the cookie's lifetime, not necessarily the server's session lifetime. Could be weeks, could be less. The app must detect expiry and ask you, clearly, rather than failing silently.
+*Risk:* low but not zero. Automated requests still originate from your account. The mitigation is behavioural — a slow cadence, an honest User-Agent, one section, no crawling outward — and that is designed in 18.5.
+
+**Option C — the app performs the login itself, as you described.**
+*Cost:* materially more engineering (18.5), plus a stored password.
+*Risk:* the highest of the three, and it is the option that breaches `robots.txt`.
+*My position:* I do not recommend it. If you direct it, I will design and build it — it is your account and your call — and 18.5 covers what it actually takes, so the choice is informed rather than theoretical.
+
+**My recommendation: settle U7 first (18.6). If it confirms, take Option B. If you want Option C anyway, say so and I will build it — but I want your "yes" on the record, knowing the four objections in 18.3.**
+
+### 18.5 If we proceed — the authentication architecture
+
+Covering Option C properly, since that is what was asked for. Option B is a strict subset: everything below about session storage, expiry detection and failure surfacing applies to it too; only the login mechanics drop away.
+
+**Performing the login.** OzBargain runs on Drupal, and its forms carry a CSRF token — I verified this on the site-wide search form, which is a `POST` to `/search/node` with a hidden `edit[form_token]` field. The login form will follow the same pattern. So a login is not one request but a sequence: `GET` the login page to obtain the form token and initial session cookie, then `POST` credentials plus that token, then follow the redirect and capture the authenticated session cookie. Cloudflare sits in front of the login endpoint as it does everything else, so a challenge can appear at any step. If it does, an HTTP client cannot proceed and the only route is a real browser engine — which means a headless Chromium in the container, which roughly triples the image size and adds a large, fast-moving dependency. **Whether a challenge actually appears on this endpoint is unverified, because I deliberately did not probe it (16.1).** That unknown is the largest single source of variance in the cost of Option C.
+
+**Detecting session state — this part is pleasingly cheap.** While reading the `/live` page I noticed OzBargain embeds this in every page:
+
+```
+OzB_vars={"site_name":"OzBargain","ga_uacct":"G-VTWXKF7VP6","uid":0,...}
+```
+
+**`uid` is the logged-in user ID, and it is `0` when anonymous.** So session validity is a single unambiguous check on any ordinary page: `uid == 0` means we are logged out. No guessing from page titles, no heuristics.
+
+That gives three distinguishable states, which must never be conflated:
+
+- **Session valid** — `/classified` returns 200 and `uid != 0`. Proceed.
+- **Session expired** — `/classified` returns the 1,016-byte OzBargain 403 page, or a page shows `uid == 0`. *Response:* stop polling classifieds, raise a **visible** alert asking for a fresh cookie (Option B) or attempting one re-login (Option C). **Never retry in a loop** — repeated failed logins are exactly the pattern that gets an account flagged.
+- **Cloudflare block** — the 17-byte `error code: 1010`, or an HTML body containing `"Just a moment..."`, or a 503 challenge page. *Response:* back off hard, stop **all** OzBargain requests including the deals feeds, alert. This is the serious one, because it may indicate we have been noticed.
+
+**Where the credential lives.** Section 7.6 established that Unraid user-template variables are plaintext XML on the flash drive and in every flash backup, with `Mask="true"` hiding them in the GUI only. So:
+
+**DECISION — the OzBargain credential is never an Unraid template variable.** Instead: a file at `/mnt/user/appdata/ozbargain-hunter/secrets/ozb.json`, mode `0600`, on the array rather than the flash drive, bind-mounted read-only into the container. It holds the session cookie (Option B) or the credential (Option C). It is in `.gitignore` and it is never logged, never rendered in the UI, and redacted from any diagnostic output. Under Option B this file holds only a cookie, which is the main reason I prefer Option B.
+
+**Behaviour, if we read classifieds at all.** Poll `/classified` **at most once every 15 minutes** — classified ads do not move at deal speed and there is no reason to be quick. One page only; do not crawl outward into individual listings, user profiles or private messaging. Same honest User-Agent, same conditional requests, same backoff. If the deals-side acquisition is in a backoff state, classifieds polling stops too.
+
+### 18.6 Settle U7 first — the cheapest possible test
+
+Before any of this is scoped, and it costs nothing:
+
+1. **In your normal browser, logged in as you always are, visit `https://www.ozbargain.com.au/classified`.** If you see listings, U7 is confirmed and an account is sufficient. If you see "You do not have permission to access this page", then an account alone is **not** sufficient, R24 does not deliver R22, and the whole question is closed before a line is written.
+2. **Then open the same URL in a private window** where you are logged out. You should see the 403 I reproduced. That confirms the account is the variable rather than something else.
+
+Thirty seconds, no automation, no risk, and it either unblocks the work or saves all of it. **Please do this before answering D10.**
+
+If step 1 shows listings and you want Option B, the third step is to copy the `PHPSESSID` cookie value out of your browser's developer tools — and at that point we will also learn empirically how long a session survives, which is the main unknown in Option B's running cost.
+
+---
+
+## 19. State — what the application must remember
+
+New, and load-bearing. A delta cannot be computed without a previous value, so "what do we remember, and what happens when we forget" is a first-class design question rather than an implementation detail.
+
+### 19.1 What must be remembered between polls
+
+- **Per deal:** node ID (the natural key, stable and integer), title, URL, author, posted timestamp, categories, merchant URL, expiry, and the timestamp we first saw it.
+- **Per deal, per poll:** an observation of `votes-pos`, `votes-neg`, `comment-count`, `click-count` with the time we observed it. **This is the only reason trend detection is possible at all.** Without a history there is no delta.
+- **Front-page state:** whether the node has ever appeared in `/feed`, and **the time we first saw it there**. The feed's `pubDate` is the *original posting* time in both feeds — I checked all 20 overlapping items and they are identical — so OzBargain does not tell us when a deal was promoted. We only know it because we watched. If we forget, we can never recover it.
+- **Watchlist and keyword terms,** with their matching options and optional pinned slug.
+- **The alert ledger:** which (node, rule) pairs have already fired, and when. This is what stops the same deal alerting six polls running.
+- **Per feed:** the last `ETag` and `Last-Modified`, so conditional requests work.
+- **The last successful poll time,** which the dead-man's switch watches.
+
+### 19.2 Counter history is bounded, deliberately
+
+Storing every observation of every deal forever would grow without limit for no benefit. Deals stop being interesting once they are old — the trend rule only looks at deals under 6 hours old.
+
+**DECISION — keep counter observations for 7 days, then delete them. Keep the deal row itself indefinitely** (it is small, and it is what makes "have I already alerted on this?" work across a repost). A nightly tidy job does the deletion. At ~59 deals/day and a 5-minute poll, seven days of observations is on the order of a few hundred thousand small rows — nothing for SQLite.
+
+### 19.3 Restart, cold start, and missed polls
+
+**On restart with an existing database:** nothing special happens. State is on the bind mount and survives container recreation (section 6.5). The next poll computes deltas against the last stored observation; the gap is simply wider. The alert ledger prevents re-alerting on anything already notified. **This is the payoff for using cumulative counters instead of `/live/feed`** — a restart costs resolution, not data.
+
+**On a cold start with an empty database — this is the one that will bite if we get it wrong.** The feeds hand us 30 deals from the last 22 hours, several of which will satisfy the trend rule, and every watchlist term will match everything it was ever going to match.
+
+**DECISION (D15) — seed silently.** On the first poll against an empty database, write everything to the database, mark every (node, rule) pair that *would* have fired as already-alerted, and **send zero notifications**. Log a clear line saying that N deals were seeded and M alerts suppressed. Your first launch is quiet, and the first real alert you get is a real one.
+
+This also covers the disaster case: if the database is lost, the app re-seeds and goes quiet rather than firing 120 historical notifications at 3am.
+
+**On a missed poll** — container down, host rebooted, network out, or we were in backoff:
+- **Counters:** fine. Cumulative. The next poll computes a delta over a longer interval and we know exactly how long because observations are timestamped. Velocity stays correct.
+- **Front-page promotions:** mostly fine. Membership persists in `/feed` for many hours, so a gap of minutes or a few hours still catches the promotion — it just timestamps it late. A gap longer than the front-page feed's window (about 19 hours in my sample) can miss a promotion entirely.
+- **New deals:** safe for gaps under ~22 hours, which is the `/deals/feed` window. Longer than that and deals were posted and expired without us ever seeing them. **DECISION — if the gap since the last successful poll exceeds 12 hours, fetch `/deals/feed?page=1` as well** to reach back roughly two days, and log that we did. Remember that pagination is zero-indexed (16.6), so `?page=1` is genuinely the *second* page.
+- **`/live/feed` events:** would be lost permanently. Another reason it is not in v1.
+
+**DECISION — after any gap longer than 2 hours, suppress the trend rule for one poll cycle** and let it resume on the following poll. A single observation after a long gap produces a delta over an unrepresentative window; better to re-baseline than to fire a burst of stale alerts on the way back up. Watchlist and keyword matching still run, because "this deal matches your term" is true regardless of how long we were away.
+
+### 19.4 Storage
+
+**DECISION — SQLite, one file, on the existing bind mount at `/mnt/user/appdata/ozbargain-hunter/` → `/data` in the container.**
+
+Reasons: the workload is one writer, a few hundred small rows a day and simple queries — the weakest possible case for a database server. It needs no extra container, no second thing to back up, no network dependency, no credential. It is a single file, so backup is a file copy and restore is a file copy. It survives container recreation because it is on a mapped volume, which is precisely the requirement section 6.5 set. And `Accurate0/ozb` uses the same approach for the same job.
+
+**DECISION — enable WAL mode**, so the web UI reading does not block the poll loop writing.
+
+**DECISION — schema migrations from version 1.** Not ceremony: this schema will change as the trend rule is tuned, and the alternative is losing the counter history that makes trend detection work. `harinder83Aus/ozbargain-monitor` carries four migrations for exactly this reason.
+
+**The mount target is now decided**, closing the open item left in section 6.5: `/mnt/user/appdata/ozbargain-hunter/` → `/data`, matching the `ForcedEnglishSubs` precedent.
+
+---
+
+## 20. Alerting behaviour, politeness, and failing loudly
+
+### 20.1 De-duplication and suppression
+
+Two distinct problems, often conflated, with different fixes.
+
+**Problem 1 — one deal alerting on six consecutive polls.** A deal that is rising will satisfy the trend rule on every poll for hours.
+
+**DECISION — an alert ledger keyed on (node_id, rule_id), and a rule fires at most once per deal, ever.** Not a cooldown — a permanent record. The trend rule and the front-page rule are *different* rule IDs, so a deal can legitimately alert twice: once for rising fast, once when promoted. That is useful rather than noisy, and it is the natural narrative of a deal taking off. A watchlist term and a keyword term are also separate rule IDs, so a deal matching both tells you both — though see the grouping decision below.
+
+**Problem 2 — a watchlist term alerting on every repost.** OzBargain deals recur constantly: the same Steam freebie, the same Amazon price, reposted weekly. Matching on text means every repost is a new node ID, so the ledger above does not help — it is genuinely a different deal.
+
+**DECISION — a per-term cooldown, default 24 hours, plus a repost check.** After a term fires, it will not fire again for 24 hours regardless of how many matching deals appear. Additionally, if a new deal's normalised title is very close to one already alerted on for that term within the last 30 days, suppress it as a repost and note it in the UI rather than notifying. Prior art supports the shape — `TT-RB/OzBargain_Scraper` uses a 3600-second per-user cooldown for the same reason — and I have set it longer because a watchlist term is a standing interest rather than a live feed.
+
+**DECISION — cooldown is per term, configurable per term.** "ChatGPT" (R21) is a busy topic and may want 48 hours; "AMD R9700" (R20) is rare and you would want every single one, so it might be set to zero. A single global number cannot serve both, and getting this wrong in either direction is how people end up muting the whole tool.
+
+**DECISION — group alerts within a poll.** If one poll produces five alerts, send one notification listing five deals, not five notifications. This is the difference between a useful tool and one you silence.
+
+**DECISION — suppress alerts for deals already marked expired** in `ozb:meta/@expiry` or `ozb:title-msg`. Alerting you to a bargain you cannot take is worse than silence.
+
+### 20.2 Being a decent guest
+
+The behaviour I used while researching is the behaviour the application should have. Concretely:
+
+- **Conditional requests always.** 304 with zero bytes for unchanged feeds. This is the big one.
+- **One request at a time.** No parallel fetching, no connection pooling races, a few seconds between the two feed requests.
+- **5-minute interval** (17.6), never below 2 minutes.
+- **Respect `Retry-After`** on 429 and 503, and back off exponentially with jitter on anything else.
+- **Never retry a 403 quickly.** A 403 means stop and think, not try again harder.
+- **The seven robots-disallowed paths are a hard deny list in the HTTP client** (17.1), not a convention.
+- **Log every request's outcome**, so if OzBargain ever asks what we were doing, there is an answer.
+
+**DECISION (D14) — identify the application honestly:**
+
+```
+User-Agent: OzBargainHunter/<version> (personal deal alerter; +https://github.com/jamesgallagher/OzBargainHunter)
+```
+
+Every prior-art project I read spoofs something — Chrome 124, `curl/8.5.0`, an old Chrome build. I am recommending against that, for three reasons. It is identifiable, so if we ever do cause a problem the owner can see who it is and block *us* rather than a whole class of clients. It is a prerequisite for ever asking to be allowed. And impersonation is precisely the *"sneaky bad actors keep on changing tactics"* behaviour scotty complains about; being part of that is how the feed carve-out gets withdrawn from everyone.
+
+**The honest counter-argument, which is real:** an identifiable bot is easier to block deliberately than a hidden one. A spoofed Chrome UA is statistically safer in the short run. I still recommend honesty — partly on principle, partly because I verified that an honest UA returns 200 today (16.2), and mostly because the whole design depends on a carve-out the owner maintains voluntarily. Free-riding on it while disguised is the fastest way to lose it. **If you disagree, this is a one-line change and it is your call.**
+
+### 20.3 Classifying every response
+
+The poll does not ask "did it work" but "what happened", with these outcomes and these responses:
+
+- **200** — parse and process.
+- **304 Not Modified** — nothing new. Not an error. The common case.
+- **403 with a ~17-byte body / `error code: 1010` / `"Just a moment..."` / a challenge page** — **Cloudflare has blocked us.** Stop all OzBargain requests, enter long backoff, raise a loud alert. This is the serious case and must never be treated as transient.
+- **403 with ~1KB of styled OzBargain HTML containing "You do not have permission"** — an **application permission denial**. On `/classified` this means logged out or not entitled (18.5). On a deals feed it would be new and surprising and should alert.
+- **404** — the path has moved or been withdrawn. Alert; do not retry on a timer.
+- **429 / 503** — back off, honour `Retry-After`, retry with jitter.
+- **Timeout / connection error** — retry with exponential backoff, alert after 3 consecutive failures.
+- **200 but unparseable XML** — treat as a failure, keep the raw body for diagnosis, alert. This is what a Cloudflare interstitial served with a 200 looks like.
+
+The first two 403 cases being distinguishable by body is not a nicety — it is the difference between "back off, we may have been noticed" and "the user needs to log in again".
+
+### 20.4 Acquisition will break one day. Design for it.
+
+The site owner says he tunes Cloudflare rules against scrapers continuously, and my `error code: 1010` result proves those rules are live and specific. **Acquisition will break without warning at some point.** Not a risk to mitigate — a certainty to plan for.
+
+**The governing principle: a silent dead alerting tool is worse than a visibly broken one.** If this thing stops working and says nothing, you will carry on assuming no alerts means no bargains, and you will not find out until you notice a deal you should have been told about. The failure mode of an alerter is *silence*, which is indistinguishable from normal operation. That has to be engineered against explicitly.
+
+**DECISION (D16) — a dead-man's switch.** If no poll has succeeded for 30 minutes (six intervals), send a notification saying so, then repeat at a decaying rate — 30 minutes, 2 hours, 6 hours, daily — so it nags without becoming noise you learn to ignore.
+
+**DECISION — the container health check reflects acquisition health, not just process liveness.** A process that is running but has not fetched anything in an hour is **not** healthy, and Unraid should show that. Concretely: `/healthz` returns unhealthy if the last successful poll is older than three intervals. This is worth more than it looks — it makes "broken" visible in a place you already look, without reading logs.
+
+**DECISION — the web UI's front page leads with acquisition status:** when the last successful poll was, what the last response was, and whether we are in backoff. Not buried on a diagnostics page.
+
+**DECISION — a visible "last checked" timestamp on every page.** The cheapest possible defence against silent death: you glance at it and know.
+
+**DECISION — keep the last N failed response bodies** (truncated, in the database) so that when it breaks you can see *what* OzBargain actually said rather than guessing from a log line. When the block came, knowing whether it was 1010 or a challenge page decides the next move.
+
+**DECISION — degrade rather than die.** If `/feed` fails but `/deals/feed` succeeds, keep running the rules that only need new deals, and say clearly in the UI that front-page detection is unavailable. Partial function with honest reporting beats a crash loop.
+
+**The recovery path, when it does break.** In rough order: read the stored failure body to identify which of the 20.3 cases it is; if it is a client-signature block, the User-Agent is an environment variable and can be changed without a rebuild; if the feed path itself has moved, the feed URLs are environment variables too. **DECISION — every URL and the User-Agent are configuration, not constants**, so the first response to a break is a template edit and a restart rather than a code change, a rebuild and a deploy cycle. Given section 4.2's build-to-live latency, that distinction could be the difference between fixing it in two minutes and waiting a day.
+
+And if it breaks permanently — if the owner withdraws the feed carve-out or blocks us specifically — **the correct response is to stop, not to escalate.** No bypass tooling, no rotating User-Agents, no proxies. Section 16.5 shows that path is technically losing anyway; it is also the fastest way to make things worse for every RSS consumer on the site. If we get blocked while identifying ourselves honestly and polling every 5 minutes with conditional requests, then we were not wanted, and the answer is to ask or to stop.
+
+### 20.5 Where notifications go (U4, D13)
+
+You have not said. Options for a self-hosted Unraid container: **ntfy** (self-hosted, publish by one plain HTTP POST, topic-based, real iOS and Android push, priorities and click-through URLs); **Gotify** (simpler, weaker iOS story); **Apprise** (not a delivery service but a *router* that fans one notification out to 80+ backends); **Discord/Telegram webhooks** (trivial, great formatting, but put a third-party cloud service in the alert path of a self-hosted tool and rate-limit during bursts); **email** (universally reachable, but latency and deliverability make it poor for "this is rising right now").
+
+**DECISION — ntfy, behind a one-method internal interface.**
+
+Why ntfy: publishing is a single HTTP POST with no SDK, so there is no client library to maintain and a failure is a visible non-2xx. The alert path stays inside the house, matching the rest of this design. It has the fields this app actually wants — priority (trend alerts louder than keyword matches), a click URL straight to the deal, and tags per rule. And the pairing is proven: `eckyecky/ozbargain-ntfy-live-bridge` is an OzBargain-to-ntfy bridge.
+
+Why the interface: `send(title, body, url, priority, tags)` costs nothing now and means adopting Apprise later, or adding Discord, is a new implementation of one method rather than surgery on the alerting logic. Given U4 is your call and you may change your mind, that cheapness is the point.
+
+**One thing to verify.** The note passed to me says an ntfy instance is already running on this host for Uptime Kuma alerts. **That was not verified by me and is not in the verified-facts record in `BRIEF.md`.** If true, this is a near-zero-cost decision and the dead-man's switch can reuse the same infrastructure. If not, ntfy is another container to run. Worth thirty seconds to confirm before you commit to D13 — and I am flagging it precisely because it is the kind of convenient assumption that would otherwise get quietly baked in.
+
+**DECISION — alert content, because this determines whether the tool is usable:** the deal title; the current net votes and vote rate; which rule fired and which term matched; and a click-through URL going **directly to the OzBargain node page**, not the `/goto/` redirect (that path is robots-disallowed and it is their affiliate tracker — we link to the discussion, you decide what to click). Front-page promotion alerts should say how long the deal took to get promoted, because that number is the actual signal and we are the only ones who know it.
