@@ -15,6 +15,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D7 — Beta tag semantics.** `beta` branch owns `:beta`; `main` keeps `:latest`/`:main-<sha>`. Two distinct images, never the same image carrying both tags. **SPECIFIED**
 - **D8 — Build-to-live latency.** How long between a green build and a running container. **OPEN (O9)**
 - **D12 — Poll cadence.** Feeds every 5–10 minutes, never below 5. Classifieds every 60 minutes (interpretation pending). **DECIDED**, sub-item **OPEN (O13)**
+- **D41 — Deal pagination cap.** Pages 0 and 1 only, then stop. No page beyond 1 is ever requested, including to recover a gap. Effective observation window: about 30 hours. **DECIDED**
 - **D6 — Beta container alongside production.** **OPEN (O5)**
 - **D16 — Registry retention policy** for per-commit tags. **OPEN (O16)**
 
@@ -28,7 +29,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Data acquisition
 
-- **D14 — Client identity.** Honest self-identifying User-Agent, with no TLS-fingerprint impersonation. **CONTESTED** — conflicts with the owner's stated tooling preference. **OPEN (O6)**
+- **D14 — Client identity.** Honest, explicit self-identification. The tool represents the user and does not disguise itself: no browser impersonation, no TLS-fingerprint impersonation, no identity rotation, no proxies, no bypass tooling. On being blocked while identified honestly, it stops and surfaces the block rather than escalating. **DECIDED**
 - **D13 / D10 — Classifieds authentication.** The container performs the login itself, using a dedicated account created for the tool. **DECIDED**
 - **D10b — OzBargain credential storage.** Environment variables in the container's `.env`, accepting the Unraid-template storage risk. **DECIDED**
 
@@ -77,5 +78,5 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 **DECIDED:** D1, D2, D4, D10, D10b, D12, D13, D22, D29
 **SPECIFIED:** D3, D7, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34
-**OPEN:** D5, D6, D8, D9, D11(replaced), D14, D15(old), D17, D18, D19, D24, D30(partial), D31, D35, D36–D40
+**OPEN:** D5, D6, D8, D9, D11(replaced), D15(old), D17, D18, D19, D24, D30(partial), D31, D35, D36–D40
 **DEFERRED:** D28

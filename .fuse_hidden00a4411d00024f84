@@ -94,9 +94,7 @@ The feed does technically paginate to about 4 days across 11 pages. **That depth
 
 - **Deal feeds: every 5 to 10 minutes. Never less than 5 minutes.** Default 5.
 - **Classifieds: every 60 minutes.** *(Interpretation of an ambiguous answer — see Open Item O13.)*
-- **Each deal-poll cycle fetches exactly three URLs, in order, then stops:** deals page 0, deals page 1, front page. **No page beyond 1 is ever requested.**
-- Requests are issued **sequentially, never in parallel**, with a pause of a few seconds between each.
-- At the default 5-minute interval this is **864 requests per day**, the large majority of which are conditional `304` responses with zero-byte bodies.
+- Requests are issued **sequentially, never in parallel**, with a pause of a few seconds between the two feed requests.
 - The poll interval is configurable from the web UI.
 
 ### 3.3 Request discipline
@@ -194,7 +192,7 @@ Fields: URL, last `ETag`, last `Last-Modified`.
 
 ### 4.2 Retention
 
-- **Counter observations: 7 days**, then deleted by a nightly job. Under the two-page cap (3.1) a deal is only observed for about 30 hours, so 7 days is a ceiling that is not reached in practice.
+- **Counter observations: 7 days**, then deleted by a nightly job.
 - **Deal rows: retained indefinitely.** They are small, and they are what makes "have I already alerted on this?" work across a repost.
 - **Ledger rows: retained indefinitely.**
 
@@ -222,9 +220,7 @@ If a term is pinned to a confirmed `/product/`, `/brand/` or `/tag/` slug, match
 
 **Threshold rule.** "Has reached X upvotes within Y hours or days since posting." Multiple instances are configured independently.
 
-Examples: 10 upvotes in 6 hours; 50 upvotes in 12 hours.
-
-**The window cannot exceed the observation window of roughly 24 hours**, because a deal leaves the two-page index after about that long (3.1). See Open Item O12.
+Examples: 10 upvotes in 6 hours; 100 upvotes in 7 days.
 
 - **Threshold rules apply to deals only.** Classified listings carry no vote, comment or click counts, so a threshold rule can never fire on them.
 - **Each threshold is its own rule with its own ID.** A 10-vote rule and a 50-vote rule are two rules, not one rule with a parameter. A deal clearing both produces two alerts, which is the intended behaviour and is what makes "mute the noisy one" possible.
@@ -248,7 +244,7 @@ Editing a rule's definition retains its ID and its ledger history. Resetting a r
 
 - **On a gap longer than 2 hours, threshold rules are suppressed for one poll cycle** and resume on the next. A single observation after a long gap produces a delta over an unrepresentative window.
 - **Match rules are unaffected by gaps**, because "this deal matches your term" is true regardless of how long the poller was away.
-- **On a gap longer than 12 hours, deals posted during the outage that have already scrolled past page 1 are lost.** This is accepted. The two-page cap is a hard rule and is not extended to recover a gap.
+- **On a gap longer than 12 hours, the second feed page is fetched as well**, reaching back approximately two days. Note that feed pagination is zero-indexed: `?page=1` is the second page.
 - **On a cold start with an empty database, the system seeds silently.** Everything currently in the feeds is written to the database and every rule that would have fired is marked as already-alerted. **Zero notifications are sent.** A log line records the counts.
 
 ### 5.5 Deferred
@@ -525,7 +521,7 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 **Owner: design/implementation — to be resolved by research or probe**
 
 - **O11. WhatsApp feasibility**, including whether routing through the existing Matrix homeserver removes the need for a direct integration.
-- **O12. Threshold window ceiling.** The two-page cap (3.1) gives an observation window of about 30 hours, so **no threshold window can exceed roughly 24 hours**. The owner's original example of "100 upvotes in 7 days" is not supportable. Options: cap windows at ~24 hours; or drop the window entirely on high thresholds and evaluate "reached X votes while visible", which is unaffected by the reach limit. **Needs a decision.**
+- **O12. Threshold window ceiling.** **Measured: the deals feed reaches back about 4 days** (11 pages, ~330 deals; pages 11+ are empty). A window beyond that cannot be evaluated, so the owner's example of "100 upvotes in 7 days" is not supportable as written. Options: cap windows at 4 days; or drop the window entirely and evaluate "reached X votes at any point while visible", which is unaffected by the reach limit. **Needs a decision.**
 - **O13. Cadence interpretation.** Whether the two stated intervals (60 minutes, 5–10 minutes) mean classifieds and feeds respectively.
 - **O14. Icon caching** by Unraid, which may delay a changed logo appearing.
 - **O15. Logo hosting**, since a private repository rules out `raw.githubusercontent.com`. Options: one unauthenticated icon route, or hosting the asset elsewhere.
