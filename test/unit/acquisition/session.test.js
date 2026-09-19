@@ -51,3 +51,18 @@ test('valid: a non-zero uid is valid regardless of a stale 304', () => {
   const { state } = classifySession({ class: 'not_modified', uid: 226301 });
   assert.equal(state, 'valid');
 });
+
+// --- Review round-3 follow-up (t_f80dae1b): a non-finite uid is not valid ---
+
+test('a NaN uid on a 304 resolves to expired, not valid (a corrupt last-uid must not read a dead session as valid)', () => {
+  // `uid === 0` is false for NaN, so without the guard a corrupt
+  // `classifieds_last_uid` setting read a dead session as `valid` on a later
+  // 304. The guard treats a non-finite uid as unknown/expired.
+  const { state } = classifySession({ class: 'not_modified', uid: Number.parseInt('', 10) });
+  assert.equal(state, 'expired');
+});
+
+test('a NaN uid on a 200 resolves to expired, not valid', () => {
+  const { state } = classifySession({ class: 'ok', uid: Number.NaN });
+  assert.equal(state, 'expired');
+});

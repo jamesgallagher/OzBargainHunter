@@ -125,3 +125,24 @@ test('Minor 2: a 304 on a cold store (no last uid known) resolves to unchanged, 
   assert.equal(result.alert, false);
   assert.equal(result.latched, false);
 });
+
+// --- Review round-3 follow-up (t_f80dae1b): a corrupt last-uid setting ---
+
+test('a corrupt (non-numeric) classifieds_last_uid setting on a 304 resolves to unchanged, not valid', async () => {
+  // A corrupt setting (e.g. a stray non-numeric string) would otherwise parse
+  // to NaN and, without the guard, read a dead session as `valid` on a later
+  // 304. The read treats a non-numeric setting as "no last uid known", so the
+  // 304 resolves to `unchanged` (the caller keeps its previous state).
+  const transport = createFixtureTransport({ [URL]: { status: 304, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_last_uid', 'corrupt-not-a-number');
+  const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+  try {
+    assert.equal(result.state, 'unchanged');
+    assert.equal(result.uid, 0);
+    assert.equal(result.alert, false);
+    assert.equal(result.latched, false);
+  } finally {
+    close();
+  }
+});

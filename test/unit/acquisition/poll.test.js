@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDealPoll } from '../../../lib/acquire/poll.js';
@@ -577,6 +577,64 @@ test('Minor 3: a DeniedPathError fails loudly (rethrows) rather than being recor
   try {
     await assert.rejects(runDealPoll({ client: denyClient, store, clock, log: () => {} }), /Denied path/);
     // No transient failure row was recorded for the deny-listed path.
+    assert.equal(store.getFailures().length, 0);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Review round-3 follow-up (t_f80dae1b): the deny-list seam in runDealPoll ---
+
+test('a DeniedPathError on the front URL (after page 0/1 returned 200) rejects, but the 60 deals and 60 observations are flushed (finally contract)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-deny-flush-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // A client that serves the two deals pages (200, from the r0/r1 fixtures —
+  // together 60 nodes) and throws DeniedPathError on the front URL. This is
+  // the exact seam the round-3 reviewer reproduced: 60 deals committed with
+  // 0 observations and poll_state untouched. The finally contract must flush
+  // the 60 observations and write poll_state before the error propagates.
+  const r0 = readFileSync('fixtures/http/r0.xml', 'utf8');
+  const r1 = readFileSync('fixtures/http/r1.xml', 'utf8');
+  const denyFrontClient = {
+    blocked: false,
+    async request(url) {
+      if (url === 'https://www.ozbargain.com.au/feed') {
+        const err = new Error(`Denied path: ${url}`);
+        err.name = 'DeniedPathError';
+        throw err;
+      }
+      if (url.endsWith('page=0')) return { class: 'ok', status: 200, body: r0 };
+      if (url.endsWith('page=1')) return { class: 'ok', status: 200, body: r1 };
+      throw new Error(`unexpected url ${url}`);
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: denyFrontClient, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    // The cycle rejects (the DeniedPathError propagates — fail loudly).
+    assert.ok(threw, 'runDealPoll should reject on a DeniedPathError');
+    assert.equal(threw.name, 'DeniedPathError');
+    // The 60 deals from page 0/1 were committed (upserted before the throw).
+    assert.equal(store.countDeals(), 60);
+    // The 60 observations are flushed (the finally contract). The round-3 bug
+    // left 0 observations behind; this assertion is what fails on the current
+    // bytes.
+    assert.equal(store.countAllObservations(), 60);
+    // poll_state is written (the finally contract): last_response_class is the
+    // last class seen before the throw (ok, from page 1), and the counter is
+    // 0 (the two deals pages 200'd; the DeniedPathError is not a failures row).
+    const state = store.getPollState();
+    assert.ok(state, 'poll_state must be written by the finally');
+    assert.equal(state.last_response_class, 'ok');
+    assert.equal(state.consecutive_failures, 0);
+    // The DeniedPathError is a configuration error, not a failures row: no
+    // failures row is recorded for it.
     assert.equal(store.getFailures().length, 0);
   } finally {
     store.close();
