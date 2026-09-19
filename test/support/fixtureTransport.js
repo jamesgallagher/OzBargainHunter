@@ -23,12 +23,18 @@ export function createFixtureTransport(routes) {
     requestLog,
     async fetch(url, options = {}) {
       calls += 1;
-      requestLog.push({ url, options });
+      // Record the URL, the options, and (after the route is resolved) the
+      // status the route serves. Recording the status is what makes a
+      // mid-cycle 304 observable: `poll_state` holds a single class (the
+      // last one), so the only place a per-URL 304 can be asserted is here.
+      const entry = { url, options };
+      requestLog.push(entry);
 
       const route = routes[url];
       if (!route) {
         throw new Error(`FixtureTransport: no route for URL "${url}"`);
       }
+      entry.status = route.status;
 
       let body = '';
       if (route.body !== undefined) {
