@@ -103,6 +103,76 @@ test('pruneObservations deletes an observation 8 days old and leaves one 6 days 
   });
 });
 
+test('writeSnapshot can run twice (the periodic snapshot design 4.3 specifies)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-store-'));
+  const dbPath = join(dir, 'test.db');
+  const snapshotPath = join(dir, 'snapshot.db');
+  const clock = fixedClock('2026-09-19T06:20:00Z');
+
+  const store = openStore({ path: dbPath, clock });
+  const db = store.getDb();
+
+  db.prepare(
+    `INSERT INTO deals (node_id, title, url, author, posted_at, categories, first_seen)
+     VALUES (1, 'test deal', 'https://example.com/node/1', 'author', '2026-09-19T06:20:00Z', '[]', '2026-09-19T06:20:00Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO ledger (node_id, rule_id, fired_at) VALUES (1, 1, '2026-09-19T06:20:00Z')`,
+  ).run();
+
+  const dealsBefore = db.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+  const ledgerBefore = db.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+
+  // First snapshot.
+  store.writeSnapshot(snapshotPath);
+  // Second snapshot to the same fixed path — must not throw.
+  store.writeSnapshot(snapshotPath);
+
+  const snapDb = new DatabaseSync(snapshotPath);
+  const dealsAfter = snapDb.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+  const ledgerAfter = snapDb.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+  snapDb.close();
+
+  assert.equal(dealsAfter, dealsBefore);
+  assert.equal(ledgerAfter, ledgerBefore);
+  assert.equal(store.journalMode, 'wal');
+
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('pruneObservations leaves ledger rows intact (deals and ledger are never pruned)', () => {
+  withStore((store) => {
+    const db = store.getDb();
+    db.prepare(
+      `INSERT INTO deals (node_id, title, url, author, posted_at, categories, first_seen)
+       VALUES (1, 'test deal', 'https://example.com/node/1', 'author', '2026-09-19T06:20:00Z', '[]', '2026-09-19T06:20:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO ledger (node_id, rule_id, fired_at) VALUES (1, 1, '2026-09-19T06:20:00Z')`,
+    ).run();
+    store.insertObservation({
+      deal_id: 1,
+      votes_pos: 10,
+      votes_neg: 0,
+      comment_count: 5,
+      click_count: 100,
+      observed_at: '2026-09-11T06:20:00Z', // 8 days old -> pruned
+    });
+
+    const now = '2026-09-19T06:20:00Z';
+    store.pruneObservations(new Date(now));
+
+    // The old observation is gone, but the ledger row survives.
+    const obsRows = db.prepare('SELECT COUNT(*) AS n FROM observations').get().n;
+    const ledgerRows = db.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+    const dealRows = db.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+    assert.equal(obsRows, 0);
+    assert.equal(ledgerRows, 1);
+    assert.equal(dealRows, 1);
+  });
+});
+
 test('writeSnapshot produces a valid database with identical row counts and source stays in WAL mode', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ozb-store-'));
   const dbPath = join(dir, 'test.db');
