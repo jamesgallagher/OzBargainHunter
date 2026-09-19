@@ -475,3 +475,51 @@ test('the backoff delay includes the injected jitter (delay - base === random.ne
     cleanup();
   }
 });
+
+test('a 200 with NO headers key resolves to class "ok" and does not throw (transport-without-headers seam)', async () => {
+  // The shipped transport always builds `headers` (lib/http/transport.js), so
+  // this is the injected-seam shape: a transport that returns a 200 with no
+  // `headers` key at all. The client reads `response.headers?.['etag']` — the
+  // optional chaining must let a missing `headers` object resolve to class
+  // "ok" rather than throw "Cannot read properties of undefined (reading
+  // 'etag')". Pins the headers-less path (mutant M5: reverting the optional
+  // chaining to `response.headers['etag']` makes this throw).
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-client-'));
+  const dbPath = join(dir, 'test.db');
+  const store = openStore({ path: dbPath, clock: fixedClock(START) });
+  const clock = fixedClock(START);
+  const transport = {
+    get calls() {
+      return 1;
+    },
+    async fetch() {
+      // No `headers` key at all — the injected-seam shape.
+      return { status: 200, body: '<rss></rss>', bytes: 9 };
+    },
+  };
+  const client = createOzbClient({
+    transport,
+    store,
+    clock,
+    random: { next: () => 0.5 },
+    config: {},
+    log: () => {},
+  });
+
+  try {
+    let caught = null;
+    let result = null;
+    try {
+      result = await client.request(url);
+    } catch (err) {
+      caught = err;
+    }
+    assert.equal(caught, null, `must not throw on a headers-less 200, got: ${caught?.message ?? caught}`);
+    assert.equal(result.class, 'ok', `a headers-less 200 must resolve to class "ok", got ${result.class}`);
+    assert.equal(result.status, 200);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

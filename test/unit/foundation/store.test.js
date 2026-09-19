@@ -190,6 +190,64 @@ test('writeSnapshot succeeds twice with a stale temp file present (unique suffix
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('writeSnapshot succeeds twice with a stale temp file at the deterministic unique path present (pre-VACUUM INTO unlink pin)', () => {
+  // Superset of the base-path pin: in addition to the round-2 defect's base
+  // temp path, a stale file at the deterministic UNIQUE temp path (the first
+  // snapshot's exact path under the fixed clock: pid + counter 1 + the frozen
+  // clock instant). The shipped implementation pre-unlinks that exact path
+  // before VACUUM INTO, so a stale file there must not break the snapshot.
+  // Without the pre-unlink (mutant M7: pre-unlink deleted, unique suffix
+  // kept), VACUUM INTO hits the stale file and throws "file is not a
+  // database".
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-store-'));
+  const dbPath = join(dir, 'test.db');
+  const snapshotPath = join(dir, 'snapshot.db');
+  const clock = fixedClock('2026-09-19T06:20:00Z');
+
+  const store = openStore({ path: dbPath, clock });
+  const db = store.getDb();
+
+  db.prepare(
+    `INSERT INTO deals (node_id, title, url, author, posted_at, categories, first_seen)
+     VALUES (1, 'test deal', 'https://example.com/node/1', 'author', '2026-09-19T06:20:00Z', '[]', '2026-09-19T06:20:00Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO ledger (node_id, rule_id, fired_at) VALUES (1, 1, '2026-09-19T06:20:00Z')`,
+  ).run();
+
+  const dealsBefore = db.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+  const ledgerBefore = db.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+
+  // A stale temp file at the base temp path (the round-2 defect's exact path).
+  const staleTemp = `${snapshotPath}.tmp-${process.pid}`;
+  writeFileSync(staleTemp, 'stale temp file that is not a database');
+
+  // A stale temp file at the deterministic unique temp path — the first
+  // snapshot's exact temp path under the fixed clock (pid + counter 1 + the
+  // frozen clock instant). This is a path the shipped implementation actually
+  // generates, so the pre-VACUUM INTO unlink runs against an existing file.
+  const uniqueTemp = `${snapshotPath}.tmp-${process.pid}-1-${new Date('2026-09-19T06:20:00Z').getTime()}`;
+  writeFileSync(uniqueTemp, 'stale unique temp file that is not a database');
+
+  // Both snapshots must succeed despite both stale temps.
+  store.writeSnapshot(snapshotPath);
+  store.writeSnapshot(snapshotPath);
+
+  // The snapshot opens as a valid DB with identical row counts.
+  const snapDb = new DatabaseSync(snapshotPath);
+  const dealsAfter = snapDb.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+  const ledgerAfter = snapDb.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+  snapDb.close();
+
+  assert.equal(dealsAfter, dealsBefore);
+  assert.equal(ledgerAfter, ledgerBefore);
+  // The source is still WAL.
+  assert.equal(store.journalMode, 'wal');
+
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('pruneObservations leaves ledger rows intact (deals and ledger are never pruned)', () => {
   withStore((store) => {
     const db = store.getDb();

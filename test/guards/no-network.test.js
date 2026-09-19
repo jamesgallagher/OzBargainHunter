@@ -197,14 +197,17 @@ test('a self-contradictory options object is blocked in BOTH directions (fail-cl
   );
 });
 
-test('a direct Socket.prototype.connect(port, host) for a non-loopback host is blocked (port-form candidate)', async () => {
+test('a direct Socket.prototype.connect(port, host) for a non-loopback host is blocked (port-form candidate)', async (t) => {
   // node normalises the net.connect(port, host) / createConnection forms into
   // an options object, so only the DIRECT Socket.prototype.connect(port, host)
   // shape relies on the guard's port-form branch (the host is the second
   // positional argument, args[1]). Without that branch, this call dials
   // (ECONNREFUSED) instead of blocking. A real ephemeral port is used so the
   // loopback control actually connects; the non-loopback address is read from
-  // os.networkInterfaces() (not hard-coded).
+  // os.networkInterfaces() (not hard-coded). Skipped if the host has no
+  // non-loopback IPv4 (a loopback-only sandbox has no non-loopback address to
+  // dial, so the test cannot run — the same environment-dependency the IPv6
+  // test handles nine lines above).
   const interfaces = os.networkInterfaces();
   let nonLoopback = null;
   for (const name of Object.keys(interfaces)) {
@@ -216,7 +219,10 @@ test('a direct Socket.prototype.connect(port, host) for a non-loopback host is b
     }
     if (nonLoopback) break;
   }
-  assert.ok(nonLoopback, 'this host must have a non-loopback IPv4 address for the port-form test');
+  if (!nonLoopback) {
+    t.skip('no non-loopback IPv4');
+    return;
+  }
 
   const server = net.createServer((s) => s.end());
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
