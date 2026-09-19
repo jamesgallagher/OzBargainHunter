@@ -79,7 +79,7 @@ Both paths terminate at the same application, which applies the same authenticat
 
 **Deal pagination is capped at two pages. This is a hard rule.** Each poll reads `?page=0`, then `?page=1`, and **stops**. No page beyond 1 is ever requested. Older deals are decaying and are explicitly out of scope.
 
-**Measured consequence: pages 0 and 1 together span about 30 hours** of posting. **A threshold window longer than roughly 24 hours therefore cannot be evaluated**, because a deal leaves the index after about a day. Pagination is zero-indexed: `?page=1` is the *second* page.
+**Measured consequence: pages 0 and 1 together span about 30 hours** of posting. **A threshold window longer than roughly 24 hours therefore cannot be evaluated**, because a deal leaves the index after about a day. Pagination is zero-indexed: `?page=0` is the first page and `?page=1` the second. **There is no third page.**
 
 The feed does technically paginate to about 4 days across 11 pages. **That depth is deliberately not used.**
 
