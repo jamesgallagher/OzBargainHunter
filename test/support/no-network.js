@@ -1,19 +1,24 @@
 /**
  * The network guard. Loaded via `node --test --import ./test/support/no-network.js`.
  * Replaces globalThis.fetch, http.request, https.request,
- * net.Socket.prototype.connect and dns.lookup with wrappers that throw
- * NetworkBlockedError for any host other than 127.0.0.1, localhost or ::1.
- * Loopback stays open because card 5's integration tests run a real
- * server there.
+ * net.Socket.prototype.connect, tls.TLSSocket.prototype.connect and dns.lookup
+ * with wrappers that throw NetworkBlockedError for any host other than
+ * 127.0.0.1, localhost or ::1. Loopback stays open because card 5's
+ * integration tests run a real server there.
  *
  * The predicate is "is this host loopback", not "is this host OzBargain":
  * every non-loopback egress — including hosts the test suite never names —
- * is blocked.
+ * is blocked. Where a call shape can carry more than one host (e.g. an options
+ * object with both `hostname` and `host`), the guard blocks if ANY present
+ * candidate is non-loopback. node's net/tls dial `host` when both are present,
+ * so trusting `hostname` first would fail open; blocking on any non-loopback
+ * candidate keeps it fail-closed (a self-contradictory object is blocked).
  */
 
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import tls from 'node:tls';
 import dns from 'node:dns';
 
 const ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -44,9 +49,24 @@ function hostFromUrl(url) {
   }
 }
 
+// Single-host check (fetch, dns.lookup): block unless the host is loopback.
 function assertLoopback(host, label) {
   if (host === null || !ALLOWED_HOSTS.has(host)) {
     throw new NetworkBlockedError(host ?? label);
+  }
+}
+
+// Multi-candidate check (options objects, positional host args): block if ANY
+// present candidate normalises to a non-loopback host. A self-contradictory
+// object (e.g. { hostname: '127.0.0.1', host: '<non-loopback>' }) is blocked,
+// because node's net/tls dial `host` when both are present — so trusting
+// `hostname` first would fail open.
+function assertLoopbackAny(candidates, label) {
+  for (const candidate of candidates) {
+    const h = normalizeHost(candidate);
+    if (h !== null && !ALLOWED_HOSTS.has(h)) {
+      throw new NetworkBlockedError(h);
+    }
   }
 }
 
@@ -62,20 +82,29 @@ globalThis.fetch = async (input, init) => {
 };
 
 // --- http.request / https.request ---
+function collectRequestCandidates(input, options) {
+  const candidates = [];
+  if (typeof input === 'string') {
+    candidates.push(hostFromUrl(input));
+  } else if (input instanceof URL) {
+    candidates.push(normalizeHost(input.hostname));
+  } else if (input && typeof input === 'object') {
+    // http.request(options, callback): the first argument is the options object.
+    // Block if ANY of hostname / host is non-loopback (fail-closed).
+    if (input.hostname !== undefined) candidates.push(input.hostname);
+    if (input.host !== undefined) candidates.push(input.host);
+  }
+  if (options && typeof options === 'object') {
+    // http.request(url, options, callback): the options object may also carry a host.
+    if (options.hostname !== undefined) candidates.push(options.hostname);
+    if (options.host !== undefined) candidates.push(options.host);
+  }
+  return candidates;
+}
+
 function wrapRequest(original) {
   return function wrappedRequest(input, options, callback) {
-    let host;
-    if (typeof input === 'string') {
-      host = hostFromUrl(input);
-    } else if (input instanceof URL) {
-      host = normalizeHost(input.hostname);
-    } else if (input && typeof input === 'object') {
-      // http.request(options, callback): the first argument is the options object.
-      host = normalizeHost(input.hostname ?? input.host);
-    } else if (options && typeof options === 'object') {
-      host = normalizeHost(options.hostname ?? options.host);
-    }
-    assertLoopback(host, 'http.request');
+    assertLoopbackAny(collectRequestCandidates(input, options), 'http.request');
     return original(input, options, callback);
   };
 }
@@ -83,21 +112,43 @@ function wrapRequest(original) {
 http.request = wrapRequest(http.request);
 https.request = wrapRequest(https.request);
 
-// --- net.Socket.prototype.connect ---
-const originalConnect = net.Socket.prototype.connect;
-net.Socket.prototype.connect = function connect(...args) {
+// --- net.Socket.prototype.connect (also net.connect / net.createConnection) ---
+function collectSocketCandidates(args) {
+  const candidates = [];
   // node passes a normalised array as args[0] for some call shapes, e.g.
   // [{ host, port }, null]; unwrap it.
   const first = Array.isArray(args[0]) ? args[0][0] : args[0];
-  let host;
   if (typeof first === 'string') {
-    host = normalizeHost(first);
+    // connect('host', port) or a unix socket path (not egress).
+    candidates.push(first);
   } else if (first && typeof first === 'object') {
-    host = normalizeHost(first.hostname ?? first.host);
+    // connect(options): block if ANY of hostname / host is non-loopback.
+    if (first.hostname !== undefined) candidates.push(first.hostname);
+    if (first.host !== undefined) candidates.push(first.host);
   }
-  assertLoopback(host, 'net.Socket.connect');
+  // Port-form: connect(port, host) — the host is the second positional arg.
+  if (args[1] !== undefined && typeof args[1] === 'string') {
+    candidates.push(args[1]);
+  }
+  return candidates;
+}
+
+const originalConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function connect(...args) {
+  assertLoopbackAny(collectSocketCandidates(args), 'net.Socket.connect');
   return originalConnect.apply(this, args);
 };
+
+// --- tls.TLSSocket.prototype.connect (tls.connect) ---
+// TLS sockets do not inherit net.Socket.prototype.connect, so tls.connect is a
+// separate egress path; wrap it with the same fail-closed candidate check.
+if (typeof tls.TLSSocket.prototype.connect === 'function') {
+  const originalTlsConnect = tls.TLSSocket.prototype.connect;
+  tls.TLSSocket.prototype.connect = function connect(...args) {
+    assertLoopbackAny(collectSocketCandidates(args), 'tls.TLSSocket.connect');
+    return originalTlsConnect.apply(this, args);
+  };
+}
 
 // --- dns.lookup ---
 const originalLookup = dns.lookup;

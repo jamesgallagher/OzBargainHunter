@@ -204,3 +204,106 @@ test('the inter-request pause is taken from the clock (3s between requests)', as
     cleanup();
   }
 });
+
+test('a transport rejection (timeout/connection error) backs off with jitter, is logged, and rethrows', async () => {
+  // A failure below the HTTP layer is not a classifyResponse input, so the
+  // post-response wait block never runs for it; the client must back off
+  // here (design 3.3: "all other failures back off exponentially with
+  // jitter"). A rejecting transport is the production shape of a timeout or
+  // connection error.
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-client-'));
+  const dbPath = join(dir, 'test.db');
+  const store = openStore({ path: dbPath, clock: fixedClock(START) });
+  const clock = fixedClock(START);
+  let randomCalls = 0;
+  const randomSource = seededRandom(1);
+  const random = {
+    next() {
+      randomCalls += 1;
+      return randomSource.next();
+    },
+  };
+  const logs = [];
+  let transportCalls = 0;
+  const transport = {
+    get calls() {
+      return transportCalls;
+    },
+    async fetch() {
+      transportCalls += 1;
+      throw new Error('socket hang up (timeout)');
+    },
+  };
+  const client = createOzbClient({ transport, store, clock, random, config: {}, log: (l) => logs.push(l) });
+
+  try {
+    const startMs = clock.now().getTime();
+    await assert.rejects(
+      () => client.request(url),
+      (err) => {
+        assert.ok(/socket hang up/.test(err.message), `expected the transport error, got ${err.message}`);
+        return true;
+      },
+    );
+    // Non-empty backoff sequence (the old [] is gone).
+    assert.ok(client.backoffDelays.length >= 1, 'expected a non-empty backoff sequence');
+    // One random.next() per failure.
+    assert.equal(randomCalls, 1, 'random.next() must be called once per transport failure');
+    // The clock advanced by the backoff delay (non-zero), not 0 ms.
+    const advancedMs = clock.now().getTime() - startMs;
+    const expected = Math.round(client.backoffDelays[0] * 1000);
+    assert.equal(advancedMs, expected, `clock must advance by the backoff delay: got ${advancedMs}, expected ${expected}`);
+    assert.ok(advancedMs > 0, 'clock must advance by a non-zero amount');
+    // The failure was logged (card: "every request's URL, response class and
+    // timestamp is logged").
+    assert.ok(logs.some((l) => l.includes('transport_error')), 'the transport failure must be logged');
+    assert.equal(transport.calls, 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a negative Retry-After does not rewind the clock (clamped to >= 0)', async () => {
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const { client, clock, cleanup } = makeClient({
+    [url]: { status: 429, headers: { 'retry-after': '-5' }, body: '' },
+  });
+
+  try {
+    const startMs = clock.now().getTime();
+    const result = await client.request(url);
+    assert.equal(result.class, 'rate_limited');
+    // The clock must not move backwards, and a negative Retry-After clamps
+    // the wait to 0 (no advance).
+    const movedMs = clock.now().getTime() - startMs;
+    assert.ok(movedMs >= 0, `clock must not rewind: moved ${movedMs} ms`);
+    assert.equal(movedMs, 0, 'a negative Retry-After clamps the wait to 0');
+  } finally {
+    cleanup();
+  }
+});
+
+test('the backoff delay includes the injected jitter (delay - base === random.next())', async () => {
+  // Kills the `base + 0 * jitter` mutant: if jitter never reaches the delay,
+  // delay - base is 0, but the actual jitter from seededRandom(1) is non-zero.
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const { client, cleanup } = makeClient({
+    [url]: { status: 500, headers: {}, body: 'error' },
+  });
+
+  try {
+    const base = 2; // BASE_BACKOFF_SECONDS for the first failure
+    const expectedJitter = seededRandom(1).next();
+    await client.request(url);
+    const [delay] = client.backoffDelays;
+    assert.ok(
+      Math.abs(delay - (base + expectedJitter)) < 1e-9,
+      `delay ${delay} should be base(${base}) + jitter(${expectedJitter})`,
+    );
+    assert.notEqual(delay, base, 'jitter must reach the delay (delay !== base)');
+  } finally {
+    cleanup();
+  }
+});
