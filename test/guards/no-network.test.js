@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import { NetworkBlockedError } from '../support/no-network.js';
 
 test('the sentinel is set (guard is loaded)', () => {
@@ -125,7 +126,7 @@ test('http.request with an options object for a loopback host is permitted over 
   }
 });
 
-test('a [::1] request over real IPv6 to a real server is permitted (returns 200)', async () => {
+test('a [::1] request over real IPv6 to a real server is permitted (returns 200)', async (t) => {
   // Positive-direction loopback assertion for the IPv6 bracket strip:
   // "[::1]" normalises to "::1", which is an allowed host, so a real
   // IPv6 server on loopback must be reachable. Skipped if the host has no
@@ -134,10 +135,20 @@ test('a [::1] request over real IPv6 to a real server is permitted (returns 200)
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok6');
   });
-  await new Promise((resolve, reject) => {
+  const listening = await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '::1', resolve);
+  }).catch((err) => {
+    // No IPv6 loopback on this host: server.listen(0, '::1') rejects with
+    // EADDRNOTAVAIL. Skip rather than fail (the carve-out is
+    // address-family-agnostic).
+    server.removeAllListeners('error');
+    return { skipped: true, reason: err?.code ?? 'EADDRNOTAVAIL' };
   });
+  if (listening?.skipped) {
+    t.skip(`no IPv6 loopback (${listening.reason})`);
+    return;
+  }
   const { port } = server.address();
 
   try {
@@ -184,4 +195,56 @@ test('a self-contradictory options object is blocked in BOTH directions (fail-cl
       return true;
     },
   );
+});
+
+test('a direct Socket.prototype.connect(port, host) for a non-loopback host is blocked (port-form candidate)', async () => {
+  // node normalises the net.connect(port, host) / createConnection forms into
+  // an options object, so only the DIRECT Socket.prototype.connect(port, host)
+  // shape relies on the guard's port-form branch (the host is the second
+  // positional argument, args[1]). Without that branch, this call dials
+  // (ECONNREFUSED) instead of blocking. A real ephemeral port is used so the
+  // loopback control actually connects; the non-loopback address is read from
+  // os.networkInterfaces() (not hard-coded).
+  const interfaces = os.networkInterfaces();
+  let nonLoopback = null;
+  for (const name of Object.keys(interfaces)) {
+    for (const entry of interfaces[name] ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        nonLoopback = entry.address;
+        break;
+      }
+    }
+    if (nonLoopback) break;
+  }
+  assert.ok(nonLoopback, 'this host must have a non-loopback IPv4 address for the port-form test');
+
+  const server = net.createServer((s) => s.end());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    // Control: the matching loopback port-form dials.
+    await new Promise((resolve, reject) => {
+      const s = new net.Socket();
+      s.on('error', reject);
+      s.on('connect', () => { s.destroy(); resolve(); });
+      s.connect(port, '127.0.0.1');
+    });
+
+    // The non-loopback port-form must be blocked (not dialled).
+    await assert.rejects(
+      new Promise((resolve, reject) => {
+        const s = new net.Socket();
+        s.on('error', reject);
+        s.on('connect', () => { s.destroy(); resolve(); });
+        s.connect(port, nonLoopback);
+      }),
+      (err) => {
+        assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from '../../../lib/store/index.js';
@@ -135,6 +135,55 @@ test('writeSnapshot can run twice (the periodic snapshot design 4.3 specifies)',
 
   assert.equal(dealsAfter, dealsBefore);
   assert.equal(ledgerAfter, ledgerBefore);
+  assert.equal(store.journalMode, 'wal');
+
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('writeSnapshot succeeds twice with a stale temp file present (unique suffix + pre-unlink pin)', () => {
+  // Pins the snapshot temp-path behaviour. The round-2 defect used a fixed
+  // temp path (${snapshotPath}.tmp-${process.pid}) with no pre-VACUUM INTO
+  // unlink, so a leftover temp file made the next snapshot throw "file is not
+  // a database". The fix uses a unique suffix (pid + counter + clock instant)
+  // and pre-unlinks any leftover temp. A stale file at the base temp path must
+  // therefore not break subsequent snapshots.
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-store-'));
+  const dbPath = join(dir, 'test.db');
+  const snapshotPath = join(dir, 'snapshot.db');
+  const clock = fixedClock('2026-09-19T06:20:00Z');
+
+  const store = openStore({ path: dbPath, clock });
+  const db = store.getDb();
+
+  db.prepare(
+    `INSERT INTO deals (node_id, title, url, author, posted_at, categories, first_seen)
+     VALUES (1, 'test deal', 'https://example.com/node/1', 'author', '2026-09-19T06:20:00Z', '[]', '2026-09-19T06:20:00Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO ledger (node_id, rule_id, fired_at) VALUES (1, 1, '2026-09-19T06:20:00Z')`,
+  ).run();
+
+  const dealsBefore = db.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+  const ledgerBefore = db.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+
+  // A stale temp file at the base temp path (the round-2 defect's exact path).
+  const staleTemp = `${snapshotPath}.tmp-${process.pid}`;
+  writeFileSync(staleTemp, 'stale temp file that is not a database');
+
+  // Both snapshots must succeed despite the stale temp.
+  store.writeSnapshot(snapshotPath);
+  store.writeSnapshot(snapshotPath);
+
+  // The snapshot opens as a valid DB with identical row counts.
+  const snapDb = new DatabaseSync(snapshotPath);
+  const dealsAfter = snapDb.prepare('SELECT COUNT(*) AS n FROM deals').get().n;
+  const ledgerAfter = snapDb.prepare('SELECT COUNT(*) AS n FROM ledger').get().n;
+  snapDb.close();
+
+  assert.equal(dealsAfter, dealsBefore);
+  assert.equal(ledgerAfter, ledgerBefore);
+  // The source is still WAL.
   assert.equal(store.journalMode, 'wal');
 
   store.close();

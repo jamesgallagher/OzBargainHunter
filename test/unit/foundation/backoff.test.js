@@ -285,6 +285,174 @@ test('a negative Retry-After does not rewind the clock (clamped to >= 0)', async
   }
 });
 
+test('a store whose post-200 write throws does not remove the inter-request pause (>= 3000 ms gap)', async () => {
+  // A 200 carrying an ETag triggers store.setFeedState; if that write throws,
+  // the request fails AFTER the transport call. The pause anchor must still be
+  // stamped (the finally), so the next request's inter-request pause is not
+  // lost. Without the fix, lastRequestAt stays null and every transport call
+  // lands at offset 0 (gaps [0, 0]).
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-client-'));
+  const dbPath = join(dir, 'test.db');
+  const store = openStore({ path: dbPath, clock: fixedClock(START) });
+  // Override setFeedState to throw on the post-200 write.
+  store.setFeedState = () => {
+    throw new Error('setFeedState: simulated post-200 write failure');
+  };
+  const clock = fixedClock(START);
+  const offsets = [];
+  let callIndex = 0;
+  const transport = {
+    get calls() {
+      return callIndex;
+    },
+    async fetch() {
+      offsets.push(clock.now().getTime());
+      callIndex += 1;
+      return { status: 200, headers: { etag: '"abc"' }, body: '<rss></rss>', bytes: 9 };
+    },
+  };
+  const client = createOzbClient({
+    transport,
+    store,
+    clock,
+    random: { next: () => 0.5 },
+    config: {},
+    log: () => {},
+  });
+
+  try {
+    for (let i = 0; i < 3; i++) {
+      await assert.rejects(
+        () => client.request(url),
+        (err) => {
+          assert.ok(/simulated post-200 write failure/.test(err.message), `expected the post-200 write error, got ${err.message}`);
+          return true;
+        },
+      );
+    }
+    assert.equal(offsets.length, 3, 'expected three transport calls');
+    const gaps = [];
+    for (let i = 1; i < offsets.length; i++) {
+      gaps.push(offsets[i] - offsets[i - 1]);
+    }
+    for (const g of gaps) {
+      assert.ok(g >= 3000, `inter-request gap ${g} ms < 3000 ms — the pause was lost after a post-200 write failure`);
+    }
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a transport rejection rethrows the SAME error object (identity and code survive)', async () => {
+  // The catch must `throw err` (the original), not wrap it in a new Error —
+  // the caller relies on the transport error's identity and its `code`
+  // (e.g. ETIMEDOUT). Wrapping it (new Error('transport failed: ' + err.message))
+  // would change the identity and drop the code.
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-client-'));
+  const dbPath = join(dir, 'test.db');
+  const store = openStore({ path: dbPath, clock: fixedClock(START) });
+  const clock = fixedClock(START);
+  const originalError = new Error('ETIMEDOUT: connection timed out');
+  originalError.code = 'ETIMEDOUT';
+  let transportCalls = 0;
+  const transport = {
+    get calls() {
+      return transportCalls;
+    },
+    async fetch() {
+      transportCalls += 1;
+      throw originalError;
+    },
+  };
+  const client = createOzbClient({
+    transport,
+    store,
+    clock,
+    random: { next: () => 0.5 },
+    config: {},
+    log: () => {},
+  });
+
+  try {
+    let caught = null;
+    try {
+      await client.request(url);
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught, 'expected the transport error to be rethrown');
+    assert.equal(caught, originalError, 'the rethrown error must be the same object (identity preserved)');
+    assert.equal(caught.code, 'ETIMEDOUT', 'the transport error code must survive the rethrow');
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a transport rejection stamps the pause anchor: the gap to the retry is backoff (2627) + pause (3000) = 5627 ms', async () => {
+  // The pause anchor must be stamped on a transport rejection too (the
+  // finally). A pristine gap between a failed attempt and its retry is the
+  // backoff (2627 ms under seededRandom(1)) plus the 3000 ms inter-request
+  // pause. Without the anchor, the retry would not pause and the gap would
+  // be just the backoff.
+  const url = 'https://www.ozbargain.com.au/deals/feed';
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-client-'));
+  const dbPath = join(dir, 'test.db');
+  const store = openStore({ path: dbPath, clock: fixedClock(START) });
+  const clock = fixedClock(START);
+  const offsets = [];
+  let callIndex = 0;
+  const randomSource = seededRandom(1);
+  const transport = {
+    get calls() {
+      return callIndex;
+    },
+    async fetch() {
+      offsets.push(clock.now().getTime());
+      callIndex += 1;
+      if (callIndex === 1) {
+        throw new Error('socket hang up (timeout)');
+      }
+      return { status: 200, headers: {}, body: '<rss></rss>', bytes: 9 };
+    },
+  };
+  const client = createOzbClient({
+    transport,
+    store,
+    clock,
+    random: randomSource,
+    config: {},
+    log: () => {},
+  });
+
+  try {
+    // First attempt: a transport rejection.
+    await assert.rejects(
+      () => client.request(url),
+      (err) => {
+        assert.ok(/socket hang up/.test(err.message), `expected the transport error, got ${err.message}`);
+        return true;
+      },
+    );
+    // Retry: succeeds.
+    await client.request(url);
+    assert.equal(offsets.length, 2, 'expected two transport calls (failed attempt + retry)');
+    const gap = offsets[1] - offsets[0];
+    // 2627 ms backoff (seededRandom(1) jitter 0.627) + 3000 ms pause. The
+    // backoff is 2627.0739 ms, so the gap is in [5627, 5628).
+    assert.ok(
+      gap >= 5627 && gap < 5628,
+      `gap between the failed attempt and the retry must be 5627 ms (2627 backoff + 3000 pause), got ${gap}`,
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the backoff delay includes the injected jitter (delay - base === random.next())', async () => {
   // Kills the `base + 0 * jitter` mutant: if jitter never reaches the delay,
   // delay - base is 0, but the actual jitter from seededRandom(1) is non-zero.
