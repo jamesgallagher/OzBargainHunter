@@ -536,7 +536,6 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O7. Secret storage.** Accepted as environment variables by the owner. Residual risks: credential reuse elsewhere, and plaintext storage in Unraid template backups.
 - **O8. Notification channel priority** — which provider to build first beyond email.
 - **O10. Naming and trademark** — "OzBargain" is a live third-party brand.
-- **O12. Threshold window ceiling.** The two-page cap (3.1) gives an observation window of about 30 hours, so **no threshold window can exceed roughly 24 hours**. The original example of "100 upvotes in 7 days" is not supportable. Options: cap windows at ~24 hours; or drop the window entirely on high thresholds and evaluate "reached X votes while visible", which is unaffected by the reach limit.
 
 **Owner: design/implementation — to be resolved by research or probe**
 
@@ -549,13 +548,3 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O18. Classifieds markup capture** — the listing page's HTML has not been captured, so no parser can yet be written against it.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
 - **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
-
-**Gaps identified in the completeness audit. Not yet designed.**
-
-- **O22. The front-page feed as a matching surface.** §5.1 matches terms against deals; the front-page feed (3.1) is a separate source. A deal that appears on the front page without ever appearing on deals pages 0–1 would be matched by nothing. Whether front-page items are also matched, and against which rules, is undecided.
-- **O23. Notifier failure handling.** No behaviour is specified for a provider that fails to deliver — no retry, no backoff, and no alert when alerting itself is broken.
-- **O24. Database backup and restore.** The application's entire state is one SQLite file. No backup procedure, schedule or restore path is specified.
-- **O25. Timezone handling.** Feed timestamps carry `+1000` offsets. Nothing states how times are stored and in which zone they are displayed.
-- **O26. The logo mark itself.** §10.7 fixes the asset set and the constraints, but the mark has not been designed and is not covered by any other item here.
-
-**Deliberately left to implementation** (recorded so their absence is not mistaken for an oversight): the UI's routes and endpoint shapes, the Python framework, and the specific test framework and coverage expectations.
