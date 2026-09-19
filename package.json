@@ -9,6 +9,7 @@
   },
   "scripts": {
     "lint": "eslint .",
+    "test": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/unit/acquisition/*.test.js test/guards/*.test.js",
     "test:foundation": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/guards/*.test.js"
   },
   "dependencies": {
