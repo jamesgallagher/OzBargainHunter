@@ -1,8 +1,10 @@
 # OzBargain Hunter — Research Record
 
 **Author:** design lane (Claude Opus 5)
-**Date of research:** 19 September 2026, approximately 16:20–16:45 AEST
-**Purpose:** the raw evidence behind `design.md`. Every claim here was produced by a request I made myself, or is a quotation from a page I fetched. This file exists so that the design can be audited rather than believed.
+**Date of research:** 19 September 2026, approximately 16:20–16:45 AEST. **Addendum the same day** — sections 10 and 11, after James supplied classifieds evidence and the R25–R27 alert rules arrived.
+**Purpose:** the raw evidence behind `design.md`. Every claim in sections 0–9 was produced by a request I made myself, or is a quotation from a page I fetched. This file exists so that the design can be audited rather than believed.
+
+**The addendum is a different grade of evidence and is fenced off for that reason.** Section 10 is James's own observation of a page I cannot reach, and section 11 is vendor documentation rather than measurement. Both say so in their own words. Nothing in sections 0–9 has been rewritten to accommodate them; where they change a verdict, the original verdict is left in place with the update quoted beneath it.
 
 `design.md` is the argument. This file is the evidence. If the two ever disagree, this file is right and the design needs fixing.
 
@@ -406,7 +408,9 @@ From the official wiki, `/wiki/help:classified_posting_guidelines`:
 
 > "Users are limited to 1 classified post every 24 hours or 2 classifieds posts every 7 days. There is no exception to this."
 
-**Verdict on U7 — still genuinely unverified, but the evidence now leans clearly one way.** A moderator has said in plain words that classifieds are hidden from non-members, and has diagnosed a user's 403 by asking whether they were logged out. That is strong circumstantial evidence that *any* logged-in account can view. It is not a demonstration, and the quoted wiki rules are about **posting** (1-year membership, private messaging enabled), not viewing — so the possibility remains that viewing also carries a requirement nobody has written down. Nobody has demonstrated it either way.
+**Verdict on U7 at the time of this research — still genuinely unverified, but the evidence leans clearly one way.** A moderator has said in plain words that classifieds are hidden from non-members, and has diagnosed a user's 403 by asking whether they were logged out. That is strong circumstantial evidence that *any* logged-in account can view. It is not a demonstration, and the quoted wiki rules are about **posting** (1-year membership, private messaging enabled), not viewing — so the possibility remains that viewing also carries a requirement nobody has written down. Nobody has demonstrated it either way.
+
+> **U7 RESOLVED, 19 September 2026, after this research pass — see section 10 below.** James logged in with his own browser and supplied a screenshot of the rendered classifieds page. The circumstantial reading above was correct. **The caveat about the wiki rules being about posting rather than viewing survives in a narrower and more useful form**, and it is worth keeping rather than striking: what was demonstrated is that *an established account* can view. Nothing demonstrates what a *newly created* account sees, which matters because R24 is worded as "create a user login". Section 10.4.
 
 **The gate's stated purpose is scam prevention — it exists specifically to keep non-members out.** That is directly relevant to the R24 policy decision and is argued in `design.md`.
 
@@ -550,4 +554,94 @@ James has not said where alerts go (U4). Options for a self-hosted Unraid contai
 
 The one-method interface (`send(title, body, url, priority, tags)`) is the important part. It costs nothing now and means adopting Apprise later, or adding Discord, is a new implementation of one interface rather than a change to the alerting logic.
 
+---
+
+## 10. ADDENDUM — the classifieds page, from James's screenshot
+
+**Evidence grade: stakeholder-supplied, read directly by me, not reproduced.** James logged into OzBargain in his own browser on 19 September 2026 and captured `/classified` as it renders for an authenticated user. I opened the image file and read it myself rather than working from a summary. I did not and cannot reproduce it: I hold no OzBargain credentials and must not obtain any. **This is not a FACT by the standard the rest of this file uses** — no request of mine produced it — and given that F9 was wrong precisely because it came from somewhere other than a direct request, the distinction is worth keeping rather than blurring.
+
+The image is at `/opt/data/arch-scratch/classified-example-james.png` and is deliberately **not** committed to the repository, because it shows other members' usernames.
+
+### 10.1 What settles U7
+
+The address bar reads `ozbargain.com.au/classified`. Below it is a populated listings column. **There is no 403.** An authenticated account therefore renders the section that returns OzBargain's own "You do not have permission to access this page" to the anonymous client I tested in section 5.
+
+This confirms the circumstantial reading in section 5 — moderator *moocher* saying classifieds are hidden from non-members, and diagnosing a user's 403 by asking whether they were logged out. The moderator was describing exactly this behaviour.
+
+### 10.2 Observed page structure
+
+Above the listings: a **"Search classifieds"** text input with a magnifier button; a **"Show expired and inactive listings"** checkbox, unchecked; a **"+ New Listing"** button.
+
+Each listing row, two lines: a square poster avatar; a small pin/thumbtack glyph; a **listing-type badge** (`Wanted` on seven rows, `Freebie` on one); a **bracketed category tag** (`[Code Request & Giveaway]`, `[Code Giveaway Megathread]`, `[Perks]`); a **title** containing the item and, where present, a price rendered in a contrasting colour inside the title; a trailing **`@ <location or merchant>`** (`@ MyMaccas App`, `@ JB Hi-Fi`, `@ Google Store Australia`, `@ IKEA`, `@ The Good Guys`); then **`Posted by <username> on DD/MM/YYYY - HH:MM`**.
+
+The right-hand rail is the live deals sidebar, showing `+3`, `+15`, `+4`, `+8` with comment counts of 2, 3, 4 and 9 and relative ages of 37 min, 1 hour 8 min, 1 hour 53 min and 1 hour 57 min.
+
+### 10.3 Four things I read off the image that are not in the summary I was given
+
+1. **Classified listings are `/node/<id>` URLs.** The browser's status bar, bottom-left, reads `https://www.ozbargain.com.au/node/751807` while a listing row is under the cursor. **Classifieds share the node namespace with deals.** Design consequence: the `(node_id, rule_id)` alert ledger spans both surfaces with no change and no collision risk. This is the most useful single detail in the image and it is in the corner of it.
+2. **`@ merchant` is part of the title string, not a separate field.** Two rows are cut off mid-phrase — one ends `@ JB Hi-Fi (` and another ends `Contact Lenses Online) @` with nothing following. A parser must not treat `@` as a reliable delimiter, nor assume the rendered title is complete.
+3. **The timestamp carries no timezone and the format is day-first.** `DD/MM/YYYY - HH:MM`, with `18/`, `22/` and `30/` all appearing in the first position, which settles day-first from the image alone. Compare the RSS feeds, which give RFC-822 with an explicit `+1000` (section 1.1). Classifieds times must be read as site-local and are ambiguous for one hour a year at the daylight-saving boundary.
+4. **The visible rows are probably pinned, and the ordering is not recency.** Every visible row carries the pin glyph, and the dates run 18/09/2026, 16/09/2026, 16/09/2026, 07/09/2026, 07/09/2026, 30/08/2026, **18/01/2023**, **22/07/2021**. A three-year-old megathread among last week's listings is not a date ordering. **Marked as inference** — the glyph could be a generic listing marker rather than a sticky flag — but the design consequence holds either way: do not assume newest-first, and expect the same ancient rows on every single fetch forever.
+
+### 10.4 What the screenshot does NOT settle
+
+- **It covers an established account, not a new one.** James's account has history. OzBargain's published classifieds guidelines gate participation on membership older than one year with "NO exceptions" (quoted in section 5), and those rules are written about posting rather than viewing — so I am not claiming a new account would be refused. **Nobody has shown it would be admitted either.** R24's wording is *"create a user login for this"*, so this gap sits directly under the option that would provision a bot account.
+- **It is a picture, not markup.** A parser needs HTML. `design.md` P11 is the capture that would supply it.
+- **Whether the "Search classifieds" box routes through `/search/` (U11).** `robots.txt` disallows `/search/` (section 2.4). If the search does route there, the efficient path for watchlist matching is off-limits. One submit settles it; it needs an authenticated session, so it is James's to run.
+- **What is above the search box (U12).** The capture begins at the search input, so tabs, type filters and category filters are not visible.
+- **Session lifetime.** The `PHPSESSID` `Max-Age` is 90 days, but that is the cookie's lifetime, not the server's.
+
+### 10.5 The finding that changes the design most
+
+**There is no vote count, comment count, click count or relative-age label anywhere on a classified row.** The only numerals are the price inside the title and the posting date.
+
+The `<ozb:meta>` counters confirmed on every RSS item in section 1.1 — `votes-pos`, `votes-neg`, `comment-count`, `click-count` — **have no counterpart here.** The trend rule (R19) is computed entirely by differencing those counters over time (section 3). With no counters there is no delta, no velocity, and no threshold to cross; and classifieds do not appear on the front page, so the promotion signal is inapplicable too.
+
+**R19 cannot apply to classifieds. Only R20 and R21 can.** Not "is deferred" — cannot, because the data required does not exist on the surface. Argued out in `design.md` 18.8.
+
+---
+
+## 11. ADDENDUM — capability checks for the R26 unsubscribe design
+
+**Evidence grade: vendor documentation, fetched directly by me on 19 September 2026. Documented, not measured.** R26's design rests on what the notification channel and Cloudflare Access can actually do, so I fetched the vendors' own pages rather than reasoning from memory. **None of this has been confirmed against James's own instances**, which is why `design.md` carries probes P13 and P14 against it.
+
+### 11.1 ntfy — action buttons
+
+Source: `https://docs.ntfy.sh/publish/`
+
+- Four action types exist: **`view`** ("Opens a website or app when the action button is tapped"), **`http`** ("Sends HTTP POST/GET/PUT request when the action button is tapped"), **`broadcast`** (Android intent) and **`copy`** (to clipboard).
+- **"You can define up to three user actions in your notifications."** Three is the ceiling. R26 and R27 need two of them — unsubscribe, and manage alerts — which leaves one spare and no room for a fourth idea.
+- The `http` action takes a method (**"default is POST"**), **"HTTP headers to pass in request"** and **"HTTP body"**, and fires directly from the notification without opening a browser. This is what makes a literal one-tap unsubscribe possible at all.
+- All action types support **`clear`** — "Clear notification after action button is tapped", default `false` — so the notification can dismiss itself once the action is taken.
+
+### 11.2 ntfy — access control, and the default that matters
+
+Source: `https://docs.ntfy.sh/config/`
+
+- **"By default, the ntfy server is open for everyone, meaning everyone can read and write to any topic"** when no authentication is configured. **This is the important one.** Before R26 a world-readable topic leaked which bargains James was told about. After R26 it is a security boundary, and under Mechanism B it would publish every unsubscribe token to anyone who guessed a topic name.
+- Per-topic ACLs exist: `ntfy access USERNAME TOPIC PERMISSION`, with `read-write`, `read-only`, `write-only` and `deny`, and wildcard topic patterns.
+- `auth-default-access` sets the fallback and takes `read-write` (the default), `read-only`, `write-only` or `deny-all`. A private instance sets it to `deny-all`.
+- Access tokens exist for clients — **but the documentation states a token grants "full access to the user account"**, equivalent to the password. **So the token the container holds must belong to a dedicated publish-only user, not to the admin user.** That trap is the reason this bullet is here.
+
+This is the evidence behind `design.md` D21.
+
+### 11.3 Cloudflare Access — what a single path can be made to do
+
+Source: `https://developers.cloudflare.com/cloudflare-one/policies/access/` and `.../applications/configure-apps/self-hosted-public-app/`
+
+- A **Bypass** policy action exists: **"The Bypass action in Cloudflare Access disables Access enforcement for specific traffic."** The same page states the cost plainly: **"Bypass does not enforce any Access security controls and requests are not logged."** That second clause is why `design.md` 21.4 prefers Mechanism A — under Bypass, the one endpoint with no identity check is also the one endpoint with no edge audit trail, and the application's own logging becomes the only record.
+- **Applications can be scoped to a path, not only a hostname.** The policy page gives the example of an application for `test.example.com/admin/<your-url>` with a Bypass policy attached; the self-hosted application page notes wildcards can "protect multiple parts of an application that share a root path". This is what would make a `/u/*`-only exception possible rather than a hostname-wide one.
+- **Service Auth policies with service tokens exist** — "Service Auth rules in Cloudflare Access enforce authentication flows that do not require an identity provider IdP login, such as service tokens and mutual TLS", with "Service Token" and "Any Access Service Token" selectors. `design.md` 21.3 rejects using these in a notification, and this is the documentation it is rejecting.
+- **Session Duration is configurable per application**: "In Session Duration, choose how often the user's application token should expire", after which "they will be prompted to reauthenticate with the IdP". **The allowed values are not enumerated on the page I read**, so the figure that decides how often Mechanism A costs a login bounce is currently unknown and has to be read off the account. P14.
+
+### 11.4 What is still unmeasured, and why it matters
+
+The single most consequential unknown in the R26 design is not in any documentation: **whether a notification tapped on James's phone opens the link in a browser holding the Cloudflare `CF_Authorization` cookie, or in a cookie-less in-app webview that will demand a login every time.** If it is the former, Mechanism A is one tap almost always and the recommendation stands comfortably. If it is the latter, Mechanism A is a login every time and fails R26 properly rather than marginally.
+
+**This is a five-minute test on a real phone once a notification channel exists**, and it should be run before D17 is finalised rather than after. It is step 2 of the alert-lifecycle acceptance test in `design.md` section 10.
+
 **OPEN — U4 is still James's call**, and there is a specific thing to confirm: the orchestrator's note says an ntfy instance is already running on this host for Uptime Kuma alerts. That was not verified by me and is not in the verified-facts section of `BRIEF.md`. If it is true, this is a near-zero-cost decision and the dead-man's-switch in the failure design can reuse the same infrastructure. If it is not, ntfy is another container to run and the calculus changes slightly. Probe before relying on it.
+
+> **CHECKED, 19 September 2026, and the answer is NO.** The orchestrator ran `docker ps -a` directly on `192.168.0.148`: there is **no container matching ntfy, gotify or apprise, and no matching Unraid user template.** The belief that an instance was already running for Uptime Kuma is not supported by anything on this host. Those alerts may go to an instance elsewhere on the network, or to the public `ntfy.sh`; both are plausible, neither is verified, and neither should be assumed. **This is the second handed-down claim in one pass that did not survive being checked** — the first was F9's `robots.txt` contents (section 2.4). The recommendation for ntfy is unchanged, because none of the reasons above depended on one already existing; what changed is that D13 now costs a container rather than nothing. `design.md` 20.5 and D13 are corrected accordingly.
+>
+> **A constraint added later, after R26 arrived:** whatever channel is chosen must be able to carry an actionable control inside the notification, and its topic must not be world-readable. Section 11 below records what the vendor documentation says about both for ntfy.

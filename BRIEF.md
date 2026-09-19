@@ -528,3 +528,194 @@ at most once per deal, ever** — a permanent record, not a cooldown — and exp
 legitimately alerts twice when two different rules fire, "once for rising fast, once when promoted".
 That is R25's requirement arrived at independently. R26 (one-click unsubscribe) and R27 (the alert
 manager) are new and are not yet designed.
+
+---
+
+# ANSWERS — James, 19 September 2026
+
+Answers to the orchestrator's Q1–Q8, which restated the design lane's D-list. Recorded in his own
+words, then enumerated. **Several of these override decisions the design lane had made and
+recommended — that is his prerogative and they are recorded as his calls, not as errors.**
+
+## Answer 1 — notification delivery (was Q1 / D13)
+
+> Lets try and keep this abstract, to support multiple providers. Initially, we will look to use
+> email, but it should be trivial to include ntfy.io, Matrix (this messenger) and I would like to
+> include WhatsApp if there is an easy way to do this.
+
+- **R28. Notification delivery is provider-abstract.** Multiple providers must be supported behind a
+  common interface. **First provider: email.** Adding ntfy, Matrix and WhatsApp must be cheap.
+- **R29. Matrix is a required target**, and it is this very messenger.
+- **R30. WhatsApp is desired "if there is an easy way".** Conditional — the feasibility research is
+  the design lane's to do and to report honestly.
+
+**Environment facts relevant to this, verified:**
+
+- **Matrix is already running on the Unraid host** — container `matrix` (`avhost/docker-matrix:latest`),
+  publishing `8008` (client-server API), `8448` (federation) and `3478` (TURN). Delivery to Matrix is
+  therefore a plain HTTP POST to the client-server API on the LAN. No new infrastructure.
+- **No `MATRIX_*` credentials were found in `/opt/data/.env`** on the agent side, so no bot access
+  token is currently available to this record. One would need to be created.
+- **Minor factual note:** the public hosted ntfy service is `ntfy.sh`, not `ntfy.io`. Self-hosted is
+  also possible, and the design lane's earlier finding stands — **there is no ntfy container on the
+  Unraid host today**, contrary to the belief the orchestrator passed it.
+
+## Answer 2 — the OzBargain account (was Q2 / D10)
+
+> (a) I will create a new account for the tool.
+> (b) I am willing for the container to login, provided they are using good tooling, some suggested
+> tooling would be Python Curl_cffi, Go tls-client and tools like BeautifulSoup and Cherrio. I don't
+> want to hammer the server and legitimately just want to do things I am trying to do manually but
+> don't have time.
+> (c) Just .env variables in the Docker is fine. It is an information only site, exploiting my account
+> would achieve nothing. Not concerned with it being stored as a password in the unraid template.
+
+- **R31. A dedicated OzBargain account will be created for the tool** — not his personal account. This
+  materially reduces the U9 account-risk objection the design lane raised.
+- **R32. The container is permitted to perform the login itself.** This is the design lane's **Option
+  C**, chosen deliberately after reading the argument. He accepts it.
+- **R33. Tooling expectation:** he names **Python `curl_cffi`**, **Go `tls-client`**, and parsers
+  **BeautifulSoup** / **Cheerio**. He wants good tooling and restraint, not aggression.
+- **R34. Credentials may be plain `.env` variables in the Docker container**, and he explicitly
+  accepts the Unraid-template storage risk. He reasons that the account is information-only and
+  exploiting it would achieve nothing.
+
+## Answer 3 — day-one alert rules (was Q3 / D11)
+
+> Day one alerts will be static, easy to implement.
+> Product or Company found from list (UI to manage products or companies to alert for) (search new
+> deals and classifieds)
+> Post as hit X amount of posts in X amount of hours/days (support multiple, eg, 10 upvotes in 6 hours
+> or 100 up votes in 7 days.
+> As a start, those will be good, but in future I want to support dynamic rules like 'rapidly rising',
+> highly commented on.
+
+- **R35. Two static rule types ship on day one:**
+  - **R35a — match rule.** A product or company from a managed list, matched against **new deals AND
+    classifieds**, with UI management of the list.
+  - **R35b — threshold-in-window rule.** "Has hit X upvotes in X hours/days", **multiple instances
+    supported**. His two examples: *10 upvotes in 6 hours*, and *100 upvotes in 7 days*.
+- **R36. Dynamic rules are explicitly deferred to a future phase:** "rapidly rising", "highly
+  commented on". Note this **demotes** the design lane's velocity rule (design.md 17.3) from a day-one
+  requirement to a later one — see X9.
+
+## Answer 4 — the alert manager (was Q4 / R27)
+
+> CRUD for alerts. Add new, modify existing, delete no longer needed. Managed keywords and companies.
+> This is a build in rule to monitor for companies or products. Config section for how to be alerted
+> and manage communication. Those are the sections that come to mind straight away.
+
+- **R37. Full CRUD on alert rules** — create, read, update, delete. Not merely enable/disable.
+- **R38. Managed keyword and company lists**, with a built-in rule type for monitoring companies or
+  products.
+- **R39. A configuration section for how alerts are delivered** — the notification/provider config
+  (R28) is part of the UI, not a config file.
+
+## Answer 5 — repository visibility (was Q5 / D1)
+
+> Private repository with PAT
+
+- **R40. The repository is PRIVATE.** This **overrides** the design lane's D1 recommendation of
+  public. Access is via a **PAT**. See collision X3 — it has three knock-on effects.
+
+## Answer 6 — production tag (was Q6 / D2)
+
+> Ok, we can use stable not latest. Agreed
+
+- **R41. Production tracks `:stable`.** D2 closed in favour of the design lane's recommendation.
+
+## Answer 7 — network placement (was Q7 / D4)
+
+> Reachable through the tunnel is fine or locally via it's private IP and port.
+
+- **R42. The application must be reachable BOTH through the Cloudflare Tunnel AND locally via its
+  private IP and published port.** This **overrides** the design lane's D4 recommendation of no
+  published port. See collision X4 — R9 cannot then be literally true.
+
+## Answer 8 — polling cadence (was Q8 / D12)
+
+> We need to show respect and not hammer them. Should be in the UI config, but at a start, lets use 60
+> minute checks, RSS can be instant notification, so RSS polling should be 5-10 minutes, never less
+> than 5 minutes.
+
+- **R43. Poll cadence is configurable from the UI.**
+- **R44. Starting values:** a **60-minute** cadence for "checks", and **5–10 minutes for RSS
+  polling, never below 5 minutes**.
+- **Reading (needs confirmation — see X7):** the two numbers are different surfaces. The design lane
+  concluded classifieds should be polled far less often than deals, so the natural reading is
+  **classifieds every 60 minutes, feeds every 5–10 minutes**. Stated as an interpretation, not a fact.
+
+---
+
+# COLLISIONS AND CONSEQUENCES arising from the answers
+
+Recorded for the design lane to resolve. None of these are the orchestrator's to settle.
+
+- **X1. R33 against the design lane's D14.** The chosen tooling is in direct tension with the design's
+  recommendation to identify the bot honestly. `curl_cffi` and `tls-client` exist **specifically to
+  impersonate a browser's TLS fingerprint** — they are anti-bot-evasion libraries, not merely
+  alternative HTTP clients. Pairing them with an honest self-identifying User-Agent is internally
+  contradictory, and it is behaviourally close to the "sneaky bad actors" the site owner describes
+  tuning against. This needs stating plainly and resolving, not fudging. It is also possible the
+  tooling is unnecessary: the design lane measured that `curl`, `requests`, `Go-http-client`, `wget`,
+  `GPTBot`, Chrome **and an honest bot UA** all currently return 200 on the feeds.
+- **X2. R34 overrides design.md 7.6 and 18.5.** He has accepted the risk, and the decision is his.
+  Worth stating once, accurately rather than dramatically: the real exposure is not what an attacker
+  gains *from OzBargain* — it is (i) **password reuse**, if that secret is used anywhere else, and
+  (ii) the password sitting in **plaintext on removable media and in every Unraid flash backup**.
+  Both are cheap to mitigate and the choice is his either way.
+- **X3. R40 (private) has three knock-on effects**, all previously documented and none of them fatal:
+  1. **No branch protection.** Already proven by direct probe on this repo: `gh api
+     repos/jamesgallagher/OzBargainHunter/rulesets` and `.../branches/main/protection` both return
+     **403 "Upgrade to GitHub Pro or make this repository public to enable this feature."** So the
+     merge gate does not exist and **Fallback A — making the deployment the gate — becomes mandatory**,
+     not optional.
+  2. **The logo cannot be served from `raw.githubusercontent.com`.** That URL form only works for
+     public repositories. Design.md 9.2 Option B (a single hard-coded unauthenticated `/icon.png`
+     route) becomes the path, contradicting the "deny by default with no exceptions" line at 7.5.
+  3. **The GHCR package will default to private**, and Unraid's update check fails *silently* on a
+     package it cannot authenticate to — the "update ready" flag simply never appears. **Verified: the
+     host already holds a `ghcr.io` credential** in `/root/.docker/config.json` (an `auth` entry), so a
+     pull is plausible, but whether that token is still valid and carries `read:packages` is
+     **unverified**.
+- **X4. R42 against R9.** With a published port, requirement R9 — "nothing accessible by a back door
+  without coming through Cloudflare Tunnel" — **cannot be literally true**. The honest wording, which
+  the design lane already drafted, becomes the requirement of record: *public access only via
+  Cloudflare; LAN access is open and the LAN is trusted*. The consequence that matters: **app-side
+  verification of the Cloudflare Access JWT stops being defence-in-depth and becomes the only real
+  control.** It is now load-bearing.
+- **X5. R35b's "100 upvotes in 7 days" exceeds the feed's reach.** `/deals/feed` covers roughly **22
+  hours** of history; `/deals/feed?page=1` reaches back about two days. A **7-day window cannot be
+  evaluated from the feed** unless the application has itself been observing that deal for seven days,
+  or unless it fetches substantially more history. This is a real design constraint on R35b and the
+  long-window examples specifically.
+- **X6. R35a and R35b do not apply to the same surfaces.** Classified listings carry **no vote,
+  comment or click counts** (verified from James's screenshot). So **R35b is deals-only** — a
+  classifieds post can never satisfy a "100 upvotes" rule. **R35a covers both surfaces.**
+- **X7. R44's two numbers need one confirmation.** The 60-minute figure and the 5–10-minute figure
+  cannot both be the feed cadence. The interpretation above (classifieds 60 min, feeds 5–10 min) is
+  the only one that is coherent with the design and with his stated concern about restraint — but it
+  is an interpretation and he has not confirmed it.
+- **X8. R29/R30 need feasibility research, not assumption.** Matrix is easy and already hosted. Email
+  needs an SMTP path and a decision about which account sends. **WhatsApp is the open one:** the
+  official Cloud API requires a Meta business account, approved message templates and has a 24-hour
+  session window — real friction. Unofficial bridges (`Baileys`, `whatsapp-web.js`) work but can get
+  the sending number banned. Worth noting a third path exists: **he already runs a Matrix homeserver**,
+  and `mautrix-whatsapp` bridges WhatsApp into Matrix — which would mean implementing only the Matrix
+  provider and getting WhatsApp through it.
+- **X9. R36 demotes a day-one rule.** The design lane's velocity rule (design.md 17.3) is a *dynamic*
+  rule by his classification, so it moves to the future phase. R35b's threshold-in-window rule is the
+  static replacement. The measured distribution and the 10-vote-floor reasoning at 17.3 remain useful
+  — they inform what "reasonable" looks like for R35b's X and Y — but the rule shape changes.
+- **X10. R37 makes the UI substantially bigger** than the minimal option the design lane proposed. It
+  is now a CRUD application with three or four screens, not a list with toggles.
+
+## D-list status after these answers
+
+**Closed:** D1 (private, R40) · D2 (`:stable`, R41) · D4 (published port, R42) · D10 (Option C, the
+container logs in, R31–R32) · D13 (email first, provider-abstract, R28).
+
+**Still open:** D5 (public hostname) · D6 (beta container alongside production) · D7 (confirm "beta
+alongside latest" means two distinct images) · D8 (acceptable build-to-live latency) · D9 (the naming
+and trademark question) · D14 (honest User-Agent — now in tension with R33, see X1) · D15 (seed
+silently on first run) · D16 (dead-man's switch).
