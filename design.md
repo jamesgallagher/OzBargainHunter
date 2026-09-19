@@ -49,6 +49,7 @@ The application is a single container running five internal components:
 ### 2.2 Runtime
 
 - One container. One process group. No sidecars and no separate database container.
+- **Python.**
 - The application binds port **8000** inside the container.
 - No inbound dependency: the poller only makes outbound requests.
 
@@ -60,7 +61,7 @@ Poll tick → fetch feeds → parse → upsert deals → append counter observat
 
 The application is reachable by two paths simultaneously:
 
-- **Public:** through the existing Cloudflare Tunnel at its own hostname.
+- **Public:** `https://ozb.gallagherhome.au`, through the existing Cloudflare Tunnel.
 - **Local:** the container publishes a host port, reachable at its private IP and port from the LAN.
 
 Both paths terminate at the same application, which applies the same authentication and verification to each (see 8).
@@ -283,7 +284,13 @@ Every notification carries exactly two controls:
 - **An unsubscribe control for the rule that fired**, labelled with the rule in the user's own words — for example *"Stop alerts for 'playstation'"* — never a rule number.
 - **A "Manage alerts" link** to the alert manager.
 
-The mechanism behind the unsubscribe control is unresolved (Open Item O1). The *behaviour* is fixed:
+The unsubscribe control is an **ordinary authenticated URL** — `/rules/<id>/mute` — gated by Cloudflare Access exactly like every other path. **No exception to deny-by-default is made for it.**
+
+Flow: the link is requested. If the visitor has no valid Access session, Access authenticates them first. The request then reaches the application, which verifies the Access JWT, mutes the rule, and shows a confirmation.
+
+**Nothing in the notification is a credential.** If a notification leaks, the link is worthless to whoever holds it, because they still face Cloudflare Access.
+
+The *behaviour* is fixed:
 
 - **Mute, never delete.** The rule remains and is marked disabled.
 - **Already-queued alerts from that rule are suppressed** at the moment of muting.
@@ -512,11 +519,8 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 
 **Owner: James — decision required**
 
-- **O1. The unsubscribe mechanism.** Either an ordinary authenticated URL requiring no exception, or a scoped, single-use, expiring capability token behind one documented exception on one path. The former may cost a login bounce; the latter trades an exception to deny-by-default for a guaranteed single tap.
-- **O2. Public hostname.** Proposed `ozb.gallagherhome.au`.
 - **O3. Rule configuration storage** — database versus environment. The UI requirement makes the database the natural answer.
 - **O4. UI scope for v1** — the nine screens in 7.1 are the proposed set.
-- **O5. Beta container** — whether to run one alongside production, doubling the container count.
 - **O7. Secret storage.** Accepted as environment variables by the owner. Residual risks: credential reuse elsewhere, and plaintext storage in Unraid template backups.
 - **O8. Notification channel priority** — which provider to build first beyond email.
 - **O9. Build-to-live latency** — how long between a green build and a running container.
@@ -534,4 +538,3 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O18. Classifieds markup capture** — the listing page's HTML has not been captured, so no parser can yet be written against it.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
 - **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
-- **O21. Application language and runtime** — not yet chosen. The owner's tooling preferences point at Python.

@@ -16,15 +16,15 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D8 — Build-to-live latency.** How long between a green build and a running container. **OPEN (O9)**
 - **D12 — Poll cadence.** Feeds every 5–10 minutes, never below 5. Classifieds every 60 minutes (interpretation pending). **DECIDED**, sub-item **OPEN (O13)**
 - **D41 — Deal pagination cap.** Pages 0 and 1 only, then stop. No page beyond 1 is ever requested, including to recover a gap. Effective observation window: about 30 hours. **DECIDED**
-- **D6 — Beta container alongside production.** **OPEN (O5)**
+- **D6 — Beta container.** Not built. The tool serves one person, so there is no separate beta instance. **DECIDED**
 - **D16 — Registry retention policy** for per-commit tags. **OPEN (O16)**
 
 ## Exposure and access control
 
 - **D3 — Authentication architecture.** Cloudflare Access at the edge, with the application verifying the Access JWT on every request. **SPECIFIED**
 - **D4 — Network placement.** Published host port, reachable on the LAN *and* through the tunnel. Accepted consequence: the "no back door" requirement cannot be literally true, and the application's JWT verification becomes the primary control. **DECIDED**
-- **D5 — Public hostname.** Proposed `ozb.gallagherhome.au`. **OPEN (O2)**
-- **D17 — One-click unsubscribe mechanism.** Ordinary authenticated URL (no exception, may cost a login bounce) versus scoped single-use expiring capability token (guaranteed one tap, one documented exception). **OPEN (O1)**
+- **D5 — Public hostname.** `ozb.gallagherhome.au`. **DECIDED**
+- **D17 — One-click unsubscribe mechanism.** An ordinary authenticated URL, gated by Cloudflare Access like every other path. An unauthenticated tap is authenticated first, then shown the mute confirmation. No exception to deny-by-default. **DECIDED**
 - **D21 — Notification topic lockdown.** The topic must not be world-readable. Requirement carried as acceptance criterion 11.3.7. **SPECIFIED**
 
 ## Data acquisition
@@ -66,7 +66,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Not yet decided at all
 
-- **D36 — Application language and runtime.** **OPEN (O21)**
+- **D36 — Application language and runtime.** Python. **DECIDED**
 - **D37 — Classifieds markup.** Not captured, so no parser can be written. **OPEN (O18)**
 - **D38 — Classifieds access for a brand-new account.** Evidence came from an established account. **OPEN (O19)**
 - **D39 — Threshold window versus feed reach.** A 7-day window exceeds the feed's ~22-hour reach. **OPEN (O12)**
@@ -76,7 +76,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Counts
 
-**DECIDED:** D1, D2, D4, D10, D10b, D12, D13, D22, D29
+**DECIDED:** D1, D2, D4, D5, D6, D10, D10b, D12, D13, D14, D17, D22, D29, D36, D41
 **SPECIFIED:** D3, D7, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34
-**OPEN:** D5, D6, D8, D9, D11(replaced), D15(old), D17, D18, D19, D24, D30(partial), D31, D35, D36–D40
+**OPEN:** D8, D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D37–D40
 **DEFERRED:** D28
