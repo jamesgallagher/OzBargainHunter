@@ -409,25 +409,28 @@ Rule configuration is stored in the database, not in environment variables, so t
 ### 10.1 Repository
 
 - **GitHub repository `jamesgallagher/OzBargainHunter`, private**, accessed with a PAT.
-- Long-lived branches: **`main`** (deployable) and **`beta`** (integration).
+- **One long-lived branch: `main`.** There is no integration or beta branch; the tool serves one person and does not need one.
 - Short-lived branches: `feature/*`, `fix/*`.
 
 ### 10.2 Tags
 
-Every image carries an immutable tag so that rollback is always possible.
+Exactly two tags are published, and only from `main`:
+
+- `:latest` — moves on every successful build. **This is what production runs.**
+- `:main-<sha>` — an immutable tag naming that specific build, so a previous version can be rolled back to **by name** rather than by image ID.
 
 - Push to `main`, commit `a1b2c3d` → `:latest` and `:main-a1b2c3d`
-- Push to `beta`, commit `9f8e7d6` → `:beta` and `:beta-9f8e7d6`
 - Push to any other branch → builds and tests, **publishes nothing**
-- Git tag `v0.3.0` on `main` → `:0.3.0`, `:0.3`, and moves `:stable`
 
-**`beta` is the only branch that owns the `:beta` tag.**
+There are no `beta`, `stable` or semantic-version tags.
 
 ### 10.3 Production tag
 
-**Production tracks `:stable`**, not `:latest`. Production is promoted deliberately by pushing a git tag. `:latest` means "newest", not "accepted".
+**Production tracks `:latest`.** Every successful build on `main` is a release.
 
-The Unraid template's repository field therefore reads `ghcr.io/jamesgallagher/ozbargainhunter:stable`, and must always point at a **moving** tag — a pinned semantic version never produces an update.
+The gate between a commit and production is the pipeline rather than a promotion step: publishing is conditional on lint, unit tests, the image build and the smoke test all passing, and the deployment is conditional on the assistant confirming that outcome (10.6). A failing build never reaches the host.
+
+The Unraid template's repository field reads `ghcr.io/jamesgallagher/ozbargainhunter:latest`, and must always point at a **moving** tag — a pinned tag never produces an update.
 
 ### 10.4 Continuous integration
 
@@ -460,7 +463,17 @@ Images are built for **`linux/amd64` only**, carry OCI labels including `org.ope
 - Internal port: **8000**, published to the host
 - **All persistent state lives on the bind mount.** Nothing of value is written inside the container.
 
-**Update mechanism:** the **Community Applications "Auto Update Applications" plugin**, with `OzBargainHunter` set to auto-update. Updates are applied by the plugin, which recreates the container from its template. A `docker pull` followed by `docker restart` does not update a running container and must never be used as a substitute.
+**Update mechanism — primary.** The assistant monitors the repository's CI runs on a short interval. When a run on `main` completes successfully, it applies the update on the host by invoking Unraid's own update script:
+
+```
+/usr/local/emhttp/plugins/dynamix.docker.manager/scripts/update_container OzBargainHunter
+```
+
+That is the same script the Unraid GUI's update button calls. It stops the container, pulls the new image, **removes and recreates** the container from its template, and removes the orphaned image. **A `docker pull` followed by `docker restart` does not update a running container and must never be used as a substitute.**
+
+The assistant confirms success by checking that the running container's image digest has changed — **not** by the script's exit status or its output.
+
+**Update mechanism — backstop.** A host-side scheduled check applies the same update if the assistant has not already done so, so that a new build is still deployed when the agent is unavailable.
 
 Unraid detects updates by comparing the registry's manifest digest behind the tag with the local image's digest. This is why the tag must move.
 
@@ -480,10 +493,9 @@ Unraid detects updates by comparing the registry's manifest digest behind the ta
 1. Push a trivial commit to `main`; record the short SHA.
 2. The Actions run for that SHA is green, including the smoke test.
 3. The GHCR package lists a new version tagged `latest` and `main-<sha>`.
-4. Push `v0.0.1`; `:stable` resolves to the same digest as `:main-<sha>`.
-5. On the Unraid Docker tab, "Check for Updates" flips `OzBargainHunter` to "update ready".
-6. After the update, `docker inspect --format '{{.Image}}' OzBargainHunter` over SSH returns the new digest.
-7. Rollback: point `<Repository>` at the previous `main-<sha>`, apply, and confirm the digest reverts.
+4. The assistant detects the green run and applies the update on the host.
+5. `docker inspect --format '{{.Image}}' OzBargainHunter` over SSH returns the new digest, confirming the container was recreated rather than merely pulled.
+6. Rollback: point `<Repository>` at the previous `main-<sha>`, apply, and confirm the digest reverts.
 
 ### 11.2 Access control
 
@@ -523,7 +535,6 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O4. UI scope for v1** — the nine screens in 7.1 are the proposed set.
 - **O7. Secret storage.** Accepted as environment variables by the owner. Residual risks: credential reuse elsewhere, and plaintext storage in Unraid template backups.
 - **O8. Notification channel priority** — which provider to build first beyond email.
-- **O9. Build-to-live latency** — how long between a green build and a running container.
 - **O10. Naming and trademark** — "OzBargain" is a live third-party brand.
 
 **Owner: design/implementation — to be resolved by research or probe**

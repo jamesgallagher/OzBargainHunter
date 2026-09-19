@@ -11,9 +11,10 @@ Update this file whenever a decision changes. Do not append history — replace 
 ## Delivery and packaging
 
 - **D1 — Repository visibility.** PRIVATE, accessed with a PAT. **DECIDED**
-- **D2 — Production tag.** `:stable`, promoted deliberately by pushing a git tag. Not `:latest`. **DECIDED**
-- **D7 — Beta tag semantics.** `beta` branch owns `:beta`; `main` keeps `:latest`/`:main-<sha>`. Two distinct images, never the same image carrying both tags. **SPECIFIED**
-- **D8 — Build-to-live latency.** How long between a green build and a running container. **OPEN (O9)**
+- **D2 — Production tag.** `:latest`, moved by every successful build on `main`. Exactly two tags exist: `:latest` and the immutable `:main-<sha>`. No beta, stable or semantic-version tags. **DECIDED**
+- **D7 — Branch structure.** One long-lived branch, `main`. No beta or integration branch. **DECIDED**
+- **D42 — Update path.** The assistant monitors CI and applies the update on the host via Unraid's own `update_container` script, verifying by image digest. A host-side scheduled check is the backstop. **DECIDED**
+- **D8 — Build-to-live latency.** The assistant polls CI on a short interval and applies the update on success; a host-side scheduled check is the backstop. **DECIDED**
 - **D12 — Poll cadence.** Feeds every 5–10 minutes, never below 5. Classifieds every 60 minutes (interpretation pending). **DECIDED**, sub-item **OPEN (O13)**
 - **D41 — Deal pagination cap.** Pages 0 and 1 only, then stop. No page beyond 1 is ever requested, including to recover a gap. Effective observation window: about 30 hours. **DECIDED**
 - **D6 — Beta container.** Not built. The tool serves one person, so there is no separate beta instance. **DECIDED**
@@ -76,7 +77,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Counts
 
-**DECIDED:** D1, D2, D4, D5, D6, D10, D10b, D12, D13, D14, D17, D22, D29, D36, D41
-**SPECIFIED:** D3, D7, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34
-**OPEN:** D8, D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D37–D40
+**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D36, D41, D42
+**SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34
+**OPEN:** D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D37–D40
 **DEFERRED:** D28
