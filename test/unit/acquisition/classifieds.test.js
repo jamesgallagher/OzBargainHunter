@@ -86,3 +86,42 @@ test('429 (rate_limited): the session is unknown, never latches, never alerts', 
   assert.equal(result.alert, false);
   assert.equal(result.latched, false);
 });
+
+// --- Review round-2 required tests ---
+
+test('Minor 1: an expired 200 (uid 0) invalidates the persisted uid, so a later 304 resolves to expired, not valid', async () => {
+  const transport1 = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client: c1, store, clock, close } = makeAcquisition({ transport: transport1 });
+  const r1 = await runClassifiedsPoll({ client: c1, store, clock, log: () => {} });
+  assert.equal(r1.state, 'valid');
+  assert.equal(r1.uid, 226301);
+  await clock.advance(5 * 60 * 1000);
+  // The session expires: the anon page (uid 0) latches off and must
+  // invalidate the persisted last uid (round-2 Minor 1).
+  const transport2 = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/derived/classifieds-page-anon.html' } });
+  const { client: c2 } = makeAcquisition({ transport: transport2 });
+  const r2 = await runClassifiedsPoll({ client: c2, store, clock, log: () => {} });
+  assert.equal(r2.state, 'expired');
+  await clock.advance(5 * 60 * 1000);
+  // A 304 after the expiry must resolve to expired (the persisted uid was
+  // invalidated to 0), not valid from a stale value.
+  const transport3 = createFixtureTransport({ [URL]: { status: 304, fixture: 'http/classifieds-page.html' } });
+  const { client: c3 } = makeAcquisition({ transport: transport3 });
+  const r3 = await runClassifiedsPoll({ client: c3, store, clock, log: () => {} });
+  try {
+    assert.equal(r3.state, 'expired');
+    assert.equal(r3.latched, false);
+  } finally {
+    close();
+  }
+});
+
+test('Minor 2: a 304 on a cold store (no last uid known) resolves to unchanged, not expired', async () => {
+  const { result } = await run({ [URL]: { status: 304, fixture: 'http/classifieds-page.html' } });
+  // The round-2 bug resolved a cold-store 304 to expired (it parsed the
+  // missing setting as 0); it must be unchanged so the caller keeps its
+  // previous state.
+  assert.equal(result.state, 'unchanged');
+  assert.equal(result.alert, false);
+  assert.equal(result.latched, false);
+});

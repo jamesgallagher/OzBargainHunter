@@ -90,23 +90,33 @@ test('a null lastSuccessAt (never succeeded) is due immediately', () => {
 // Review round-1 required test: the retained failure body is truncated at the
 // byte boundary (design 3.7) so a sustained failure mode cannot grow the
 // `failures` table without bound.
-test('a failure body larger than the cap is truncated to the byte cap (8192) without splitting a codepoint', () => {
+test('a failure body larger than the cap is truncated at the byte cap (8192) without splitting a codepoint', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ozb-trunc-'));
   const clock = fixedClock('2026-09-19T07:30:00Z');
   const store = openStore({ path: join(dir, 'test.db'), clock });
   try {
-    // A body well over the cap, ending in a multi-byte UTF-8 sequence so a
-    // naive character-slice would split a codepoint.
-    const big = 'x'.repeat(20000) + 'ééé';
+    // A body whose byte 8192 lands *inside* a 3-byte UTF-8 sequence: 8190
+    // ASCII 'x' (bytes 0-8189) then one '中' (bytes 8190-8192, E4 B8 AD).
+    // Total 8193 bytes, so the truncation path fires. A naive
+    // subarray(0, 8192).toString() would decode the dangling partial
+    // sequence (E4 B8) as U+FFFD; the fix must trim it back to a valid
+    // UTF-8 prefix.
+    const big = 'x'.repeat(8190) + '中';
     store.insertFailure({ failed_at: '2026-09-19T07:30:00Z', response_class: 'transient', body: big });
     const row = store.getFailures()[0];
-    // Truncated to exactly the byte cap.
-    assert.equal(Buffer.byteLength(row.body, 'utf8'), 8192);
+    // Truncated to at most the byte cap (the trailing codepoint is dropped,
+    // so the result is 8190 bytes, not 8192).
+    assert.ok(Buffer.byteLength(row.body, 'utf8') <= 8192);
     // The retained body is a prefix of the original (no reordering).
-    assert.ok(row.body.startsWith('x'.repeat(8190)));
-    // A multi-byte codepoint is never split mid-sequence: the stored body
-    // must be valid UTF-8 (it round-trips through Buffer without replacement).
+    assert.ok(row.body.startsWith('x'.repeat(8180)));
+    // A multi-byte codepoint is never split mid-sequence: no U+FFFD is
+    // introduced, and the stored body is valid UTF-8 (round-trips through
+    // Buffer without replacement).
+    assert.ok(!row.body.includes('\uFFFD'));
     assert.equal(Buffer.from(row.body, 'utf8').toString('utf8'), row.body);
+    // The straddling '中' was dropped whole, not half-decoded: the body is
+    // exactly the 8190 ASCII prefix.
+    assert.equal(row.body, 'x'.repeat(8190));
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

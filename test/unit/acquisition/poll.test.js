@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDealPoll } from '../../../lib/acquire/poll.js';
+import { deadManState } from '../../../lib/acquire/deadman.js';
 import { createFixtureTransport } from '../../support/fixtureTransport.js';
 import { openStore } from '../../../lib/store/index.js';
 import { createOzbClient } from '../../../lib/http/client.js';
@@ -411,6 +412,172 @@ test('a loopback config base changes the requested URL list (the config seam is 
     // The production base must NOT appear in the requested URLs.
     assert.ok(!urls.some((u) => u.includes('ozbargain.com.au')), 'a loopback-configured poll must not call the production site');
     assertNoPage2(transport);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Review round-2 required tests ---
+
+test('C1: a broken deals feed (500/500) with a front-feed 304 does not launder the cycle — the counter accumulates, last_success_at is not advanced, and the dead-man fires', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-c1-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // A successful baseline poll establishes last_success_at.
+  await runDealPoll({ client: makeClient(createFixtureTransport(P1), clock, store), store, clock, log: () => {} });
+  const baseline = store.getPollState().last_success_at;
+  assert.ok(baseline, 'baseline last_success_at should be set');
+  // Three failing cycles: the deals feed is down (500/500) and the front feed
+  // 304s (nothing changed). A front-feed 304 must NOT certify the poll
+  // healthy: the counter accumulates and last_success_at is preserved.
+  const failCycle = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+  };
+  let lastResult;
+  for (let i = 0; i < 3; i += 1) {
+    await clock.advance(5 * 60 * 1000);
+    lastResult = await runDealPoll({ client: makeClient(createFixtureTransport(failCycle), clock, store), store, clock, log: () => {} });
+  }
+  try {
+    const state = store.getPollState();
+    // The counter accumulates across cycles from the stored value: 3 cycles x
+    // 2 failures = 6, not reset by the front-feed 304.
+    assert.equal(state.consecutive_failures, 6);
+    // The backoff grows as a real delay (2^6).
+    assert.equal(state.backoff_seconds, 64);
+    // last_success_at is NOT advanced by the front-feed 304 (no deals feed
+    // was reached): it is preserved from the baseline. This is what lets the
+    // dead-man's switch and /healthz fire.
+    assert.equal(state.last_success_at, baseline);
+    // The front feed 304 still reports the front page as available (round-1
+    // behaviour, kept).
+    assert.equal(lastResult.frontPageAvailable, true);
+    assert.equal(lastResult.failures, 2);
+    // The dead-man's switch is due 30 minutes after the (preserved) last
+    // success, and not yet due at 29.
+    const dueNow = new Date(Date.parse(baseline) + 31 * 60 * 1000).toISOString();
+    assert.equal(deadManState({ lastSuccessAt: state.last_success_at, now: dueNow, lastNotificationAt: null }).due, true);
+    const notDueNow = new Date(Date.parse(baseline) + 29 * 60 * 1000).toISOString();
+    assert.equal(deadManState({ lastSuccessAt: state.last_success_at, now: notDueNow, lastNotificationAt: null }).due, false);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('C1: the counter is derived from the cycle totals, not the last URL (order-independent)', async () => {
+  // Ordering A: 500, 500, 304. Ordering B: 304, 500, 500. Both have exactly
+  // two failures, so both must store the same counter and backoff (the
+  // round-2 bug stored 0/0 for A and 2/4 for B, depending on the last URL).
+  const runOne = async (routes) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-c1o-'));
+    const clock = fixedClock(POLL_1_AT);
+    const store = openStore({ path: join(dir, 'test.db'), clock });
+    const client = makeClient(createFixtureTransport(routes), clock, store);
+    await runDealPoll({ client, store, clock, log: () => {} });
+    const s = store.getPollState();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+    return s;
+  };
+  const sa = await runOne({
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+  });
+  const sb = await runOne({
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 304, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/feed': { status: 500, body: 'boom' },
+  });
+  // Both orderings store the same counter (2) and backoff (2^2 = 4), even
+  // though their last response class differs (not_modified vs transient).
+  assert.equal(sa.consecutive_failures, 2);
+  assert.equal(sa.backoff_seconds, 4);
+  assert.equal(sb.consecutive_failures, 2);
+  assert.equal(sb.backoff_seconds, 4);
+});
+
+test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bounded, getPollState readable)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-c2-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // A stub client that fails every request with a transport error (all three
+  // URLs, so each cycle records 3 failures). It does not advance the clock
+  // (the real client's own backoff would overflow a fixed clock over 60
+  // failures), so this isolates the poll.js/store clamp.
+  const stubClient = { blocked: false, async request() { throw new Error('transport down'); } };
+  for (let i = 0; i < 20; i += 1) {
+    await clock.advance(5 * 60 * 1000);
+    await runDealPoll({ client: stubClient, store, clock, log: () => {} });
+    // getPollState must remain readable on every cycle: the round-2 bug
+    // stored 2^54 at the 18th cycle, after which getPollState threw a
+    // RangeError and wedged every later cycle at its first statement.
+    store.getPollState();
+  }
+  try {
+    const s = store.getPollState();
+    assert.equal(s.consecutive_failures, 60); // 20 cycles x 3 URLs
+    // The exponent is clamped, so the stored backoff stays a safe integer
+    // (2 * 2^11 = 4096) and never leaves the safe-integer range.
+    assert.ok(Number.isSafeInteger(s.backoff_seconds), `backoff_seconds ${s.backoff_seconds} is not a safe integer`);
+    assert.ok(s.backoff_seconds <= 4096, `backoff_seconds ${s.backoff_seconds} exceeds the clamp`);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Minor 3: a latched client (BlockedError) is recorded as cloudflare_block, not transport_error', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-m3-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // A client already latched by a Cloudflare block: the first request throws
+  // BlockedError and the cycle breaks. The row must be classed
+  // cloudflare_block, not transport_error (round-2 Minor 3).
+  const latchedClient = {
+    blocked: true,
+    async request() {
+      const err = new Error('Cloudflare block: client latched off');
+      err.name = 'BlockedError';
+      throw err;
+    },
+  };
+  await runDealPoll({ client: latchedClient, store, clock, log: () => {} });
+  try {
+    const failures = store.getFailures();
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].response_class, 'cloudflare_block');
+    assert.equal(store.getPollState().last_response_class, 'cloudflare_block');
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Minor 3: a DeniedPathError fails loudly (rethrows) rather than being recorded as a transient failure', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-m3b-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // A configured URL that points at a deny-listed path: the client throws
+  // DeniedPathError. It is a configuration error that fails on every cycle,
+  // so it must fail loudly (rethrow), not be recorded as a transient failure
+  // and retried forever (round-2 Minor 3).
+  const denyClient = {
+    blocked: false,
+    async request() {
+      const err = new Error('Denied path: https://www.ozbargain.com.au/api/x');
+      err.name = 'DeniedPathError';
+      throw err;
+    },
+  };
+  try {
+    await assert.rejects(runDealPoll({ client: denyClient, store, clock, log: () => {} }), /Denied path/);
+    // No transient failure row was recorded for the deny-listed path.
+    assert.equal(store.getFailures().length, 0);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
