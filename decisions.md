@@ -43,6 +43,9 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D24 — Threshold values.** The starting X for each threshold rule. **OPEN** — the old velocity numbers no longer apply directly.
 - **D44 — Threshold windows.** Optional. If set, capped at 24 hours and **rejected at entry beyond that** rather than silently never firing. Unset means "reached X votes while visible". **Decaying deals are not alerted on**: a deal that has left pages 0–1 is decaying by definition, because OzBargain ranks by voting. **DECIDED**
 - **D45 — Expired deals never alert.** Including a deal that becomes expired after it was first seen. Expiry is evaluated before an alert is emitted. **DECIDED**
+- **D46 — Comment counts are stored from both feeds.** Observations are written for every item seen in any feed, including the front-page feed. Stored now because no other rule consumes them yet but a counter never recorded cannot be recovered. **DECIDED**
+- **D47 — No spidering, no link following.** The front-page feed, the deals feed and the classifieds listing page are the only surfaces read. No node pages, no comments, no profiles, no HTML home page, no crawling. **DECIDED**
+- **D48 — Classifieds eligibility.** Only listings of type *Selling* may alert. *Wanted* listings and pinned listings never alert. **DECIDED**
 - **D25 — Per-rule cooldown.** Default 24 hours, configurable per rule. **SPECIFIED**
 - **D26 — Cold-start seeding.** First run against an empty database seeds silently and sends zero notifications. **SPECIFIED** (D15 in `rationale.md`)
 - **D27 — Dead-man's switch.** Alert if no poll succeeds for 30 minutes; repeat at a decaying rate. **SPECIFIED** (D16 in `rationale.md`)

@@ -26,6 +26,7 @@ OzBargain Hunter watches `ozbargain.com.au` and notifies its single user when a 
 ### 1.3 Out of scope — non-goals
 
 - **No HTML scraping of deal pages.** All deal data comes from RSS. This is a hard boundary, not a preference.
+- **No link following and no spidering.** The application reads only the three surfaces it polls (3.1). It never follows a link out of any of them.
 - **No use of OzBargain's site search.** `/search/` is denied by `robots.txt`.
 - **No bypass tooling.** No Cloudflare-solving libraries, proxies or User-Agent rotation.
 - **No public signup, no multi-user, no roles.** Exactly one user, identified by Cloudflare Access.
@@ -90,6 +91,8 @@ The feed does technically paginate to about 4 days across 11 pages. **That depth
 **Classifieds, polled on a slower timer, authenticated:**
 
 - `https://www.ozbargain.com.au/classified`
+
+**These three surfaces are the only things the application reads.** It never follows a link from any feed or from the classifieds listing page, never requests a deal's node page, never fetches a user profile, a comment page, or the site's HTML home page, and never performs any form of crawling. **Every decision the application makes is derived from the front-page feed, the deals feed and the classifieds listing page, and nothing else.**
 
 ### 3.2 Polling
 
@@ -180,6 +183,8 @@ Fields: node ID, title, URL, author, posted timestamp, categories (including bra
 **`observations`** — one row per deal per poll.
 Fields: deal ID, `votes-pos`, `votes-neg`, `comment-count`, `click-count`, observed timestamp. This history is the only reason any trend or threshold calculation is possible.
 
+**Observations are recorded for every item seen in any feed, including the front-page feed**, and the comment count is captured from both feeds. Comment counts are stored now although no rule consumes them yet: the deferred "highly commented on" rule (5.5) will need history, and a counter that was never recorded cannot be recovered retrospectively.
+
 **`rules`** — one row per rule.
 Fields: ID, type, parameters, enabled/muted/snoozed state, surfaces it applies to (deals / classifieds / both), per-rule cooldown, optional pinned slug, creation and modification timestamps.
 
@@ -218,6 +223,8 @@ Fields: URL, last `ETag`, last `Last-Modified`.
 Matching runs over the deal title, description text and structured category labels, and over the classifieds title, category tag and type badge.
 
 **Items from the front-page feed are matched as well as items from the deals feed.** A deal that reaches the front page without ever appearing on deals pages 0–1 is therefore still matched, rather than silently ignored. (3.1)
+
+**On classifieds, only listings of type "Selling" are eligible.** Listings marked *Wanted* — someone seeking an item rather than offering one — and any pinned listing are never alerted on, whatever they match. A wanted advert is not an offer.
 
 Normalisation: lower-cased, punctuation stripped, whitespace runs collapsed, so that `AMD R9700` and `amd  r9700` behave identically.
 
@@ -553,7 +560,7 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O15. Logo hosting**, since a private repository rules out `raw.githubusercontent.com`. Options: one unauthenticated icon route, or hosting the asset elsewhere.
 - **O16. Registry retention policy** — bounded growth of per-commit tags.
 - **O17. Dependency and image scanning** in CI.
-- **O18. Classifieds markup capture** — the listing page's HTML has not been captured, so no parser can yet be written against it.
+- **O18. Classifieds markup capture** — the listing page's HTML has not been captured, so no parser can yet be written against it. The parser must extract, at minimum: the listing type (to restrict alerts to *Selling*), whether the listing is pinned, the bracketed category tag, the title, the poster and the timestamp.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
 - **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
 
