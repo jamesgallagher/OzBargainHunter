@@ -100,17 +100,26 @@
  * M6-M10 were also added as regression fixtures in the positive-control test
  * below, so the detector's coverage of each shape is proven in-tree.
  *
- * Known limitation (recorded, not a defect): `FORBIDDEN_TOKENS` is matched as
- * a raw substring against every reachable module. A comment or string literal
- * that merely mentions `setInterval` in a `lib/**` file would trip the guard
- * (a false positive, not a false negative — it makes the guard stricter, never
- * looser). The same brittleness exists for `app/**` from card 1.
+ * Known limitation (recorded, not a defect): `FORBIDDEN_IMPORTS` and
+ * `FORBIDDEN_TOKENS` are matched as raw substrings against every reachable
+ * module, *including comments and string literals*. A comment or string that
+ * merely mentions `setInterval` (or `lib/acquire/`, `lib/scheduler`, `worker/`)
+ * in a `lib/**` file would trip the guard. That is a false positive, not a
+ * false negative — it makes the guard stricter, never looser. Measured: a
+ * doc comment in a reachable module that names `lib/acquire/poll.js`, or that
+ * contains a self-scheduling arrow, fails the guard (rc=1). The same
+ * brittleness exists for `app/**` from card 1. The loop detector's own
+ * scanner skips strings/comments for *its* brace matching, but the
+ * `FORBIDDEN_TOKENS` substring check does not.
  *
- * The loop detector is a hand-rolled source scanner, so it covers the shapes
- * above and a *recorded set of blind spots* it does not. These are not
- * false negatives of the guard's stated contract (they are polling-loop
- * shapes the detector does not reason about), and each is recorded here so a
- * later card can close it deliberately rather than by accident:
+ * The loop detector is a hand-rolled source scanner that keys on the *literal*
+ * `setTimeout` / `setImmediate` call text (a `timer(...)` call where `timer`
+ * is the literal identifier, with the scheduling function's own name as the
+ * first argument). It covers the shapes above and a *recorded set of blind
+ * spots* it does not. These are not false negatives of the guard's stated
+ * contract (they are polling-loop shapes the detector does not reason about),
+ * and each is recorded here so a later card can close it deliberately rather
+ * than by accident:
  *   - object-literal method: `const o = { tick() { setTimeout(o.tick, 1000); } };`
  *     — `callbackReferences` tests `this.NAME` / `NAME.bind`, not `o.NAME`.
  *   - alias indirection: `const s = () => { setTimeout(ref, 1000); }; const ref = s;`
@@ -124,16 +133,45 @@
  *     outside requirement 2's `setTimeout`/`setImmediate` naming; it is scope,
  *     not a weakening — no prior revision of this file ever covered it.)
  *   - `queueMicrotask(spin)` recursion — no timer token at all.
+ *   - **Timer reached through a local alias / parameter binding** (t_b202bdeb
+ *     item 1) — the detector keys on the literal `setTimeout` / `setImmediate`
+ *     call text, so a timer reached through any indirection is not seen. Each
+ *     shape below is measured green (passes the guard) and is recorded here:
+ *     - `const timer = setTimeout;` then `pollLoop() { timer(pollLoop, 1000); }`
+ *     - `const { setTimeout: later } = globalThis;` then `later(pollLoop, 1000)`
+ *     - `import { setTimeout as schedule } from 'node:timers';` then `schedule(...)`
+ *     - a defaulted parameter `startPoll({ timer = setTimeout } = {})` — the DI
+ *       idiom `lib/scheduler.js` itself uses
+ *     - `setTimeout.apply(null, [fn, ms])` and `Reflect.apply(setTimeout, null, [...])`
+ *   - **`setInterval` via a computed key** (t_b202bdeb item 1): `const KEY =
+ *     'set' + 'Interval'; globalThis[KEY](() => {}, 1000);` — the `setInterval`
+ *     substring rule never sees the token because it is built by string
+ *     concatenation, so neither the token check nor the loop detector fires.
+ *   - **Expression-bodied outer + braced inner callback** (t_b202bdeb item 2):
+ *     `const poll = () => setTimeout(() => { poll() }, 1000);` — `assignExprRe`'s
+ *     body stops at the inner `{`, so `timerFirstArgs` sees an unbalanced call.
+ *     The braced-outer form and the concise-inner form are each caught, but this
+ *     conjunction is not.
+ *   - **`process.nextTick` recursion** (t_b202bdeb item 6):
+ *     `function tick() { process.nextTick(tick); }` — `nextTick` is not a
+ *     `setTimeout` / `setImmediate` token, so the loop detector does not reason
+ *     about it.
+ *   - **Cross-module loop** (t_b202bdeb item 6): a `setTimeout` in one reachable
+ *     module whose callback calls a function defined in *another* reachable module
+ *     (the timer in module A, the recursive call in module B). The detector
+ *     reasons per-module, so a self-re-schedule split across two modules is not
+ *     seen by either.
  * The header's "that is its entire purpose" therefore applies to the three
- * holes and the `setTimeout`/`setImmediate` shapes above, not to the blind
+ * holes and the `setTimeout` / `setImmediate` shapes above, not to the blind
  * spots in this list.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // `fileURLToPath(new URL('../..', ...))` returns a path ending in a separator
 // on POSIX (e.g. `.../OzBargainHunter/`), so `file.slice(root.length + 1)`
@@ -198,13 +236,26 @@ test('no file in the Next.js server tree imports the acquisition, scheduler, or 
  * CommonJS `require('...')`, and `export ... from '...'` re-exports. Only
  * relative specifiers are returned — bare specifiers (npm packages, `node:`
  * builtins) are not part of this repo's server tree.
+ *
+ * The dynamic-import pattern tolerates a block comment between the `(` and
+ * the specifier (and after it), so a dynamic import whose argument list
+ * carries a webpack chunk-name block comment is followed. The comment is
+ * consumed before the specifier's opening quote, so a quote inside the
+ * comment (the webpack chunk name) is not mistaken for the specifier
+ * delimiter. A line comment (`//`) is not tolerated here because it would
+ * break the single-expression match; a dynamic import is not written with
+ * a `//` comment inside its argument list in this repo.
  */
 function importSpecifiers(source) {
   const specs = [];
+  // `(?:\/\*[\s\S]*?\*\/\s*)*` = zero or more block comments (with
+  // surrounding whitespace), so a webpack chunk-name comment does not hide the
+  // specifier.
+  const comment = '(?:\\/\\*[\\s\\S]*?\\*\\/\\s*)*';
   const patterns = [
     /\bfrom\s+['"]([^'"]+)['"]/g,
     /\bimport\s+['"]([^'"]+)['"]/g,
-    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    new RegExp(`\\bimport\\s*\\(\\s*${comment}['"]([^'"]+)['"]\\s*${comment}\\)`, 'g'),
     /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
   ];
   for (const re of patterns) {
@@ -224,10 +275,27 @@ function importSpecifiers(source) {
  * absolute path, trying the plain path, with `.js` appended, and as a
  * directory with an `index.js`. Returns null when the target does not exist
  * (e.g. a path that only resolves at bundle time).
+ *
+ * The candidate list is widened (t_b202bdeb item 3) to also try the
+ * extensionless `.mjs` / `.jsx` / `.ts` variants and a directory's
+ * `index.mjs`, so a dynamic import of an extensionless or non-`.js` target
+ * (e.g. `import('../../lib/web/x.mjs')` or `import('../../lib/web/x')`
+ * resolving to `x.mjs`) is followed. A specifier that still does not resolve
+ * to an existing file (e.g. a path that only resolves at bundle time, or a
+ * bare specifier) returns null and is not followed — that is the honest
+ * residual: the guard cannot reason about a module it cannot locate.
  */
 function resolveImport(importerFile, spec) {
   const base = resolve(dirname(importerFile), spec);
-  const candidates = [base, `${base}.js`, join(base, 'index.js')];
+  const candidates = [
+    base,
+    `${base}.js`,
+    `${base}.mjs`,
+    `${base}.jsx`,
+    `${base}.ts`,
+    join(base, 'index.js'),
+    join(base, 'index.mjs'),
+  ];
   for (const candidate of candidates) {
     if (existsSync(candidate) && statSync(candidate).isFile()) {
       return candidate;
@@ -242,18 +310,18 @@ function resolveImport(importerFile, spec) {
  * present, then follow relative imports. Returns `{ files }` where `files` is
  * a map of reached absolute path -> the seed that first reached it.
  */
-function walkServerTree() {
+function walkServerTree(base = root) {
   const seeds = [];
-  const appDir = join(root, 'app');
+  const appDir = join(base, 'app');
   if (existsSync(appDir) && statSync(appDir).isDirectory()) {
     seeds.push(...listFiles(appDir));
   }
-  const middlewarePath = join(root, 'middleware.js');
+  const middlewarePath = join(base, 'middleware.js');
   if (existsSync(middlewarePath) && statSync(middlewarePath).isFile()) {
     seeds.push(middlewarePath);
   }
   for (const name of ['instrumentation.js', 'instrumentation.mjs']) {
-    const p = join(root, name);
+    const p = join(base, name);
     if (existsSync(p) && statSync(p).isFile()) {
       seeds.push(p);
     }
@@ -582,6 +650,32 @@ test('setTimeout/setImmediate loop detector flags the polling shapes and not one
 });
 
 test('no module reachable from the server tree is acquisition, scheduler, or worker code', () => {
+  // The forbidden lists are the guard's contract — they must be non-empty and
+  // must be the very lists the loops below apply (t_b202bdeb item 4: pin the
+  // token/import layers so deleting them cannot leave 5/5 green).
+  assert.ok(FORBIDDEN_IMPORTS.length > 0, 'FORBIDDEN_IMPORTS must be non-empty');
+  assert.ok(FORBIDDEN_TOKENS.length > 0, 'FORBIDDEN_TOKENS must be non-empty');
+
+  // Pin the import grammar (t_b202bdeb item 4): `importSpecifiers` must
+  // extract each of its four forms — `import ... from`, bare `import`,
+  // dynamic `import(...)` (including the commented form), and `require(...)`
+  // — so deleting a pattern cannot leave 5/5 green. `export ... from` is
+  // matched by the `from` form.
+  {
+    const grammarSrc = [
+      "import { x } from './a.js';",
+      "import './b.js';",
+      "const c = await import('./c.js');",
+      "const d = await import(/* webpackChunkName: \"x\" */ './d.js');",
+      "const e = require('./e.js');",
+      "export { f } from './f.js';",
+    ].join('\n');
+    const specs = importSpecifiers(grammarSrc);
+    for (const expected of ['./a.js', './b.js', './c.js', './d.js', './e.js', './f.js']) {
+      assert.ok(specs.includes(expected), `importSpecifiers must extract ${expected} (one of its four forms)`);
+    }
+  }
+
   const { files } = walkServerTree();
   assert.ok(files.size > 0, 'expected at least one reachable server-tree module');
 
@@ -597,21 +691,11 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
     }
   }
 
-  // No reachable module may import forbidden code.
-  for (const [file, seed] of files) {
-    const source = readFileSync(file, 'utf8');
-    for (const spec of importSpecifiers(source)) {
-      const resolved = resolveImport(file, spec);
-      if (resolved === null) continue;
-      const rel = resolved.slice(root.length + 1).replace(/\\/g, '/');
-      for (const forbidden of FORBIDDEN_IMPORTS) {
-        assert.ok(
-          !rel.startsWith(forbidden),
-          `${file} (reachable from ${seed}) must not import ${rel} (polling lives in the worker, not the server tree)`,
-        );
-      }
-    }
-  }
+  // (The "no reachable module may import forbidden code" assertion that
+  // followed this loop is unreachable and was removed (t_b202bdeb item 5):
+  // any reachable module that imports a forbidden path puts that path into
+  // the walk map, so the loop above fails on it first. Keeping both would
+  // mean the second could never be the assertion that fires.)
 
   // No reachable module may own a setInterval — including lib/ helpers and
   // instrumentation.js, which the pre-widening guard did not scan.
@@ -622,6 +706,101 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
         !source.includes(token),
         `${file} is reachable from ${seed} and must not contain ${token} (no polling in the server tree)`,
       );
+    }
+  }
+
+  // Pin the transitive closure (t_b202bdeb item 4): `lib/store/index.js` is
+  // a depth-2 module reached only through the walk's `queue.push(target)` —
+  // `app/alerts/page.js` statically imports `lib/web/db.js` (depth 1), and
+  // `lib/web/db.js` in turn imports `lib/store/index.js`. Deleting the
+  // closure leaves `lib/store/index.js` out of the map, so this fails.
+  const storeIndex = join(root, 'lib', 'store', 'index.js');
+  assert.ok(files.has(storeIndex), 'the walk must reach the depth-2 module lib/store/index.js (transitive closure)');
+  const webDb = join(root, 'lib', 'web', 'db.js');
+  assert.ok(files.has(webDb), 'the walk must reach the depth-1 module lib/web/db.js');
+  assert.notStrictEqual(files.get(storeIndex), storeIndex, 'lib/store/index.js must be reached transitively (its seed is not itself)');
+
+  // Synthetic-tree pins: the real tree has no `setInterval` in any lib/ module
+  // and no root `instrumentation.js`, so the token block, the instrumentation
+  // seed, and the dynamic-import pattern are each vacuous on the real tree
+  // (deleting any of them leaves 5/5 green — the measured residual). Each pin
+  // below builds a minimal tree where the only path to the forbidden token
+  // runs through the layer being pinned, so deleting that layer turns the
+  // suite red (t_b202bdeb item 4).
+
+  // Pin 1 — the token block: a lib module reached *statically* owns
+  // `setInterval`; only the token loop can see it. Positive control: the
+  // token loop must flag the fixture, so deleting the token block (or
+  // `FORBIDDEN_TOKENS`) turns the suite red.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-token-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib'));
+      writeFileSync(join(base, 'app', 'index.js'), 'import { a } from "../lib/a.js";\n');
+      writeFileSync(join(base, 'lib', 'a.js'), 'export function a() { setInterval(() => {}, 1000); }\n');
+      const t = walkServerTree(base).files;
+      assert.ok(t.size > 0, 'synthetic token tree must walk');
+      const target = join(base, 'lib', 'a.js');
+      assert.ok(t.has(target), 'the statically-reached lib module must be in the walked set');
+      const source = readFileSync(target, 'utf8');
+      let flagged = false;
+      for (const token of FORBIDDEN_TOKENS) {
+        if (source.includes(token)) flagged = true;
+      }
+      assert.ok(flagged, 'the token block must flag a statically-reached lib module that owns setInterval (positive control)');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  // Pin 2 — the instrumentation seed: a root `instrumentation.js` (the only
+  // seed) owns `setInterval`; only the seed loop puts it into the map.
+  // Positive control: the file must be in the walked set (the seed layer
+  // seeds it directly, not through an import) and the token block must
+  // flag it, so deleting the seed or the token block turns the suite red.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-instr-'));
+    try {
+      writeFileSync(join(base, 'instrumentation.js'), 'setInterval(() => {}, 1000);\n');
+      const t = walkServerTree(base).files;
+      assert.ok(t.size > 0, 'synthetic instrumentation tree must walk');
+      const target = join(base, 'instrumentation.js');
+      assert.ok(t.has(target), 'the root instrumentation.js must be seeded into the walked set (positive control for the seed layer)');
+      const source = readFileSync(target, 'utf8');
+      let flagged = false;
+      for (const token of FORBIDDEN_TOKENS) {
+        if (source.includes(token)) flagged = true;
+      }
+      assert.ok(flagged, 'the token block must flag the seeded instrumentation.js that owns setInterval (positive control)');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  // Pin 3 — the dynamic-import pattern: the lib module is reached *only*
+  // through a commented `import(...)`; only the dynamic-import pattern
+  // follows it. Positive control: the module must be in the walked set
+  // (deleting the pattern leaves it out) and the token block must flag it.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-dynimp-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib'));
+      writeFileSync(join(base, 'app', 'index.js'), 'const m = await import(/* webpackChunkName: "x" */ "../lib/a.js");\n');
+      writeFileSync(join(base, 'lib', 'a.js'), 'export function a() { setInterval(() => {}, 1000); }\n');
+      const t = walkServerTree(base).files;
+      assert.ok(t.size > 0, 'synthetic dynamic-import tree must walk');
+      const target = join(base, 'lib', 'a.js');
+      assert.ok(t.has(target), 'the dynamically-reached lib module must be in the walked set (positive control for the dynamic-import pattern)');
+      const source = readFileSync(target, 'utf8');
+      let flagged = false;
+      for (const token of FORBIDDEN_TOKENS) {
+        if (source.includes(token)) flagged = true;
+      }
+      assert.ok(flagged, 'the token block must flag a dynamically-reached lib module that owns setInterval (positive control)');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   }
 });
@@ -638,6 +817,33 @@ test('no reachable server-tree module runs a setTimeout/setImmediate self-re-sch
       !hasSelfReschedulingLoop(source, 'setImmediate'),
       `${file} is reachable from ${seed} and must not run a setImmediate self-re-scheduling loop (a self-re-scheduling timer is a polling loop with the token rotated)`,
     );
+  }
+
+  // Pin the tree-level `setImmediate` assert (t_b202bdeb item 4): no reachable
+  // module in the real tree runs a `setImmediate` self-re-scheduling loop, so
+  // deleting the `setImmediate` assert leaves 5/5 green. A synthetic tree
+  // where a lib module is reached statically and runs the loop is a positive
+  // control: the detector must flag it, so deleting the assert (or the
+  // detector's `setImmediate` branch) turns the suite red.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-imm-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib'));
+      writeFileSync(join(base, 'app', 'index.js'), 'import { a } from "../lib/a.js";\n');
+      writeFileSync(join(base, 'lib', 'a.js'), 'export const spin = () => { setImmediate(spin); };\n');
+      const t = walkServerTree(base).files;
+      assert.ok(t.size > 0, 'synthetic setImmediate tree must walk');
+      const target = join(base, 'lib', 'a.js');
+      assert.ok(t.has(target), 'the statically-reached lib module must be in the walked set');
+      const source = readFileSync(target, 'utf8');
+      assert.ok(
+        hasSelfReschedulingLoop(source, 'setImmediate'),
+        'the detector must flag a statically-reached lib module running a setImmediate self-re-scheduling loop (positive control)',
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   }
 });
 
