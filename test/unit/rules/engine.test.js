@@ -17,6 +17,7 @@ import { validateThresholdRule, reachedThreshold, MAX_WINDOW_MS } from '../../..
 import { emailProvider } from '../../../lib/notify/email.js';
 import { matrixProvider } from '../../../lib/notify/matrix.js';
 import { ntfyProvider } from '../../../lib/notify/ntfy.js';
+import { evaluateFreebies, FREEBIE_SETTING_KEY } from '../../../lib/notify/freebie.js';
 import { compose, groupAndCompose } from '../../../lib/notify/compose.js';
 import { fanout } from '../../../lib/notify/fanout.js';
 import { sendDeadman } from '../../../lib/notify/deadman.js';
@@ -506,6 +507,44 @@ describe('engine: muted rules', () => {
   });
 });
 
+describe('engine: snoozed rules (X11 lapse)', () => {
+  it('a snoozed rule whose snooze_until instant has passed lapses: re-enables, clears the instant, and alerts', () => {
+    // M2: the engine lapses a snooze when the `snooze_until_<id>` instant
+    // passes — it re-enables the rule (state='enabled'), clears the instant,
+    // and the rule resumes as if it were never snoozed.
+    const store = makeStore();
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'torbox' }, surfaces: 'deals', state: 'snoozed' });
+    // The snooze instant is in the past (before poll 1), so the snooze lapses.
+    store.setSetting('snooze_until_1', '2026-09-19T06:00:00Z');
+    const out = evaluatePoll({
+      feeds: [{ surface: 'deals', records: dealsPage0 }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    assert.equal(store.getRule(1).state, 'enabled', 'the snooze lapsed: the rule is re-enabled');
+    assert.equal(store.getSetting('snooze_until_1'), null, 'the snooze instant is cleared');
+    // The rule resumed as if it were never snoozed: the matching record alerts.
+    assert.equal(out.alerts.filter((a) => a.node_id === 975666).length, 1, 'the lapsed rule alerts the matching record');
+  });
+
+  it('a snoozed rule whose snooze_until instant has not yet passed suppresses (writes a ledger row, sends nothing)', () => {
+    // M2: a snooze that has not yet passed suppresses, like a muted rule — it
+    // keeps evaluating and writing a ledger entry, sends nothing, and stays
+    // snoozed (the instant is not cleared).
+    const store = makeStore();
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'torbox' }, surfaces: 'deals', state: 'snoozed' });
+    // The snooze instant is in the future (after poll 1), so the snooze holds.
+    store.setSetting('snooze_until_1', '2026-09-20T07:30:00Z');
+    const out = evaluatePoll({
+      feeds: [{ surface: 'deals', records: dealsPage0 }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    assert.equal(store.getRule(1).state, 'snoozed', 'the rule is still snoozed (the instant has not passed)');
+    assert.equal(store.getSetting('snooze_until_1'), '2026-09-20T07:30:00Z', 'the snooze instant is not cleared');
+    assert.equal(out.alerts.filter((a) => a.node_id === 975666).length, 0, 'nothing sent while snoozed');
+    assert.ok(store.hasLedger(975666, 1), 'the ledger row is written (the rule keeps evaluating)');
+  });
+});
+
 describe('engine: classifieds eligibility', () => {
   it('a broad match rule alerts the matching sell listings, never want/swap/pinned', () => {
     const store = makeStore();
@@ -604,6 +643,25 @@ describe('engine: freebies', () => {
     }
     const nodeIds = new Set(freebieN.flatMap((n) => n.nodeIds));
     assert.deepEqual([...nodeIds].sort((a, b) => a - b), [975710, 975712], 'both listings are covered across the two notifications');
+  });
+
+  it('M-m5: the freebie enable contract is pinned to "1"/"0" — "on" is NOT treated as enabled', () => {
+    // M-m5: the toggle writes '1' (on) / '0' (off) — the old 'on' value was
+    // changed to '1'. This test pins the contract so a future regression that
+    // re-introduces 'on' (or any other truthy string) is caught: only the
+    // exact string '1' enables, '0' disables, and an absent setting defaults
+    // on. 'on' must NOT enable.
+    const base = C.get(975712);
+    const freebie = { ...base, type: 'free' };
+    const runWith = (setting) => {
+      const store = makeStore();
+      if (setting !== undefined) store.setSetting(FREEBIE_SETTING_KEY, setting);
+      return evaluateFreebies({ records: [freebie], store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT });
+    };
+    assert.equal(runWith('1').alerts.length, 1, "'1' enables the freebie");
+    assert.equal(runWith('0').alerts.length, 0, "'0' disables the freebie");
+    assert.equal(runWith(undefined).alerts.length, 1, 'an absent setting defaults on');
+    assert.equal(runWith('on').alerts.length, 0, "'on' is NOT treated as enabled (the old value)");
   });
 });
 

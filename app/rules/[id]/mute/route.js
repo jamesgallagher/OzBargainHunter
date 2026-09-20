@@ -131,8 +131,9 @@ export async function GET(request, { params }) {
  * @param {Promise<{ id: string }>} params
  */
 export async function POST(request, { params }) {
-  const { parseBody } = await import('../../../../lib/web/gate.js');
-  const body = await parseBody(request);
+  const { parseBodyOr400 } = await import('../../../../lib/web/gate.js');
+  const { body, error } = await parseBodyOr400(request);
+  if (error) return error;
   const auth = await requireAuthenticated(request, undefined, body);
   if (!auth.ok) return auth.response;
 

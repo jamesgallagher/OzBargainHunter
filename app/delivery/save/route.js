@@ -12,10 +12,11 @@
  * with the `/delivery` page in the build.
  */
 export async function POST(request) {
-  const { requireAuthenticated, parseBody } = await import('../../../lib/web/gate.js');
+  const { requireAuthenticated, parseBodyOr400 } = await import('../../../lib/web/gate.js');
   const { getStore } = await import('../../../lib/web/db.js');
 
-  const body = await parseBody(request);
+  const { body, error } = await parseBodyOr400(request);
+  if (error) return error;
   const gate = await requireAuthenticated(request, undefined, body);
   if (!gate.ok) return gate.response;
 

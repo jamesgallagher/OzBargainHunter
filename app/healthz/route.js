@@ -11,9 +11,26 @@
  */
 
 import { getStore } from '../../lib/web/db.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 /** How many poll intervals before a poll is "stale". 3 (design 3.7). */
 const STALE_INTERVALS = 3;
+
+/**
+ * Constant-time secret comparison (M-m2). `timingSafeEqual` throws when the
+ * buffers differ in length, so both values are first hashed to a fixed length
+ * (sha256) and the digests compared. This keeps the comparison in constant
+ * time with respect to the secret, instead of the old `!==` which leaks how
+ * many leading bytes match.
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function secretsEqual(a, b) {
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 /**
  * The healthz handler.
@@ -30,7 +47,7 @@ export async function GET(request) {
   // same.
   const secret = process.env.OZB_HEALTHCHECK_SECRET ?? '';
   const presented = request.headers.get('x-healthcheck-secret') ?? '';
-  if (!secret || presented !== secret) {
+  if (!secret || !secretsEqual(presented, secret)) {
     return new Response('unauthorized', { status: 401 });
   }
 

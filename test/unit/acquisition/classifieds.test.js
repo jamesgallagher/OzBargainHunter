@@ -146,3 +146,62 @@ test('a corrupt (non-numeric) classifieds_last_uid setting on a 304 resolves to 
     close();
   }
 });
+
+// --- Review round-2 M1: the screen-9 cookie setting has a consumer ---
+
+test('M1: the stored account cookie (screen 9) is sent on the classifieds request (writer → transport header)', async () => {
+  // M1: the screen-9 route writes `ozb_account_cookie`; this test proves the
+  // classifieds poll is the consumer — the stored cookie is sent on the request
+  // as a `Cookie` header, so a fresh cookie actually carries the session.
+  const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('ozb_account_cookie', 'session=abc123; uid=226301');
+  const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+  try {
+    assert.equal(result.state, 'valid');
+    // The transport received exactly one request; its options carry the
+    // `Cookie` header the client built from the stored cookie.
+    assert.equal(transport.requestLog.length, 1);
+    const headers = transport.requestLog[0].options.headers ?? {};
+    assert.equal(headers.cookie, 'session=abc123; uid=226301');
+  } finally {
+    close();
+  }
+});
+
+test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallback sent on the request', async () => {
+  // M1: when the screen-9 setting is absent, the env value is the fallback.
+  const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  const result = await runClassifiedsPoll({
+    client,
+    store,
+    clock,
+    config: { OZB_ACCOUNT_COOKIE: 'env-cookie=xyz' },
+    log: () => {},
+  });
+  try {
+    assert.equal(result.state, 'valid');
+    assert.equal(transport.requestLog.length, 1);
+    const headers = transport.requestLog[0].options.headers ?? {};
+    assert.equal(headers.cookie, 'env-cookie=xyz');
+  } finally {
+    close();
+  }
+});
+
+test('M1: with neither a stored cookie nor the env value, no Cookie header is sent', async () => {
+  // M1: with no cookie anywhere, the request is sent with no `Cookie` header
+  // (the anonymous path, as before the consumer existed).
+  const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+  try {
+    assert.equal(result.state, 'valid');
+    assert.equal(transport.requestLog.length, 1);
+    const headers = transport.requestLog[0].options.headers ?? {};
+    assert.equal(headers.cookie, undefined);
+  } finally {
+    close();
+  }
+});

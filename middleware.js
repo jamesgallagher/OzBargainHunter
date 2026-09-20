@@ -28,13 +28,18 @@
  *   authenticates with the container-local `OZB_HEALTHCHECK_SECRET` in a
  *   header. `/healthz` is therefore not an unauthenticated path.
  *
- * **Configuration is read statically** (X2). In the built edge runtime,
- * `process.env.X` (a static member read) is inlined by the build, but a dynamic
- * `env[name]` read of a default-parameter `env = process.env` is not — so the
- * production path reads each key as a direct `process.env.X` property. An
- * explicitly supplied `env` map (the test seam) is read dynamically, which is
- * fine because that path is only taken in tests, never in the built edge
- * runtime.
+ * **Configuration is read from `process.env` in the handler body** (C1, X2).
+ * Next.js invokes middleware as `middleware(request, event)` — the second
+ * argument is the `NextFetchEvent`, **not** an environment map. Reading that
+ * argument for config (the round-1 bug) bound the event object and made every
+ * key `undefined`, so every request 401'd. The fix: the exported handler takes
+ * only the `request` and reads `process.env` directly. In the built edge
+ * runtime and the standalone server, `process.env` is populated with the real
+ * values at request time (measured), so reading it directly works. The test
+ * seam is `readConfig(env = process.env)`, exported and tested directly: a test
+ * can pass an explicit env map to `readConfig` without touching the handler's
+ * signature, and a test calls `middleware(request, fakeEvent)` with a fake
+ * event to exercise the framework's own call shape.
  */
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -92,18 +97,19 @@ async function getVerifier(jwksUrl) {
 }
 
 /**
- * Read the middleware configuration. When `env` is supplied (the test seam) it
- * is read dynamically; otherwise each key is read as a **static** `process.env`
- * property so the edge build inlines the real values (X2).
- * @param {object} [env] the environment map (the test seam)
+ * Read the middleware configuration. The default is `process.env` (the
+ * production path, read in the handler body — C1). An explicitly supplied `env`
+ * map is the test seam: a test passes its own map here (or to
+ * `readConfig` directly) without touching the handler's signature.
+ * @param {object} [env] the environment map (defaults to `process.env`)
  * @returns {object}
  */
-function readConfig(env) {
-  const teamDomain = env ? String(env.CF_ACCESS_TEAM_DOMAIN ?? '') : String(process.env.CF_ACCESS_TEAM_DOMAIN ?? '');
-  const aud = env ? String(env.CF_ACCESS_AUD ?? '') : String(process.env.CF_ACCESS_AUD ?? '');
-  const jwksUrlOverride = env ? env.CF_JWKS_URL : process.env.CF_JWKS_URL;
-  const healthcheckSecret = env ? String(env.OZB_HEALTHCHECK_SECRET ?? '') : String(process.env.OZB_HEALTHCHECK_SECRET ?? '');
-  const iconRoutePublic = env ? String(env.OZB_ICON_ROUTE_PUBLIC ?? '') : String(process.env.OZB_ICON_ROUTE_PUBLIC ?? '');
+export function readConfig(env = process.env) {
+  const teamDomain = String(env.CF_ACCESS_TEAM_DOMAIN ?? '');
+  const aud = String(env.CF_ACCESS_AUD ?? '');
+  const jwksUrlOverride = env.CF_JWKS_URL;
+  const healthcheckSecret = String(env.OZB_HEALTHCHECK_SECRET ?? '');
+  const iconRoutePublic = String(env.OZB_ICON_ROUTE_PUBLIC ?? '');
   return {
     teamDomain,
     aud,
@@ -119,16 +125,22 @@ function readConfig(env) {
 }
 
 /**
- * The middleware. Called by Next.js with the incoming `Request`; also called
- * directly by the tests with a hand-built `Request` and (optionally) an explicit
- * env map (the test seam). When no env is supplied it reads `process.env`
- * statically (the production edge path).
+ * The middleware. Called by Next.js as `middleware(request, event)` — the
+ * second argument is the `NextFetchEvent`, **not** an environment map (C1).
+ * The handler reads its configuration from `process.env` in the body, so the
+ * event argument is never consulted for config. The test seam is
+ * `readConfig(env)`; the handler itself is exercised by calling
+ * `middleware(request, fakeEvent)` with a fake event.
  * @param {Request} request
- * @param {object} [env] the environment map (the test seam; omit to read process.env)
+ * @param {object} [event] the NextFetchEvent (ignored for config)
  * @returns {Promise<Response>}
  */
-export async function middleware(request, env) {
-  const cfg = readConfig(env);
+export async function middleware(request, event) {
+  // C1: read config from process.env (the production path), never from the
+  // event argument. `event` is the NextFetchEvent; it is intentionally unused
+  // so the framework's call shape is accepted without misreading it.
+  void event;
+  const cfg = readConfig(process.env);
   const url = new URL(request.url);
   const path = url.pathname;
 
