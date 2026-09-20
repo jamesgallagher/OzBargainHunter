@@ -843,32 +843,68 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
     }
   }
 
-  // Pin 4 — the `resolveImport` widening (t_b202bdeb item 3): a lib module is
-  // reached *only* through an extensionless dynamic import that resolves to a
-  // `.mjs` file, and a directory that resolves to `index.mjs`. Reverting the
-  // candidate list to the pre-widening `[base, base.js, index.js]` leaves
-  // both targets unresolved (never in the walked set), so the token block
-  // never sees them and `assertServerTreeClean` does not throw — `assert.throws`
-  // fails and the suite goes red. The widened candidate list (`.mjs` / `.jsx`
-  // / `.ts` and `index.mjs`) is what follows them.
+  // Pin 4 — the `resolveImport` widening (t_b202bdeb item 3 + review round 2,
+  // Minor 1): a lib module is reached *only* through an extensionless dynamic
+  // import that resolves to a `.mjs` file, a `.ts` file, a `.jsx` file, and
+  // a directory that resolves to `index.mjs`. Reverting the candidate list to
+  // the pre-widening `[base, base.js, index.js]` (or dropping the `.ts` /
+  // `.jsx` entries) leaves all four targets unresolved (never in the walked
+  // set), so the token block never sees them and `assertServerTreeClean` does
+  // not throw — `assert.throws` fails and the suite goes red. The widened
+  // candidate list (`.mjs` / `.jsx` / `.ts` and `index.mjs`) is what follows
+  // them.
   {
     const base = mkdtempSync(join(tmpdir(), 'guard-resolve-'));
     try {
       mkdirSync(join(base, 'app'));
       mkdirSync(join(base, 'lib'));
       mkdirSync(join(base, 'lib', 'b'));
-      writeFileSync(join(base, 'app', 'index.js'), 'const m = await import("../lib/a");\nconst n = await import("../lib/b");\n');
+      writeFileSync(join(base, 'app', 'index.js'), 'const m = await import("../lib/a");\nconst n = await import("../lib/b");\nconst o = await import("../lib/c");\nconst p = await import("../lib/d");\n');
       writeFileSync(join(base, 'lib', 'a.mjs'), 'export function a() { setInterval(() => {}, 1000); }\n');
       writeFileSync(join(base, 'lib', 'b', 'index.mjs'), 'export function b() { setInterval(() => {}, 1000); }\n');
+      writeFileSync(join(base, 'lib', 'c.ts'), 'export function c() { setInterval(() => {}, 1000); }\n');
+      writeFileSync(join(base, 'lib', 'd.jsx'), 'export function d() { setInterval(() => {}, 1000); }\n');
       const t = walkServerTree(base).files;
       const targetA = join(base, 'lib', 'a.mjs');
       const targetB = join(base, 'lib', 'b', 'index.mjs');
+      const targetC = join(base, 'lib', 'c.ts');
+      const targetD = join(base, 'lib', 'd.jsx');
       assert.ok(t.has(targetA), 'the extensionless dynamic import must resolve to a.mjs (positive control for the resolveImport widening)');
       assert.ok(t.has(targetB), 'the directory dynamic import must resolve to b/index.mjs (positive control for the resolveImport widening)');
+      assert.ok(t.has(targetC), 'the extensionless dynamic import must resolve to c.ts (positive control for the resolveImport widening)');
+      assert.ok(t.has(targetD), 'the extensionless dynamic import must resolve to d.jsx (positive control for the resolveImport widening)');
       assert.throws(
         () => assertServerTreeClean(base),
         /must not contain setInterval \(no polling in the server tree\)/,
-        'the shipped token block must flag the .mjs / index.mjs modules reached through the widened resolver (positive control)',
+        'the shipped token block must flag the .mjs / .ts / .jsx / index.mjs modules reached through the widened resolver (positive control)',
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  // Pin 5 — the import-prefix layer (t_b202bdeb review round 2, Major 1 +
+  // item 4 "FORBIDDEN_IMPORTS ... applied"): a lib module that *is* forbidden
+  // code (`lib/acquire/poll.js`) is reached through a route. No other check
+  // can see it — it owns no `setInterval` and runs no loop — so only the
+  // import-prefix loop over the walked closure flags it. Positive control: the
+  // shipped import-prefix loop (inside `assertServerTreeClean`) must flag the
+  // reached module, so deleting that loop (or `FORBIDDEN_IMPORTS`) leaves the
+  // tree unflagged and `assert.throws` fails — the suite goes red.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-prefix-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib', 'acquire'), { recursive: true });
+      writeFileSync(join(base, 'app', 'index.js'), 'import { p } from "../lib/acquire/poll.js";\n');
+      writeFileSync(join(base, 'lib', 'acquire', 'poll.js'), 'export function p() {}\n');
+      const t = walkServerTree(base).files;
+      const target = join(base, 'lib', 'acquire', 'poll.js');
+      assert.ok(t.has(target), 'the statically-reached lib/acquire module must be in the walked set');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not be lib\/acquire\/\* /,
+        'the shipped import-prefix loop must flag a reached forbidden module (positive control for the import-prefix layer)',
       );
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -905,6 +941,33 @@ test('no reachable server-tree module runs a setTimeout/setImmediate self-re-sch
         () => assertServerTreeClean(base),
         /must not run a setImmediate self-re-scheduling loop/,
         'the shipped setImmediate assert must flag a statically-reached lib module running a setImmediate self-re-scheduling loop (positive control)',
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  // Pin the tree-level `setTimeout` assert (t_b202bdeb review round 2, Major 1):
+  // no reachable module in the real tree runs a `setTimeout` self-re-scheduling
+  // loop, so deleting the `setTimeout` assert leaves 5/5 green. A synthetic tree
+  // where a lib module is reached statically and runs the loop is a positive
+  // control: the shipped `setTimeout` assert (inside `assertServerTreeClean`)
+  // must flag it, so deleting the assert (or the detector's `setTimeout` branch)
+  // leaves the tree unflagged and `assert.throws` fails — the suite goes red.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-timeout-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib'));
+      writeFileSync(join(base, 'app', 'index.js'), 'import { a } from "../lib/a.js";\n');
+      writeFileSync(join(base, 'lib', 'a.js'), 'export const poll = () => { setTimeout(poll, 1000); };\n');
+      const t = walkServerTree(base).files;
+      const target = join(base, 'lib', 'a.js');
+      assert.ok(t.has(target), 'the statically-reached lib module must be in the walked set');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not run a setTimeout self-re-scheduling loop/,
+        'the shipped setTimeout assert must flag a statically-reached lib module running a setTimeout self-re-scheduling loop (positive control)',
       );
     } finally {
       rmSync(base, { recursive: true, force: true });
