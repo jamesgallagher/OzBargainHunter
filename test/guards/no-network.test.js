@@ -91,15 +91,19 @@ test('http.request with an options object for a non-loopback host is blocked', a
 test('https.request with a non-loopback host throws at the request layer before any dial (https.request wrap pinned)', () => {
   // Pins the https.request wrap (the https.request = wrapRequest(https.request)
   // line) by making the request-layer check the ONLY barrier: the never-dialing
-  // agent stub below (addRequest() {} — no socket is ever created) means the
-  // net.Socket.prototype.connect wrapper is never reached, so deleting the https
-  // wrap would let the call through to the original https.request, which
-  // returns a ClientRequest instead of throwing — and this assert.throws would
-  // fail. A reserved literal (203.0.113.9, TEST-NET-2) need not be routable —
-  // the wrapper blocks before any dial — so no skip is needed.
+  // agent stub is passed INSIDE the single options object (addRequest() {} — no
+  // socket is ever created, so the net.Socket.prototype.connect wrapper is never
+  // reached). Deleting the https wrap lets the call through to the original
+  // https.request, which — with the stub agent — returns a ClientRequest instead
+  // of throwing (the stub is consulted, no dial happens) — and this
+  // assert.throws would fail. A reserved literal (203.0.113.9, TEST-NET-2) need
+  // not be routable — the wrapper blocks before any dial — so no skip is needed.
+  // (The agent must be inside the options object: node discards a 2nd options
+  // object in https.request(options, options, cb) and never consults the stub,
+  // so that shape would not isolate the request-layer check.)
   const stubAgent = { addRequest() {}, protocol: 'https:', defaultPort: 443, maxSockets: Infinity };
   assert.throws(
-    () => https.request({ hostname: '203.0.113.9', port: 443, path: '/' }, { agent: stubAgent }, () => {}),
+    () => https.request({ hostname: '203.0.113.9', port: 443, path: '/', agent: stubAgent }, () => {}),
     (err) => {
       assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
       return true;

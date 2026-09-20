@@ -83,18 +83,33 @@ request-layer check the ONLY barrier:
                 maxSockets: Infinity };
   assert.throws(() => http.request('http://203.0.113.9/', { agent: stub },
                   () => {}), isNetworkBlocked);
-Measured on the delivered guard: THROWS NetworkBlockedError. Under M5a/M5b/M5c:
-returns a ClientRequest (the stub agent object is misread as the callback ->
-TypeError, or the call simply returns) -> the assertion fails -> the mutant
-dies. So the three branches ARE independently pinnable, and the round-2 fix
+Measured on the delivered guard: THROWS NetworkBlockedError. Under M5b/M5c the
+original returns a ClientRequest (the stub is consulted, no dial) -> the
+assertion fails -> the mutant dies. (M5a in round 2 was killed only by an
+incidental TypeError from the invalid 3-arg call shape — corrected in round 3,
+see below.) So the three branches ARE independently pinnable, and the fix
 gives each of the three tests that never-dialing agent (plus the original
-default-agent assertion kept as a regression net). Re-measured round-2:
-  M5a https.request wrap removed    -> 67/68, exit 1  (KILLED by the stub test)
-  M5b string-URL branch removed     -> 67/68, exit 1  (KILLED by the stub test)
-  M5c 2nd-arg options branch removed-> 67/68, exit 1  (KILLED by the stub test)
+default-agent assertion kept as a regression net).
 The default-agent (regression-net) assertions still hold under each mutant via
 the socket wrapper, so the block survives the branch's absence even though the
 branch itself is now pinned.
+
+Round-3 correction (review round 2, tier H): the round-2 https test passed the
+stub as a SEPARATE 2nd options object (https.request(optionsObj, {agent}, cb)).
+That shape is not a documented node signature — node discards the 2nd options
+object and never consults the stub (measured on stock node v26.5.1, no guard:
+THREW TypeError: The "listener" argument must be of type function; stub
+addRequest calls = 0). So the round-2 M5a kill was an INCIDENTAL TypeError from
+that invalid call shape, not the intended assertion. Fixed in round 3 by moving
+the agent INSIDE the single options object
+(https.request({ hostname, port, path, agent: stubAgent }, cb)); measured on
+stock node: RETURNS ClientRequest with the stub consulted (addRequest calls = 1,
+no dial). Re-measured round-3:
+  M5a https.request wrap removed    -> 67/68, exit 1  (KILLED by the intended
+                                              stub assertion: Missing expected
+                                              exception, ClientRequest returned)
+  M5b string-URL branch removed     -> 67/68, exit 1  (KILLED by the stub test)
+  M5c 2nd-arg options branch removed-> 67/68, exit 1  (KILLED by the stub test)
 
 ESM named-import path: disclosed in the guard docblock out-of-scope list
 (`import { lookup } from 'node:dns'` binds to the underlying function at module-link
@@ -104,12 +119,13 @@ function). Not wrapped — it cannot be wrapped from this in-process opt-in guar
 observable to a later import), and wrapping it is out of the card's test/**-only
 scope. Disclosed, per the card's "either disclose it or wrap it".
 
-## Mutant summary table
+## Mutant summary table (round 3, current bytes)
   M1 dns predicate (blacklist 203.0.113.9)   -> 66/68, exit 1  (KILLED by new tests)
   M2 fetch URL-object (input.url only)        -> 67/68, exit 1  (KILLED by new control)
   M3 dns ordering (resolve before check)      -> 67/68, exit 1  (KILLED by new ordering test)
-  M5a https.request wrap removed              -> 67/68, exit 1  (KILLED by stub test, round 2)
-  M5b string-URL branch removed              -> 67/68, exit 1  (KILLED by stub test, round 2)
-  M5c 2nd-arg options branch removed         -> 67/68, exit 1  (KILLED by stub test, round 2)
+  M5a https.request wrap removed              -> 67/68, exit 1  (KILLED by the intended
+                                                             stub assertion, round 3)
+  M5b string-URL branch removed              -> 67/68, exit 1  (KILLED by the stub test)
+  M5c 2nd-arg options branch removed         -> 67/68, exit 1  (KILLED by the stub test)
 
 All mutants applied to a private copy, all node --check clean.
