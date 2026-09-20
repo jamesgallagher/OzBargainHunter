@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import dns from 'node:dns';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import os from 'node:os';
 import { NetworkBlockedError } from '../support/no-network.js';
@@ -43,6 +44,33 @@ test('a fetch of a URL object for a non-loopback host is blocked (URL input hand
   );
 });
 
+test('a fetch of a URL object for a loopback host is permitted over a real server (positive direction)', async () => {
+  // Positive-direction loopback control for the fetch URL-object branch. The
+  // URL-object block test above is block-direction only: it stays green under
+  // a wrapper that reduces `const url = typeof input === 'string' ? input :
+  // input.url` (dropping the `?? input.href` fallback) because
+  // hostFromUrl(undefined) returns null and the guard fails closed. This
+  // control is the kill proof: a real URL object for 127.0.0.1 must reach a
+  // real server. Under that mutant the wrapper reads input.url (undefined for
+  // a URL object), hostFromUrl(undefined) is null, and the guard throws
+  // NetworkBlockedError (host "undefined") instead of letting the request
+  // through — so this test fails while the block test stays green.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await globalThis.fetch(new URL(`http://127.0.0.1:${port}/`));
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'ok');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('http.request with an options object for a non-loopback host is blocked', async () => {
   await assert.rejects(
     new Promise((resolve, reject) => {
@@ -53,6 +81,53 @@ test('http.request with an options object for a non-loopback host is blocked', a
       req.on('error', reject);
       req.end();
     }),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('https.request with an options object for a non-loopback host is blocked (https.request wrap pinned)', () => {
+  // Pins the https.request wrap (the https.request = wrapRequest(https.request)
+  // line). The http.request options-object test above pins the http layer; this
+  // pins the https layer so deleting the https wrap would be caught. The
+  // wrapper throws synchronously (the request-layer check runs before the
+  // original is invoked), so a reserved literal (203.0.113.9, TEST-NET-2) need
+  // not be routable — no skip needed for the block direction.
+  assert.throws(
+    () => https.request({ hostname: '203.0.113.9', port: 443, path: '/' }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('http.request with a string URL for a non-loopback host is blocked (string-URL branch pinned)', () => {
+  // Pins the string-URL branch of wrapRequest (the `typeof input === 'string'`
+  // branch that reads the host from the URL). A reserved literal (203.0.113.9,
+  // TEST-NET-2) need not be routable — the wrapper blocks before any dial — so
+  // no skip is needed. The wrapper throws synchronously.
+  assert.throws(
+    () => http.request('http://203.0.113.9/', () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('http.request with a 2nd-arg options object carrying a non-loopback host is blocked (2nd-arg options branch pinned)', () => {
+  // Pins the 2nd-arg options branch of wrapRequest (http.request(url, options,
+  // callback), where the options object may also carry a host). The URL is a
+  // loopback host but the 2nd-arg options carry a non-loopback hostname — the
+  // guard blocks if ANY present candidate is non-loopback (fail-closed). A
+  // reserved literal (203.0.113.9, TEST-NET-2) need not be routable — the
+  // wrapper blocks before any dial — so no skip is needed. The wrapper throws
+  // synchronously.
+  assert.throws(
+    () => http.request('http://127.0.0.1:1/', { hostname: '203.0.113.9' }, () => {}),
     (err) => {
       assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
       return true;
@@ -300,15 +375,21 @@ test('a direct Socket.prototype.connect(port, host, cb) for a non-loopback host 
   }
 });
 
-test('a dns.lookup of a non-loopback host is blocked (dns.lookup wrapper pinned)', () => {
+test('a dns.lookup of a non-loopback host is blocked (dns.lookup predicate, not one literal)', () => {
   // The guard's fifth wrapped shape: dns.lookup. The wrapper throws
   // NetworkBlockedError synchronously (BEFORE originalLookup is called), so a
   // non-loopback hostname never reaches the resolver. We assert the sync throw
   // (assert.throws, not assert.rejects): the wrapper runs the host check before
   // invoking the original, so the rejection is a thrown error at the call site.
-  // A reserved literal (203.0.113.9, TEST-NET-2) need not be routable — the
-  // wrapper blocks before any dial — so no skip is needed for the block
-  // direction.
+  // Two reserved literals (203.0.113.9 TEST-NET-2, 198.51.100.7 TEST-NET-1)
+  // need not be routable — the wrapper blocks before any dial — so no skip is
+  // needed for the block direction. The second literal (198.51.100.7) is named
+  // NOWHERE else in the suite, so it pins the PREDICATE ("is this loopback")
+  // rather than one hard-coded literal: a wrapper that blacklisted only
+  // 203.0.113.9 would let 198.51.100.7 through (a numeric literal needs no
+  // resolver, so it would resolve instead of throwing) and this test would fail.
+  // This mirrors the fetch-layer predicate test above (nonexistent-host.invalid,
+  // a host the suite never names).
   assert.throws(
     () => dns.lookup('203.0.113.9', () => {}),
     (err) => {
@@ -316,6 +397,37 @@ test('a dns.lookup of a non-loopback host is blocked (dns.lookup wrapper pinned)
       return true;
     },
   );
+  assert.throws(
+    () => dns.lookup('198.51.100.7', () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('a dns.lookup of a non-loopback host never reaches the resolver (check-before-resolve ordering)', async () => {
+  // Pins the wrapper's ORDERING, which the sync-throw test above cannot:
+  // a wrapper that calls originalLookup BEFORE the host check would still
+  // throw NetworkBlockedError to the caller (the sync throw is the same), but
+  // the non-loopback hostname would have reached the resolver first — DNS
+  // egress that the caller still sees as a block. The shipped wrapper checks
+  // first, so the resolver callback must NEVER fire. We record the callback
+  // and wait a short beat after the sync throw to prove it never fired (the
+  // guard throws before originalLookup is invoked, so the callback is never
+  // registered and cannot fire). A reserved literal (198.51.100.7, TEST-NET-1)
+  // need not be routable — the block happens before any resolver call.
+  let callbackFired = false;
+  assert.throws(
+    () => dns.lookup('198.51.100.7', () => { callbackFired = true; }),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Give any (incorrectly) registered callback time to fire, then assert it did not.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(callbackFired, false, 'the resolver callback must never fire (check runs before the resolver is invoked)');
 });
 
 test('a dns.lookup of 127.0.0.1 is permitted (real loopback lookup, positive direction)', async () => {

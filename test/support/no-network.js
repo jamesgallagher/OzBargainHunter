@@ -12,8 +12,11 @@
  * above (fetch, http/https.request, net.Socket/tls.TLSSocket connect, dns.lookup).
  * This is an in-process, opt-in guard and does NOT wrap the surrounding
  * envelope: `dns.promises` / `dns.resolve*`, `dgram` (UDP), a caller-supplied
- * `lookup` function, and spawned child processes are out of scope and are not
- * blocked here. Where a wrapped call shape can carry more than one host
+ * `lookup` function, spawned child processes, and the ESM named-import path
+ * (`import { lookup } from 'node:dns'` binds to the underlying function at
+ * module-link time, not to the namespace property the guard mutates, so it
+ * returns the unwrapped function) are out of scope and are not blocked here.
+ * Where a wrapped call shape can carry more than one host
  * (e.g. an options object with both `hostname` and `host`), the guard blocks
  * if ANY present candidate is non-loopback. node's net/tls dial `host` when
  * both are present, so trusting `hostname` first would fail open; blocking on
@@ -146,9 +149,6 @@ net.Socket.prototype.connect = function connect(...args) {
 };
 
 // --- tls.TLSSocket.prototype.connect (tls.connect) ---
-// TLS sockets do not inherit net.Socket.prototype.connect, so tls.connect is a
-// separate egress path; wrap it with the same fail-closed candidate check.
-//
 // REDUNDANT (no distinct coverage): tls.TLSSocket.prototype inherits from
 // net.Socket.prototype (it has no own `connect`), so the
 // net.Socket.prototype.connect wrapper below it still throws
