@@ -23,10 +23,14 @@ const STALE_INTERVALS = 3;
 export async function GET(request) {
   // The container health check authenticates with the shared secret. When the
   // middleware has already let the request through, the header is present;
-  // when called directly, require it.
+  // when called directly, require it. m1: fail **closed** when the secret is
+  // unset — the opposite of the previous `if (secret && ...)`, which let an
+  // unset secret through (a LAN request with no secret reached the handler).
+  // The middleware rejects a missing secret with 401; the handler does the
+  // same.
   const secret = process.env.OZB_HEALTHCHECK_SECRET ?? '';
   const presented = request.headers.get('x-healthcheck-secret') ?? '';
-  if (secret && presented !== secret) {
+  if (!secret || presented !== secret) {
     return new Response('unauthorized', { status: 401 });
   }
 

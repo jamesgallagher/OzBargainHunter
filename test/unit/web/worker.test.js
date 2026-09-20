@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 import { startWorker } from '../../../worker/main.js';
 import { openStore } from '../../../lib/store/index.js';
@@ -183,5 +184,51 @@ describe('worker: composition root', () => {
     } finally {
       await close().catch(() => {});
     }
+  });
+
+  // X8: the AC "on SIGTERM exits 0 with the database closed cleanly" is
+  // verified by spawning the real `node worker/main.js` as a child process
+  // and sending it SIGTERM — not by driving `startWorker` in-process.
+  test('the real worker process exits 0 on SIGTERM with the database closed cleanly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-worker-sigterm-'));
+    const dbPath = join(dir, 'worker.db');
+    const repoRoot = new URL('../../..', import.meta.url).pathname;
+    const child = spawn(process.execPath, [join(repoRoot, 'worker/main.js')], {
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        OZB_DB_PATH: dbPath,
+        OZB_SNAPSHOT_PATH: join(dir, 'snapshot.db'),
+        // The test-only override pins a short poll interval so the process
+        // comes up and ticks quickly without tripping the five-minute
+        // production minimum (X8: OZB_POLL_INTERVAL_SECONDS_TEST_OVERRIDE).
+        OZB_POLL_INTERVAL_SECONDS_TEST_OVERRIDE: '1',
+        // No real network: the transport is built but the poll tasks fail
+        // gracefully (the scheduler survives a throwing task) and the
+        // shutdown path is what this test exercises.
+        OZB_USER_AGENT: 'test',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+
+    // Give the process time to start (open the store, register the
+    // schedulers) before we signal it.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    const exitPromise = new Promise((resolve) => {
+      child.on('exit', (code, signal) => resolve({ code, signal }));
+    });
+    child.kill('SIGTERM');
+    const { code, signal } = await exitPromise;
+
+    assert.equal(signal, null, `the process exited by its own exit(0), not by the signal: ${signal}`);
+    assert.equal(code, 0, `the worker exited 0 on SIGTERM (got ${code}); stderr: ${stderr}`);
+    assert.match(stdout, /stopped cleanly, database closed/, 'the clean-close log line is present');
+    assert.ok(existsSync(dbPath), 'the database file was created by the worker');
+    rmSync(dir, { recursive: true, force: true });
   });
 });

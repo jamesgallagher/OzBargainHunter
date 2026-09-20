@@ -3,13 +3,19 @@
  * access check and the CSRF check (independent, 11.3.6). Threshold rules are
  * fixed to deals-only and not editable.
  *
+ * X1: the edit handler lives in its own segment (`/rules/[id]/save`) so it
+ * does not collide with the `/rules/[id]` page in the build. The form posts
+ * here. X5: the body is parsed (urlencoded or JSON) and the CSRF token is
+ * read from it.
+ *
  * @param {{ params: { id: string } }} props
  */
 export async function POST(request, { params }) {
-  const { requireAuthenticated } = await import('../../../lib/web/gate.js');
-  const { getStore } = await import('../../../lib/web/db.js');
+  const { requireAuthenticated, parseBody } = await import('../../../../lib/web/gate.js');
+  const { getStore } = await import('../../../../lib/web/db.js');
 
-  const gate = await requireAuthenticated(request);
+  const body = await parseBody(request);
+  const gate = await requireAuthenticated(request, undefined, body);
   if (!gate.ok) return gate.response;
 
   const store = getStore();
@@ -19,7 +25,6 @@ export async function POST(request, { params }) {
     return new Response('rule not found', { status: 404 });
   }
 
-  const body = await request.json().catch(() => ({}));
   const now = new Date().toISOString();
   const isThreshold = rule.type === 'threshold';
 
@@ -27,8 +32,9 @@ export async function POST(request, { params }) {
   if (!isThreshold) {
     if (typeof body.term === 'string') parameters.term = body.term;
   }
-  if (isThreshold && typeof body.threshold === 'number') {
-    parameters.threshold = body.threshold;
+  if (isThreshold && (typeof body.threshold === 'number' || typeof body.threshold === 'string')) {
+    const t = Number(body.threshold);
+    if (!Number.isNaN(t)) parameters.threshold = t;
   }
   const surfaces = isThreshold ? 'deals' : body.surfaces ?? rule.surfaces;
   const cooldownSeconds = Number(body.cooldown_seconds ?? rule.cooldown_seconds);

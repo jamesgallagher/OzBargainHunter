@@ -8,7 +8,7 @@ const SECRET = 'csrf-secret-for-tests';
 describe('csrf: signed double-submit token (8.6, D33)', () => {
   test('a generated token verifies', async () => {
     const token = await generateCsrfToken(SECRET);
-    assert.match(token, /^[0-9a-f]+\.[0-9a-f]+$/, 'token is value.signature');
+    assert.match(token, /^[0-9a-f]+\.[0-9]+\.[0-9a-f]+$/, 'token is value.exp.signature');
     assert.equal(await verifyCsrfToken(token, SECRET), true);
   });
 
@@ -60,5 +60,40 @@ describe('csrf: signed double-submit token (8.6, D33)', () => {
     const value = token.slice(0, idx);
     const sig = token.slice(idx + 1);
     assert.equal(await verifyCsrfToken(`${value}.${sig.slice(0, -4)}`, SECRET), false);
+  });
+
+  test('a token has a 15-minute expiry and a fresh one verifies (m3)', async () => {
+    const token = await generateCsrfToken(SECRET);
+    const idx = token.lastIndexOf('.');
+    const value = token.slice(0, idx);
+    assert.equal(await verifyCsrfToken(`${value}.${token.slice(idx + 1)}`, SECRET, new Date(Date.now() + 10 * 60 * 1000)), true);
+  });
+
+  test('an expired token is rejected (m3)', async () => {
+    const token = await generateCsrfToken(SECRET);
+    const idx = token.lastIndexOf('.');
+    const value = token.slice(0, idx);
+    assert.equal(await verifyCsrfToken(`${value}.${token.slice(idx + 1)}`, SECRET, new Date(Date.now() + 16 * 60 * 1000)), false);
+  });
+
+  test('a token bound to another email is rejected (m3)', async () => {
+    const token = await generateCsrfToken(SECRET, 'bound@example.com');
+    const idx = token.lastIndexOf('.');
+    const value = token.slice(0, idx);
+    assert.equal(await verifyCsrfToken(`${value}.${token.slice(idx + 1)}`, SECRET, undefined, 'other@example.com'), false);
+  });
+
+  test('a token bound to the same email verifies (m3)', async () => {
+    const token = await generateCsrfToken(SECRET, 'bound@example.com');
+    const idx = token.lastIndexOf('.');
+    const value = token.slice(0, idx);
+    assert.equal(await verifyCsrfToken(`${value}.${token.slice(idx + 1)}`, SECRET, undefined, 'bound@example.com'), true);
+  });
+
+  test('an unbound token verifies for any email (m3)', async () => {
+    const token = await generateCsrfToken(SECRET);
+    const idx = token.lastIndexOf('.');
+    const value = token.slice(0, idx);
+    assert.equal(await verifyCsrfToken(`${value}.${token.slice(idx + 1)}`, SECRET, undefined, 'anyone@example.com'), true);
   });
 });

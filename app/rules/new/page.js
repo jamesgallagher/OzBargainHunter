@@ -2,18 +2,28 @@
  * Screen 3 (create) — Rule create (design 7.1). Full CRUD over term text,
  * matching mode, cooldown and surfaces.
  *
- * Server component (the form posts to `/rules/new`).
+ * X1: the form posts to `/rules/new/create` (its own segment, so the create
+ * handler does not collide with this page in the build).
+ *
+ * Server component.
  */
+
+import { generateCsrfToken } from '../../../lib/csrf.js';
 
 /**
  * The rule-create page.
- * @returns {React.ReactElement}
+ * @returns {Promise<React.ReactElement>}
  */
-export default function NewRulePage() {
+export default async function NewRulePage() {
+  // Mint an unbound CSRF token (production relies on the token TTL, m3).
+  const secret = process.env.OZB_CSRF_SECRET ?? '';
+  const token = secret ? await generateCsrfToken(secret) : '';
+
   return (
     <section>
       <h2>New rule</h2>
-      <form method="POST" action="/rules/new">
+      <form method="POST" action="/rules/new/create">
+        <input type="hidden" name="_csrf" value={token} />
         <label>
           Type
           <select name="type" defaultValue="match">
