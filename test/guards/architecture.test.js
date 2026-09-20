@@ -101,14 +101,24 @@
  * below, so the detector's coverage of each shape is proven in-tree.
  *
  * Known limitation (recorded, not a defect): `FORBIDDEN_IMPORTS` and
- * `FORBIDDEN_TOKENS` are matched as raw substrings against every reachable
- * module, *including comments and string literals*. A comment or string that
- * merely mentions `setInterval` (or `lib/acquire/`, `lib/scheduler`, `worker/`)
- * in a `lib/**` file would trip the guard. That is a false positive, not a
- * false negative — it makes the guard stricter, never looser. Measured: a
- * doc comment in a reachable module that names `lib/acquire/poll.js`, or that
- * contains a self-scheduling arrow, fails the guard (rc=1). The same
- * brittleness exists for `app/**` from card 1. The loop detector's own
+ * `FORBIDDEN_TOKENS` are matched as raw substrings, *including comments and
+ * string literals*. The scope of that substring scan is:
+ *   - `app/**` + `middleware.js` (card 1's test): both `FORBIDDEN_IMPORTS`
+ *     and `FORBIDDEN_TOKENS` are scanned as source text, so a comment or
+ *     string that merely mentions `setInterval` or `lib/acquire/` /
+ *     `lib/scheduler` / `worker/` in an `app/**` or `middleware.js` file
+ *     trips the guard.
+ *   - `lib/**` (the widened walk's token loop): only `FORBIDDEN_TOKENS`
+ *     (`setInterval`) is scanned as source text. A comment naming
+ *     `lib/acquire/poll.js` in a `lib/**` file does *not* trip the guard
+ *     (measured rc=0) — the import-token check over `lib/**` applies to the
+ *     *resolved path* of a reached module, not to its source text.
+ * Either way it is a false positive, not a false negative — it makes the
+ * guard stricter, never looser (a legit doc comment that names a forbidden
+ * token does break the build). Measured: a doc comment in an `app/**` or
+ * `middleware.js` file that names `lib/acquire/poll.js` (or `setInterval`),
+ * or a doc comment in a `lib/**` file that contains `setInterval` (or a
+ * self-scheduling arrow), fails the guard (rc=1). The loop detector's own
  * scanner skips strings/comments for *its* brace matching, but the
  * `FORBIDDEN_TOKENS` substring check does not.
  *
@@ -606,6 +616,67 @@ function hasSelfReschedulingLoop(source, timer) {
 }
 
 /**
+ * The shipped per-module assertion sites, factored into one helper over a base
+ * dir (t_b202bdeb review round 1, Major 1). This is the code the synthetic
+ * pins exercise: each pin builds a minimal tree whose only path to the
+ * forbidden construct runs through one of these checks, and asserts that
+ * `assertServerTreeClean(base)` throws with the matching message. Deleting any
+ * check (the import-prefix loop, the token loop, the `setTimeout` assert, the
+ * `setImmediate` assert) leaves that pin's tree unflagged, so `assert.throws`
+ * fails and the suite goes red. Called with `root` from tests 3 and 4, so the
+ * real tree is checked by the *same* code the pins exercise (a deleted check is
+ * therefore visible on the pins, not hidden behind a private re-implementation).
+ */
+function assertServerTreeClean(base) {
+  // The forbidden lists are the guard's contract — non-empty and applied.
+  assert.ok(FORBIDDEN_IMPORTS.length > 0, 'FORBIDDEN_IMPORTS must be non-empty');
+  assert.ok(FORBIDDEN_TOKENS.length > 0, 'FORBIDDEN_TOKENS must be non-empty');
+
+  const { files } = walkServerTree(base);
+  assert.ok(files.size > 0, 'expected at least one reachable server-tree module');
+
+  // No reachable module may *be* forbidden code (a route may only reach it
+  // transitively through a lib/ helper).
+  for (const [file, seed] of files) {
+    const rel = file.slice(base.length + 1).replace(/\\/g, '/');
+    for (const forbidden of FORBIDDEN_IMPORTS) {
+      assert.ok(
+        !rel.startsWith(forbidden),
+        `${file} is reachable from ${seed} and must not be ${forbidden}* (polling lives in the worker, not the server tree)`,
+      );
+    }
+  }
+
+  // No reachable module may own a forbidden token (`setInterval`) — including
+  // lib/ helpers and instrumentation.js, which the pre-widening guard did not
+  // scan.
+  for (const [file, seed] of files) {
+    const source = readFileSync(file, 'utf8');
+    for (const token of FORBIDDEN_TOKENS) {
+      assert.ok(
+        !source.includes(token),
+        `${file} is reachable from ${seed} and must not contain ${token} (no polling in the server tree)`,
+      );
+    }
+  }
+
+  // No reachable module may run a `setTimeout` / `setImmediate`
+  // self-re-scheduling loop (the shape of a polling loop with the token
+  // rotated).
+  for (const [file, seed] of files) {
+    const source = readFileSync(file, 'utf8');
+    assert.ok(
+      !hasSelfReschedulingLoop(source, 'setTimeout'),
+      `${file} is reachable from ${seed} and must not run a setTimeout self-re-scheduling loop (a self-re-scheduling timer is a polling loop with the token rotated)`,
+    );
+    assert.ok(
+      !hasSelfReschedulingLoop(source, 'setImmediate'),
+      `${file} is reachable from ${seed} and must not run a setImmediate self-re-scheduling loop (a self-re-scheduling timer is a polling loop with the token rotated)`,
+    );
+  }
+}
+
+/**
  * Positive controls for the loop detector (per the existing pattern: prove the
  * guard is looking at the right thing). The bad samples — one per shape the
  * detector claims to cover — must be flagged; the good samples — the real
@@ -651,10 +722,12 @@ test('setTimeout/setImmediate loop detector flags the polling shapes and not one
 
 test('no module reachable from the server tree is acquisition, scheduler, or worker code', () => {
   // The forbidden lists are the guard's contract — they must be non-empty and
-  // must be the very lists the loops below apply (t_b202bdeb item 4: pin the
-  // token/import layers so deleting them cannot leave 5/5 green).
-  assert.ok(FORBIDDEN_IMPORTS.length > 0, 'FORBIDDEN_IMPORTS must be non-empty');
-  assert.ok(FORBIDDEN_TOKENS.length > 0, 'FORBIDDEN_TOKENS must be non-empty');
+  // must be the very lists the shipped per-module checks apply (t_b202bdeb
+  // item 4: pin the token/import layers so deleting them cannot leave 5/5
+  // green). The real tree is checked by `assertServerTreeClean(root)` — the
+  // same helper the synthetic pins below exercise, so a deleted check is
+  // visible on the pins.
+  assertServerTreeClean(root);
 
   // Pin the import grammar (t_b202bdeb item 4): `importSpecifiers` must
   // extract each of its four forms — `import ... from`, bare `import`,
@@ -676,44 +749,12 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
     }
   }
 
-  const { files } = walkServerTree();
-  assert.ok(files.size > 0, 'expected at least one reachable server-tree module');
-
-  // No reachable module may *be* forbidden code (a route may only reach it
-  // transitively through a lib/ helper).
-  for (const [file, seed] of files) {
-    const rel = file.slice(root.length + 1).replace(/\\/g, '/');
-    for (const forbidden of FORBIDDEN_IMPORTS) {
-      assert.ok(
-        !rel.startsWith(forbidden),
-        `${file} is reachable from ${seed} and must not be ${forbidden}* (polling lives in the worker, not the server tree)`,
-      );
-    }
-  }
-
-  // (The "no reachable module may import forbidden code" assertion that
-  // followed this loop is unreachable and was removed (t_b202bdeb item 5):
-  // any reachable module that imports a forbidden path puts that path into
-  // the walk map, so the loop above fails on it first. Keeping both would
-  // mean the second could never be the assertion that fires.)
-
-  // No reachable module may own a setInterval — including lib/ helpers and
-  // instrumentation.js, which the pre-widening guard did not scan.
-  for (const [file, seed] of files) {
-    const source = readFileSync(file, 'utf8');
-    for (const token of FORBIDDEN_TOKENS) {
-      assert.ok(
-        !source.includes(token),
-        `${file} is reachable from ${seed} and must not contain ${token} (no polling in the server tree)`,
-      );
-    }
-  }
-
   // Pin the transitive closure (t_b202bdeb item 4): `lib/store/index.js` is
   // a depth-2 module reached only through the walk's `queue.push(target)` —
   // `app/alerts/page.js` statically imports `lib/web/db.js` (depth 1), and
   // `lib/web/db.js` in turn imports `lib/store/index.js`. Deleting the
   // closure leaves `lib/store/index.js` out of the map, so this fails.
+  const files = walkServerTree().files;
   const storeIndex = join(root, 'lib', 'store', 'index.js');
   assert.ok(files.has(storeIndex), 'the walk must reach the depth-2 module lib/store/index.js (transitive closure)');
   const webDb = join(root, 'lib', 'web', 'db.js');
@@ -730,8 +771,9 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
 
   // Pin 1 — the token block: a lib module reached *statically* owns
   // `setInterval`; only the token loop can see it. Positive control: the
-  // token loop must flag the fixture, so deleting the token block (or
-  // `FORBIDDEN_TOKENS`) turns the suite red.
+  // shipped token loop (inside `assertServerTreeClean`) must flag the
+  // fixture, so deleting the token block (or `FORBIDDEN_TOKENS`) leaves the
+  // tree unflagged and `assert.throws` fails — the suite goes red.
   {
     const base = mkdtempSync(join(tmpdir(), 'guard-token-'));
     try {
@@ -740,39 +782,36 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
       writeFileSync(join(base, 'app', 'index.js'), 'import { a } from "../lib/a.js";\n');
       writeFileSync(join(base, 'lib', 'a.js'), 'export function a() { setInterval(() => {}, 1000); }\n');
       const t = walkServerTree(base).files;
-      assert.ok(t.size > 0, 'synthetic token tree must walk');
       const target = join(base, 'lib', 'a.js');
       assert.ok(t.has(target), 'the statically-reached lib module must be in the walked set');
-      const source = readFileSync(target, 'utf8');
-      let flagged = false;
-      for (const token of FORBIDDEN_TOKENS) {
-        if (source.includes(token)) flagged = true;
-      }
-      assert.ok(flagged, 'the token block must flag a statically-reached lib module that owns setInterval (positive control)');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not contain setInterval \(no polling in the server tree\)/,
+        'the shipped token block must flag a statically-reached lib module that owns setInterval (positive control)',
+      );
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
   }
 
   // Pin 2 — the instrumentation seed: a root `instrumentation.js` (the only
-  // seed) owns `setInterval`; only the seed loop puts it into the map.
-  // Positive control: the file must be in the walked set (the seed layer
-  // seeds it directly, not through an import) and the token block must
-  // flag it, so deleting the seed or the token block turns the suite red.
+  // seed) owns `setInterval`; only the seed loop puts it into the map, and
+  // only the token loop flags it. Positive control: the shipped helper must
+  // flag the seeded file, so deleting the seed (the file never reaches the
+  // map) or the token block leaves the tree unflagged and `assert.throws`
+  // fails — the suite goes red.
   {
     const base = mkdtempSync(join(tmpdir(), 'guard-instr-'));
     try {
       writeFileSync(join(base, 'instrumentation.js'), 'setInterval(() => {}, 1000);\n');
       const t = walkServerTree(base).files;
-      assert.ok(t.size > 0, 'synthetic instrumentation tree must walk');
       const target = join(base, 'instrumentation.js');
       assert.ok(t.has(target), 'the root instrumentation.js must be seeded into the walked set (positive control for the seed layer)');
-      const source = readFileSync(target, 'utf8');
-      let flagged = false;
-      for (const token of FORBIDDEN_TOKENS) {
-        if (source.includes(token)) flagged = true;
-      }
-      assert.ok(flagged, 'the token block must flag the seeded instrumentation.js that owns setInterval (positive control)');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not contain setInterval \(no polling in the server tree\)/,
+        'the shipped token block must flag the seeded instrumentation.js that owns setInterval (positive control)',
+      );
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -780,8 +819,10 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
 
   // Pin 3 — the dynamic-import pattern: the lib module is reached *only*
   // through a commented `import(...)`; only the dynamic-import pattern
-  // follows it. Positive control: the module must be in the walked set
-  // (deleting the pattern leaves it out) and the token block must flag it.
+  // follows it, and only the token loop flags it. Positive control: the
+  // shipped helper must flag the reached module, so deleting the pattern
+  // (the module never reaches the map) or the token block leaves the tree
+  // unflagged and `assert.throws` fails — the suite goes red.
   {
     const base = mkdtempSync(join(tmpdir(), 'guard-dynimp-'));
     try {
@@ -790,15 +831,45 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
       writeFileSync(join(base, 'app', 'index.js'), 'const m = await import(/* webpackChunkName: "x" */ "../lib/a.js");\n');
       writeFileSync(join(base, 'lib', 'a.js'), 'export function a() { setInterval(() => {}, 1000); }\n');
       const t = walkServerTree(base).files;
-      assert.ok(t.size > 0, 'synthetic dynamic-import tree must walk');
       const target = join(base, 'lib', 'a.js');
       assert.ok(t.has(target), 'the dynamically-reached lib module must be in the walked set (positive control for the dynamic-import pattern)');
-      const source = readFileSync(target, 'utf8');
-      let flagged = false;
-      for (const token of FORBIDDEN_TOKENS) {
-        if (source.includes(token)) flagged = true;
-      }
-      assert.ok(flagged, 'the token block must flag a dynamically-reached lib module that owns setInterval (positive control)');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not contain setInterval \(no polling in the server tree\)/,
+        'the shipped token block must flag a dynamically-reached lib module that owns setInterval (positive control)',
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  // Pin 4 — the `resolveImport` widening (t_b202bdeb item 3): a lib module is
+  // reached *only* through an extensionless dynamic import that resolves to a
+  // `.mjs` file, and a directory that resolves to `index.mjs`. Reverting the
+  // candidate list to the pre-widening `[base, base.js, index.js]` leaves
+  // both targets unresolved (never in the walked set), so the token block
+  // never sees them and `assertServerTreeClean` does not throw — `assert.throws`
+  // fails and the suite goes red. The widened candidate list (`.mjs` / `.jsx`
+  // / `.ts` and `index.mjs`) is what follows them.
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-resolve-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib'));
+      mkdirSync(join(base, 'lib', 'b'));
+      writeFileSync(join(base, 'app', 'index.js'), 'const m = await import("../lib/a");\nconst n = await import("../lib/b");\n');
+      writeFileSync(join(base, 'lib', 'a.mjs'), 'export function a() { setInterval(() => {}, 1000); }\n');
+      writeFileSync(join(base, 'lib', 'b', 'index.mjs'), 'export function b() { setInterval(() => {}, 1000); }\n');
+      const t = walkServerTree(base).files;
+      const targetA = join(base, 'lib', 'a.mjs');
+      const targetB = join(base, 'lib', 'b', 'index.mjs');
+      assert.ok(t.has(targetA), 'the extensionless dynamic import must resolve to a.mjs (positive control for the resolveImport widening)');
+      assert.ok(t.has(targetB), 'the directory dynamic import must resolve to b/index.mjs (positive control for the resolveImport widening)');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not contain setInterval \(no polling in the server tree\)/,
+        'the shipped token block must flag the .mjs / index.mjs modules reached through the widened resolver (positive control)',
+      );
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -806,25 +877,20 @@ test('no module reachable from the server tree is acquisition, scheduler, or wor
 });
 
 test('no reachable server-tree module runs a setTimeout/setImmediate self-re-scheduling loop', () => {
-  const { files } = walkServerTree();
-  for (const [file, seed] of files) {
-    const source = readFileSync(file, 'utf8');
-    assert.ok(
-      !hasSelfReschedulingLoop(source, 'setTimeout'),
-      `${file} is reachable from ${seed} and must not run a setTimeout self-re-scheduling loop (a self-re-scheduling timer is a polling loop with the token rotated)`,
-    );
-    assert.ok(
-      !hasSelfReschedulingLoop(source, 'setImmediate'),
-      `${file} is reachable from ${seed} and must not run a setImmediate self-re-scheduling loop (a self-re-scheduling timer is a polling loop with the token rotated)`,
-    );
-  }
+  // The real tree is checked by the same shipped helper the pins below
+  // exercise (the `setTimeout` / `setImmediate` loop asserts live inside
+  // `assertServerTreeClean`), so deleting either assert is visible here and
+  // on the pin.
+  assertServerTreeClean(root);
 
   // Pin the tree-level `setImmediate` assert (t_b202bdeb item 4): no reachable
   // module in the real tree runs a `setImmediate` self-re-scheduling loop, so
   // deleting the `setImmediate` assert leaves 5/5 green. A synthetic tree
   // where a lib module is reached statically and runs the loop is a positive
-  // control: the detector must flag it, so deleting the assert (or the
-  // detector's `setImmediate` branch) turns the suite red.
+  // control: the shipped `setImmediate` assert (inside `assertServerTreeClean`)
+  // must flag it, so deleting the assert (or the detector's `setImmediate`
+  // branch) leaves the tree unflagged and `assert.throws` fails — the suite
+  // goes red.
   {
     const base = mkdtempSync(join(tmpdir(), 'guard-imm-'));
     try {
@@ -833,13 +899,12 @@ test('no reachable server-tree module runs a setTimeout/setImmediate self-re-sch
       writeFileSync(join(base, 'app', 'index.js'), 'import { a } from "../lib/a.js";\n');
       writeFileSync(join(base, 'lib', 'a.js'), 'export const spin = () => { setImmediate(spin); };\n');
       const t = walkServerTree(base).files;
-      assert.ok(t.size > 0, 'synthetic setImmediate tree must walk');
       const target = join(base, 'lib', 'a.js');
       assert.ok(t.has(target), 'the statically-reached lib module must be in the walked set');
-      const source = readFileSync(target, 'utf8');
-      assert.ok(
-        hasSelfReschedulingLoop(source, 'setImmediate'),
-        'the detector must flag a statically-reached lib module running a setImmediate self-re-scheduling loop (positive control)',
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not run a setImmediate self-re-scheduling loop/,
+        'the shipped setImmediate assert must flag a statically-reached lib module running a setImmediate self-re-scheduling loop (positive control)',
       );
     } finally {
       rmSync(base, { recursive: true, force: true });
