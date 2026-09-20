@@ -88,13 +88,28 @@ test('http.request with an options object for a non-loopback host is blocked', a
   );
 });
 
-test('https.request with an options object for a non-loopback host is blocked (https.request wrap pinned)', () => {
+test('https.request with a non-loopback host throws at the request layer before any dial (https.request wrap pinned)', () => {
   // Pins the https.request wrap (the https.request = wrapRequest(https.request)
-  // line). The http.request options-object test above pins the http layer; this
-  // pins the https layer so deleting the https wrap would be caught. The
-  // wrapper throws synchronously (the request-layer check runs before the
-  // original is invoked), so a reserved literal (203.0.113.9, TEST-NET-2) need
-  // not be routable — no skip needed for the block direction.
+  // line) by making the request-layer check the ONLY barrier: the never-dialing
+  // agent stub below (addRequest() {} — no socket is ever created) means the
+  // net.Socket.prototype.connect wrapper is never reached, so deleting the https
+  // wrap would let the call through to the original https.request, which
+  // returns a ClientRequest instead of throwing — and this assert.throws would
+  // fail. A reserved literal (203.0.113.9, TEST-NET-2) need not be routable —
+  // the wrapper blocks before any dial — so no skip is needed.
+  const stubAgent = { addRequest() {}, protocol: 'https:', defaultPort: 443, maxSockets: Infinity };
+  assert.throws(
+    () => https.request({ hostname: '203.0.113.9', port: 443, path: '/' }, { agent: stubAgent }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Regression net: with the default agent the block still holds via the
+  // net.Socket.prototype.connect wrapper (the default agent dials synchronously
+  // inside ClientRequest, so the wrapper throws in place) — so deleting the
+  // https wrap is caught by the stub assertion above, and the block itself
+  // survives the wrap's absence.
   assert.throws(
     () => https.request({ hostname: '203.0.113.9', port: 443, path: '/' }, () => {}),
     (err) => {
@@ -104,11 +119,29 @@ test('https.request with an options object for a non-loopback host is blocked (h
   );
 });
 
-test('http.request with a string URL for a non-loopback host is blocked (string-URL branch pinned)', () => {
+test('http.request with a string URL for a non-loopback host throws at the request layer before any dial (string-URL branch pinned)', () => {
   // Pins the string-URL branch of wrapRequest (the `typeof input === 'string'`
-  // branch that reads the host from the URL). A reserved literal (203.0.113.9,
-  // TEST-NET-2) need not be routable — the wrapper blocks before any dial — so
-  // no skip is needed. The wrapper throws synchronously.
+  // branch that reads the host from the URL) by making the request-layer check
+  // the ONLY barrier: the never-dialing agent stub below (addRequest() {} — no
+  // socket is ever created) means the net.Socket.prototype.connect wrapper is
+  // never reached, so disabling the string-URL branch (the M5b mutant) would let
+  // the call through to the original http.request, which returns a ClientRequest
+  // instead of throwing — and this assert.throws would fail. A reserved literal
+  // (203.0.113.9, TEST-NET-2) need not be routable — the wrapper blocks before
+  // any dial — so no skip is needed.
+  const stubAgent = { addRequest() {}, protocol: 'http:', defaultPort: 80, maxSockets: Infinity };
+  assert.throws(
+    () => http.request('http://203.0.113.9/', { agent: stubAgent }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Regression net: with the default agent the block still holds via the
+  // net.Socket.prototype.connect wrapper (the default agent dials synchronously
+  // inside ClientRequest, so the wrapper throws in place) — so disabling the
+  // string-URL branch is caught by the stub assertion above, and the block
+  // itself survives the branch's absence.
   assert.throws(
     () => http.request('http://203.0.113.9/', () => {}),
     (err) => {
@@ -118,14 +151,33 @@ test('http.request with a string URL for a non-loopback host is blocked (string-
   );
 });
 
-test('http.request with a 2nd-arg options object carrying a non-loopback host is blocked (2nd-arg options branch pinned)', () => {
+test('http.request with a 2nd-arg options object carrying a non-loopback host throws at the request layer before any dial (2nd-arg options branch pinned)', () => {
   // Pins the 2nd-arg options branch of wrapRequest (http.request(url, options,
-  // callback), where the options object may also carry a host). The URL is a
-  // loopback host but the 2nd-arg options carry a non-loopback hostname — the
-  // guard blocks if ANY present candidate is non-loopback (fail-closed). A
+  // callback), where the options object may also carry a host) by making the
+  // request-layer check the ONLY barrier: the never-dialing agent stub below
+  // (addRequest() {} — no socket is ever created) means the
+  // net.Socket.prototype.connect wrapper is never reached. The URL is a loopback
+  // host but the 2nd-arg options carry a non-loopback hostname — the guard blocks
+  // if ANY present candidate is non-loopback (fail-closed). Disabling the
+  // 2nd-arg options branch (the M5c mutant) leaves the loopback URL passing the
+  // string-URL branch and the non-loopback hostname unchecked, so the call
+  // reaches the original http.request, which (with the stub agent) returns a
+  // ClientRequest instead of throwing — and this assert.throws would fail. A
   // reserved literal (203.0.113.9, TEST-NET-2) need not be routable — the
-  // wrapper blocks before any dial — so no skip is needed. The wrapper throws
-  // synchronously.
+  // wrapper blocks before any dial — so no skip is needed.
+  const stubAgent = { addRequest() {}, protocol: 'http:', defaultPort: 80, maxSockets: Infinity };
+  assert.throws(
+    () => http.request('http://127.0.0.1:1/', { hostname: '203.0.113.9', agent: stubAgent }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Regression net: with the default agent the block still holds via the
+  // net.Socket.prototype.connect wrapper (the default agent dials synchronously
+  // inside ClientRequest, so the wrapper throws in place) — so disabling the
+  // 2nd-arg options branch is caught by the stub assertion above, and the block
+  // itself survives the branch's absence.
   assert.throws(
     () => http.request('http://127.0.0.1:1/', { hostname: '203.0.113.9' }, () => {}),
     (err) => {
@@ -383,11 +435,12 @@ test('a dns.lookup of a non-loopback host is blocked (dns.lookup predicate, not 
   // invoking the original, so the rejection is a thrown error at the call site.
   // Two reserved literals (203.0.113.9 TEST-NET-2, 198.51.100.7 TEST-NET-1)
   // need not be routable — the wrapper blocks before any dial — so no skip is
-  // needed for the block direction. The second literal (198.51.100.7) is named
-  // NOWHERE else in the suite, so it pins the PREDICATE ("is this loopback")
-  // rather than one hard-coded literal: a wrapper that blacklisted only
-  // 203.0.113.9 would let 198.51.100.7 through (a numeric literal needs no
-  // resolver, so it would resolve instead of throwing) and this test would fail.
+  // needed for the block direction. The guard does NOT hard-code 198.51.100.7
+  // (its predicate is "is this loopback", with no per-host allow/block list),
+  // so asserting it is blocked pins the PREDICATE rather than one hard-coded
+  // literal: a wrapper that blacklisted only 203.0.113.9 would let
+  // 198.51.100.7 through (a numeric literal needs no resolver, so it would
+  // resolve instead of throwing) and this test would fail.
   // This mirrors the fetch-layer predicate test above (nonexistent-host.invalid,
   // a host the suite never names).
   assert.throws(
