@@ -85,7 +85,19 @@
  *       -> FAIL, same test (a class method re-scheduling itself via a
  *          `this.tick` binding)
  *
- * M6-M9 were also added as regression fixtures in the positive-control test
+ *   M10 lib/web/db.js + `const pollExpr = () => setTimeout(pollExpr, 1000);`
+ *       -> FAIL, test "no reachable server-tree module runs a
+ *          setTimeout/setImmediate self-re-scheduling loop":
+ *          "lib/web/db.js is reachable from app/alerts/page.js and must not
+ *          run a setTimeout self-re-scheduling loop (a self-re-scheduling
+ *          timer is a polling loop with the token rotated)"
+ *       (an expression-bodied arrow — no braces — re-scheduling itself. The
+ *        round-2 rewrite's `functionBodies` collected only braced forms, so
+ *        this shape regressed to a survivor; the async form
+ *        `const pollExpr = async () => setTimeout(pollExpr, 1000);` is the
+ *        same blind spot and is also caught)
+ *
+ * M6-M10 were also added as regression fixtures in the positive-control test
  * below, so the detector's coverage of each shape is proven in-tree.
  *
  * Known limitation (recorded, not a defect): `FORBIDDEN_TOKENS` is matched as
@@ -93,6 +105,28 @@
  * that merely mentions `setInterval` in a `lib/**` file would trip the guard
  * (a false positive, not a false negative — it makes the guard stricter, never
  * looser). The same brittleness exists for `app/**` from card 1.
+ *
+ * The loop detector is a hand-rolled source scanner, so it covers the shapes
+ * above and a *recorded set of blind spots* it does not. These are not
+ * false negatives of the guard's stated contract (they are polling-loop
+ * shapes the detector does not reason about), and each is recorded here so a
+ * later card can close it deliberately rather than by accident:
+ *   - object-literal method: `const o = { tick() { setTimeout(o.tick, 1000); } };`
+ *     — `callbackReferences` tests `this.NAME` / `NAME.bind`, not `o.NAME`.
+ *   - alias indirection: `const s = () => { setTimeout(ref, 1000); }; const ref = s;`
+ *   - wrapped mutual recursion: `function mutA(){ setTimeout(() => mutB(), 1000); }
+ *     function mutB(){ mutA(); }` — the direct (`setTimeout(mutB, ms)`) form
+ *     is caught, the wrapped (`() => mutB()`) form is not.
+ *   - `node:timers/promises` awaited loop: `while (true) { await waitMs(5000); }`
+ *     where `waitMs` is `import { setTimeout as waitMs } from 'node:timers/promises'`
+ *     — no `setInterval` token and no self-referential callback, so neither
+ *     mechanism sees it. (This shape is outside the card's three holes and
+ *     outside requirement 2's `setTimeout`/`setImmediate` naming; it is scope,
+ *     not a weakening — no prior revision of this file ever covered it.)
+ *   - `queueMicrotask(spin)` recursion — no timer token at all.
+ * The header's "that is its entire purpose" therefore applies to the three
+ * holes and the `setTimeout`/`setImmediate` shapes above, not to the blind
+ * spots in this list.
  */
 
 import { test } from 'node:test';
@@ -416,6 +450,18 @@ function functionBodies(source) {
     const body = matchBlock(source, openIdx);
     if (body !== null) add(m[1], body);
   }
+  // Expression-bodied arrow: `name = (...) => expr` (no braces). The body is
+  // the expression up to the terminating `;` or newline — a single expression
+  // never contains `;`, and a leading `{` means a braced body (handled by the
+  // `assignRe` above, which yields an empty `body` here and is skipped). This
+  // is the shape the round-1 detector handled via `functionBodyFor` and the
+  // round-2 rewrite dropped: `const pollExpr = () => setTimeout(pollExpr,
+  // 1000);` (and its async form) must be collected so its timer is examined.
+  const assignExprRe = /\b([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>\s*([^;{\n]*)/g;
+  while ((m = assignExprRe.exec(source)) !== null) {
+    const body = m[4].trim();
+    if (body !== '') add(m[1], body);
+  }
   const assignFnRe = /\b([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function\s*\(([^)]*)\)\s*\{/g;
   while ((m = assignFnRe.exec(source)) !== null) {
     const openIdx = m.index + m[0].length - 1;
@@ -456,7 +502,11 @@ function timerFirstArgs(body, timer) {
  * body schedules it. Covers a direct self-pass (`setTimeout(name, ms)`), a
  * wrapped callback that calls it (`setTimeout(() => name(), ms)`), a
  * `this.name` / `name.bind` binding (a method re-scheduling itself), and a
- * named helper whose own body calls it (a two-function ping-pong loop).
+ * *directly* passed named helper whose own body calls it (the unwrapped
+ * two-function ping-pong loop, `setTimeout(mutB, ms)` where `mutB` calls
+ * `name`). The *wrapped* mutual-recursion variant — `setTimeout(() => mutB(),
+ * ms)` where `mutB` calls `name` — is a recorded blind spot (the callback is
+ * an anonymous arrow, so the helper lookup below does not apply).
  */
 function callbackReferences(callback, name, source) {
   const idMatch = /^([A-Za-z_$][\w$]*)$/.exec(callback);
@@ -502,12 +552,20 @@ test('setTimeout/setImmediate loop detector flags the polling shapes and not one
   const badWrapped = 'const spin = () => { setTimeout(() => spin(), 1000); };\n';
   const badNamedFnExpr = 'setImmediate(function tick() { setImmediate(tick); });\n';
   const badMethod = 'class Ticker { tick() { setTimeout(this.tick.bind(this), 1000); } } new Ticker().tick();\n';
+  // The round-2 regression shape (M10): an expression-bodied arrow (no
+  // braces) re-scheduling itself. The round-2 rewrite's `functionBodies`
+  // collected only braced forms, so this survived — it must be flagged.
+  const badExprArrow = 'const pollLoop = () => setTimeout(pollLoop, 1000);\n';
+  const badAsyncExprArrow = 'const pollLoop = async () => setTimeout(pollLoop, 1000);\n';
   // Good: the real lib/clock.js idiom (a one-shot timer whose callback is the
-  // Promise resolver, not a self-referential function) and a one-shot delayed
-  // call to a named function.
+  // Promise resolver, not a self-referential function) and one-shot delayed
+  // calls to a named function. The one-shot calls sit *inside* a function
+  // body so the detector's "callback does not refer back" branch is actually
+  // exercised (a module-scope call belongs to no collected body and would
+  // pass vacuously).
   const goodClock = 'function systemClock() { return { advance(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); } }; }\n';
-  const goodOneShot = 'const tick = () => { console.log("once"); };\nsetTimeout(tick, 1000);\n';
-  const goodOneShotImmediate = 'const tick = () => { console.log("once"); };\nsetImmediate(tick);\n';
+  const goodOneShot = 'const tick = () => { console.log("once"); };\nfunction start() { setTimeout(tick, 1000); }\n';
+  const goodOneShotImmediate = 'const tick = () => { console.log("once"); };\nfunction start() { setImmediate(tick); }\n';
 
   assert.ok(hasSelfReschedulingLoop(badArrow, 'setTimeout'), 'must flag a setTimeout arrow self-re-scheduling loop');
   assert.ok(hasSelfReschedulingLoop(badImmediate, 'setImmediate'), 'must flag a setImmediate arrow self-re-scheduling loop');
@@ -515,6 +573,8 @@ test('setTimeout/setImmediate loop detector flags the polling shapes and not one
   assert.ok(hasSelfReschedulingLoop(badWrapped, 'setTimeout'), 'must flag a setTimeout wrapped-callback self-re-scheduling loop');
   assert.ok(hasSelfReschedulingLoop(badNamedFnExpr, 'setImmediate'), 'must flag a setImmediate named-function-expression self-re-scheduling loop');
   assert.ok(hasSelfReschedulingLoop(badMethod, 'setTimeout'), 'must flag a setTimeout method (this.bind) self-re-scheduling loop');
+  assert.ok(hasSelfReschedulingLoop(badExprArrow, 'setTimeout'), 'must flag a setTimeout expression-bodied arrow self-re-scheduling loop (M10 — the round-2 regression)');
+  assert.ok(hasSelfReschedulingLoop(badAsyncExprArrow, 'setTimeout'), 'must flag an async expression-bodied arrow self-re-scheduling loop');
 
   assert.ok(!hasSelfReschedulingLoop(goodClock, 'setTimeout'), 'must not flag the clock.js one-shot advance() idiom');
   assert.ok(!hasSelfReschedulingLoop(goodOneShot, 'setTimeout'), 'must not flag a one-shot delayed call to a named function');
