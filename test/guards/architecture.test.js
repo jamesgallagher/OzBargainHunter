@@ -23,14 +23,27 @@
  *
  * Legitimate one-shot `setTimeout`s are not flagged: the check requires the
  * function's own name to appear as the first argument of the `setTimeout` call
- * inside its own body. The self-reference is matched as a whole token (so a
- * function named `set`, `setup` or `reset` is not matched inside the word
+ * inside its own body, or as the call the first-argument arrow makes (the
+ * thunk spelling — `setTimeout(() => poll(), …)` — the shape this repo's own
+ * poll loop is written in). The self-reference is matched as a whole token (so
+ * a function named `set`, `setup` or `reset` is not matched inside the word
  * `setTimeout`), and comments, string/template literals, and regex literals are
  * blanked out first (so a name in a comment, a `}` inside a string, or a quote
- * inside a regex literal cannot fool the check). Known limit: a quote inside
- * JSX text (e.g. `<p>it's ok</p>`) is not blanked, so a self-rescheduling loop
- * after such JSX in the same file can be hidden; no file in the current tree
- * has one.
+ * inside a regex literal cannot fool the check). A regex literal is only
+ * recognised in an expression-start position (after an operator, a keyword such
+ * as `return`/`typeof`, or at the start of the source); a division — including
+ * a division whose left operand ends in a postfix `++`/`--` or in a member
+ * access (`.of`) — is never read as a regex start.
+ *
+ * Known limits (a lexical pass, not a parser): (1) a quote inside JSX text
+ * (e.g. `<p>it's ok</p>`) is not blanked, so a self-rescheduling loop after
+ * such JSX in the same file can be hidden; no file in the current tree has
+ * one. (2) An *indirect* reschedule — a function that schedules a *different*
+ * function which in turn reschedules the first (e.g. `schedule()` calling
+ * `fireBeat()`, as in `lib/scheduler.js`) is not caught: the self-reference
+ * must be direct (the name, or an arrow that calls the name). Deliberate
+ * obfuscation (`globalThis['set'+'Timeout']`, method shorthand) is likewise out
+ * of scope by design.
  *
  * If a later change moves polling into a route, a shared web module, or the
  * server-start hook, this test fails. That is its entire purpose.
@@ -135,8 +148,12 @@ function blankCommentsAndStrings(source) {
   let i = 0;
   // The last significant token seen so far, used to decide whether a `/`
   // opens a regex literal or divides. A string/regex/comment ends in a
-  // sentinel; an identifier or keyword is spelled out in `tok`.
+  // sentinel; an identifier or keyword is spelled out in `tok`. `prev` is the
+  // significant token before `last`, used to tell a postfix `++`/`--` (the
+  // second operator is not an expression-start context) from a binary one, and
+  // a member access (`.of`) from a keyword.
   let last = '';
+  let prev = '';
   let tok = '';
   while (i < n) {
     const ch = source[i];
@@ -200,7 +217,7 @@ function blankCommentsAndStrings(source) {
     // Regex literal: a `/` that can start one (decided from the preceding
     // significant token) is blanked through to its unescaped closing `/`,
     // honouring `\` escapes and `[...]` character classes.
-    if (ch === '/' && canStartRegex(last, tok)) {
+    if (ch === '/' && canStartRegex(last, tok, prev)) {
       let j = i;
       out[j] = ' ';
       j += 1;
@@ -230,12 +247,17 @@ function blankCommentsAndStrings(source) {
     }
     // A bare significant character: an identifier/keyword char accumulates
     // into `tok` (reset when a fresh token starts); any other char closes
-    // the token and becomes `last` itself.
+    // the token and becomes `last` itself. `prev` always holds the
+    // significant token that preceded the one starting here.
     if (/[A-Za-z0-9_$]/.test(ch)) {
-      if (last !== 'ident') tok = '';
+      if (last !== 'ident') {
+        tok = '';
+        prev = last;
+      }
       tok += ch;
       last = 'ident';
     } else if (ch !== ' ' && ch !== '\t' && ch !== '\n' && ch !== '\r') {
+      prev = last;
       last = ch;
       tok = '';
     }
@@ -266,17 +288,31 @@ const REGEX_START_KEYWORDS = new Set([
 
 /**
  * Can a `/` at the current position open a regex literal, given the preceding
- * significant token? A regex can only follow an expression-start context
+ * significant tokens? A regex can only follow an expression-start context
  * (a whitelisted operator, or a keyword such as `return`/`typeof`/`yield`).
- * After an identifier/number (unless it is one of those keywords), `)`, `]`,
- * a string, a regex literal, `<`, `>` or `.` it is a division operator; at
+ * Two contexts that look like expression-start but are not:
+ *   - a postfix `++`/`--` — the second operator is not an expression-start
+ *     context, so `hits++ / total` divides;
+ *   - a member access — the identifier after `.` is a property name, not a
+ *     keyword, so `counts.of / total` divides.
+ * After any other identifier/number (unless it is one of those keywords), `)`,
+ * `]`, a string, a regex literal, `<`, `>` or `.` it is a division operator; at
  * the start of the source it opens a literal.
  * @param {string} last
  * @param {string} tok the pending identifier/keyword, if `last` is 'ident'
+ * @param {string} prev the significant token before `last`
  * @returns {boolean}
  */
-function canStartRegex(last, tok) {
+function canStartRegex(last, tok, prev) {
   if (last === '') return true; // start of source
+  // Postfix `++`/`--`: the second operator is not an expression-start context.
+  if ((last === '+' && prev === '+') || (last === '-' && prev === '-')) {
+    return false;
+  }
+  // Member access: the identifier after `.` is a property name, not a keyword.
+  if (last === 'ident' && prev === '.') {
+    return false;
+  }
   if (last === 'ident') return REGEX_START_KEYWORDS.has(tok);
   return REGEX_START_CONTEXTS.has(last);
 }
@@ -346,17 +382,32 @@ function conciseBody(source, start) {
 
 /**
  * Does `body` (already blanked) contain a `setTimeout`-driven self-reschedule of
- * the function named `name`? That is, `setTimeout(name, …)` with `name` as the
- * first argument — the shape of a poll loop that dodges the `setInterval` check.
- * A one-shot `setTimeout(other, …)` (a different first argument) is not flagged.
+ * the function named `name`? Two spellings, both the shape of a poll loop that
+ * dodges the `setInterval` check:
+ *   - direct:  `setTimeout(name, …)` — `name` is the first argument;
+ *   - thunk:   `setTimeout( [async] (params) => [ { ] name( … )` — the arrow
+ *     (the first argument) calls the function's own name, i.e. it reschedules
+ *     itself. This is the spelling this repo's own poll loop is written in
+ *     (`lib/scheduler.js` schedules a beat via `setTimeout(() => fireBeat(…))`).
+ * A one-shot `setTimeout(other, …)` (a different first argument, or an arrow that
+ * calls a *different* function) is not flagged. The self-reference is matched as
+ * a whole token, so a function named `set`/`setup`/`reset` is not matched inside
+ * the word `setTimeout`.
  * @param {string} body
  * @param {string} name
  * @returns {boolean}
  */
 function isSelfReschedule(body, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`setTimeout\\s*\\(\\s*${escaped}\\b`);
-  return re.test(body);
+  // Direct form: setTimeout(name, …) with name as the first argument.
+  const direct = new RegExp(`setTimeout\\s*\\(\\s*${escaped}\\b`);
+  // Thunk form: setTimeout( [async] (params) => [ { ] name( … ). The arrow is the
+  // first argument and it calls the function's own name. `[^)]*` bounds the
+  // arrow's parameter list to the first `)`, so it cannot run past the arrow.
+  const thunk = new RegExp(
+    `setTimeout\\s*\\(\\s*(?:async\\s+)?\\(\\s*[^)]*\\s*\\)\\s*=>\\s*(?:\\{)?\\s*${escaped}\\s*\\(`,
+  );
+  return direct.test(body) || thunk.test(body);
 }
 
 /**
@@ -482,6 +533,31 @@ test('the poll-loop detector catches the shapes it exists for (positive controls
     hasSelfReschedulingTimeout("const esc = (s) => s.replace(/\"/g, '&quot;');\nfunction pollEsc(){ setTimeout(pollEsc, 60000); }"),
     'a quote inside a regex literal does not hide a later self-rescheduling loop (regex literals are blanked, so their quotes are not read as string delimiters)',
   );
+  // The thunk spelling: the arrow (the first argument to setTimeout) calls the
+  // function's own name. This is the shape this repo's own poll loop is
+  // written in (`lib/scheduler.js` schedules a beat via
+  // `setTimeout(() => fireBeat(…))`), so a poll loop moved into the server
+  // tree in this spelling must be caught.
+  assert.ok(
+    hasSelfReschedulingTimeout('function pollC(){ setTimeout(() => pollC(), 60000); }'),
+    'the thunk spelling (the arrow calls the function itself) is the same loop',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('function pollD(x){ setTimeout(() => pollD(x), 60000); }'),
+    'the thunk spelling with an argument is the same loop',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('function pollE(){ setTimeout(() => { pollE(); }, 60000); }'),
+    'the thunk spelling with a block body is the same loop',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('const pf = () => setTimeout(() => pf(), 60000);'),
+    'a concise-body arrow whose body is a self-rescheduling thunk is the same loop',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('const pf = async () => { await tick(); setTimeout(async () => pf(), 60000); };'),
+    'the async thunk spelling is the same loop',
+  );
 });
 
 test('the poll-loop detector leaves one-shot timers alone (negative controls)', () => {
@@ -508,6 +584,39 @@ test('the poll-loop detector leaves one-shot timers alone (negative controls)', 
   assert.ok(
     !hasSelfReschedulingTimeout('function scheduleRetryOnce() { /* scheduleRetryOnce … */ setTimeout(() => {}, 250); }'),
     'a name that only appears in a comment is not a self-reschedule',
+  );
+});
+
+// Regression pin for the round-3 division misread (review round 3, Major 2): a
+// division whose left operand ends in a postfix `++`/`--` or in a member access
+// (`.of`) used to be read as a regex-literal start (the second `+`/`-` is an
+// expression-start context, and a keyword-shaped token after `.` was read as a
+// keyword). The phantom literal then blanked forward to the next `/` — or to
+// EOF when there was none — hiding any loop after it. These controls prove the
+// division is treated as division, so a real self-rescheduling loop that follows
+// is still caught.
+test('a division after a postfix operator or member access does not hide a later self-rescheduling loop (division-regression pin)', () => {
+  assert.ok(
+    hasSelfReschedulingTimeout('function f(){ const hits = 1; const total = 2; const r = hits++ / total; setTimeout(f, 1000); }'),
+    'a division whose left operand ends in a postfix ++ is not a regex start, so the loop after it is caught',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('function f(){ const slots = 1; const total = 2; const r = slots-- / total; setTimeout(f, 1000); }'),
+    'a division whose left operand ends in a postfix -- is not a regex start, so the loop after it is caught',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('function f(){ const counts = { of: 1 }; const total = 2; const r = counts.of / total; setTimeout(f, 1000); }'),
+    'a member-access operand (counts.of) is not a keyword, so the division is not a regex start and the loop after it is caught',
+  );
+  assert.ok(
+    hasSelfReschedulingTimeout('function f(){ const a = 1; const b = 2; const q3 = a / b; setTimeout(f, 1000); }'),
+    'a plain division is not a regex start, so the loop after it is caught',
+  );
+  // And the inverse: a one-shot timer that merely sits after a division is not
+  // flagged (the division does not corrupt the token stream into a false loop).
+  assert.ok(
+    !hasSelfReschedulingTimeout('function f(){ const hits = 1; const total = 2; const r = hits++ / total; setTimeout(other, 1000); }'),
+    'a one-shot timer after a division is not a loop',
   );
 });
 
