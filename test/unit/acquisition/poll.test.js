@@ -641,3 +641,65 @@ test('a DeniedPathError on the front URL (after page 0/1 returned 200) rejects, 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The deals-feed-denied sub-case (the AC's own "deals/observations are both 0"
+// shape): a DeniedPathError on the *first* URL (deals page 0) aborts the cycle
+// before any feed is reached. The round-3 finally flush must NOT turn this
+// zero-progress abort into a recorded success: last_success_at stays frozen at
+// its pre-cycle value, the accumulated counter is preserved (not wiped to 0),
+// and the dead-man's switch stays due.
+test('a DeniedPathError on the deals feed (page 0) rejects with 0 deals/observations and does NOT record a false success (last_success_at frozen, counter preserved, dead-man due)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-deny-p0-'));
+  const clock = fixedClock('2026-09-19T07:30:00.000Z');
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // Pre-seed poll_state with an accumulated failure state from earlier cycles:
+  // a last success 90 minutes ago, counter 3, backoff 4.
+  const baseline = '2026-09-19T06:00:00.000Z';
+  store.setPollState({
+    lastSuccessAt: baseline,
+    lastResponseClass: 'ok',
+    backoffSeconds: 4,
+    consecutiveFailures: 3,
+  });
+  // A client whose first URL (deals page 0) is deny-listed: it throws
+  // DeniedPathError before any feed is reached.
+  const denyPage0Client = {
+    blocked: false,
+    async request(url) {
+      const err = new Error(`Denied path: ${url}`);
+      err.name = 'DeniedPathError';
+      throw err;
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: denyPage0Client, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    // The cycle rejects (the DeniedPathError propagates — fail loudly).
+    assert.ok(threw, 'runDealPoll should reject on a DeniedPathError');
+    assert.equal(threw.name, 'DeniedPathError');
+    // No feed was reached: 0 deals, 0 observations.
+    assert.equal(store.countDeals(), 0);
+    assert.equal(store.countAllObservations(), 0);
+    const state = store.getPollState();
+    // The zero-progress abort must NOT record a false success: last_success_at
+    // is frozen at its pre-cycle value (not advanced to the cycle time). This
+    // is the round-3 Major — the delivered bytes advanced it and wiped the
+    // counter, so the dead-man's switch could never fire.
+    assert.equal(state.last_success_at, baseline, 'last_success_at must not be advanced by a zero-progress abort');
+    // The accumulated counter is preserved (not wiped to 0).
+    assert.equal(state.consecutive_failures, 3, 'the stored counter must be preserved on a zero-progress abort');
+    // The backoff is recomputed from the preserved counter (2^3 = 8).
+    assert.equal(state.backoff_seconds, 8);
+    // The dead-man's switch is still due 30 minutes after the (frozen) last
+    // success — the whole point of not recording a false success.
+    const dueNow = new Date(Date.parse(baseline) + 31 * 60 * 1000).toISOString();
+    assert.equal(deadManState({ lastSuccessAt: state.last_success_at, now: dueNow, lastNotificationAt: null }).due, true);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
