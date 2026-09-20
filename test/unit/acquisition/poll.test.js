@@ -45,12 +45,12 @@ async function runTwoPolls() {
   const store = openStore({ path: join(dir, 'test.db'), clock });
   const t1 = createFixtureTransport(P1);
   const c1 = makeClient(t1, clock, store);
-  await runDealPoll({ client: c1, store, clock, log: () => {} });
+  const r1 = await runDealPoll({ client: c1, store, clock, log: () => {} });
   await clock.advance(35 * 60 * 1000);
   const t2 = createFixtureTransport(P2);
   const c2 = makeClient(t2, clock, store);
-  await runDealPoll({ client: c2, store, clock, log: () => {} });
-  return { t1, t2, store, close: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
+  const r2 = await runDealPoll({ client: c2, store, clock, log: () => {} });
+  return { t1, t2, r1, r2, store, close: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 function assertNoPage2(transport) {
@@ -274,7 +274,7 @@ test('front feed 304 with 200 deals: the cycle commits the deals and keeps the f
 });
 
 test('front_page_first_seen is stable across polls: 975666 keeps its poll-1 value and 975704 acquires it at poll 2', async () => {
-  const { t1, t2, store, close } = await runTwoPolls();
+  const { t1, t2, r1, r2, store, close } = await runTwoPolls();
   try {
     assertNoPage2(t1);
     assertNoPage2(t2);
@@ -283,14 +283,21 @@ test('front_page_first_seen is stable across polls: 975666 keeps its poll-1 valu
     // overwritten to the poll-2 time) — first-seen, not last-seen (4.1).
     const deal = store.getDeal(975666);
     assert.ok(deal.front_page_first_seen, '975666 front_page_first_seen should be set');
-    // The poll-1 instant is 07:30:00Z (the deals feed 200 lands at +6s).
-    assert.equal(deal.front_page_first_seen, '2026-09-19T07:30:06.000Z');
+    // One instant per poll cycle: a poll is one observation instant, and the
+    // client's 3-second inter-request pause is pacing, not data (4.1 — one row
+    // per deal per poll). The front feed is the third request of the cycle, but
+    // everything the cycle sees is stamped with the cycle's instant,
+    // 07:30:00Z, which the poller also returns as `result.pollAt` so the rules
+    // engine evaluates the feeds at exactly that instant.
+    assert.equal(r1.pollAt, '2026-09-19T07:30:00.000Z');
+    assert.equal(deal.front_page_first_seen, '2026-09-19T07:30:00.000Z');
     // 975704 is on the front feed only at poll 2 (cmp_front), so it acquires
     // front_page_first_seen at poll 2 — the COALESCE must not block a first
-    // acquisition, only an overwrite.
+    // acquisition, only an overwrite. Poll 2's instant is 08:05:06Z.
     const deal704 = store.getDeal(975704);
     assert.ok(deal704.front_page_first_seen, '975704 front_page_first_seen should be set at poll 2');
-    assert.equal(deal704.front_page_first_seen, '2026-09-19T08:05:12.000Z');
+    assert.equal(r2.pollAt, '2026-09-19T08:05:06.000Z');
+    assert.equal(deal704.front_page_first_seen, '2026-09-19T08:05:06.000Z');
   } finally {
     close();
   }

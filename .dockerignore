@@ -1,0 +1,16 @@
+# The build context (design 10.4). Only what the image needs is sent to the
+# daemon: a local `.next/`, `node_modules/`, database file or scratch directory
+# must never reach the builder, and a stale local build must never be able to
+# stand in for the one the image builds.
+.git
+.github
+node_modules
+.next
+out
+*.db
+*.db-wal
+*.db-shm
+*.log
+unraid
+docs
+coverage

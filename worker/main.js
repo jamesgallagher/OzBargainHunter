@@ -172,7 +172,12 @@ export async function startWorker({
     // seeding (acceptance 11.4.5).
     const wasEmpty = store.countDeals() === 0 && store.countAllObservations() === 0;
     const result = await runDealPoll({ client, store, clock, config, log });
-    const pollAt = nowIso();
+    // The cycle's observation instant, not "now": the poller stamped its
+    // observations with it, and the engine must evaluate the feeds at the same
+    // instant so its own upsert of those records lands on the same
+    // (deal_id, observed_at) key instead of appending a second row (design
+    // 4.1, one row per deal per poll).
+    const pollAt = result.pollAt ?? nowIso();
     // Gap detection: the gap since the last poll, in ms.
     let gapMs = null;
     if (lastPollAtMs !== null) {

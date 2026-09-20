@@ -1,0 +1,173 @@
+# Continuous integration and delivery (design 10.4).
+#
+# The five jobs, in order:
+#
+#   1. lint     — ESLint over the Next.js project
+#   2. test     — Node's built-in test runner: the unit suite, the guards and
+#                 the integration suite (which builds the app and runs both
+#                 processes against the fixture corpus over loopback)
+#   3. build    — the container image, on EVERY trigger including pull requests
+#   4. smoke    — the built image, run for real against a loopback fixture
+#                 server: it must go healthy (which requires a successful poll)
+#                 and its database must gain observations with no request made
+#                 to the application
+#   5. publish  — ghcr.io, ONLY on main, and ONLY if 1-4 passed
+#
+# Why the publish condition is load-bearing: branch protection is unavailable on
+# this account (a private repository on a personal plan), so there is no merge
+# gate. **The deployment is the gate**: `:latest` is what production runs, and
+# the only thing standing between a broken commit and the Unraid host is that
+# this workflow refuses to publish unless lint, tests, the build and the smoke
+# test all passed.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Keyed on the branch (the git ref) with cancel-in-progress: two rapid pushes to
+# the same branch cannot finish out of order and leave :latest pointing at the
+# older commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # The image the smoke job and the publish job both operate on, and the
+  # package it is published as (10.5).
+  IMAGE_NAME: ozbargainhunter:ci
+  GHCR_IMAGE: ghcr.io/jamesgallagher/ozbargainhunter
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: install from the lockfile
+        run: npm ci
+      - name: eslint
+        run: npm run lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: install from the lockfile
+        run: npm ci
+      # `npm test` is the card's gate: every unit test, every guard and the
+      # integration suite in one command, with the network guard imported so the
+      # suite cannot reach anything but loopback.
+      - name: unit, guards and integration tests
+        run: npm test
+
+  build:
+    name: build
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: buildx
+        uses: docker/setup-buildx-action@v3
+      # linux/amd64 only (10.4): the Unraid host is x86_64. The image is loaded
+      # into the local daemon and saved as an artifact, so the smoke job tests
+      # the bytes this job actually built.
+      - name: build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE_NAME }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: save the image for the smoke job
+        run: docker save ${{ env.IMAGE_NAME }} | gzip > image.tar.gz
+      - name: upload the image
+        uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: image.tar.gz
+          retention-days: 1
+
+  smoke:
+    name: smoke
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: install from the lockfile
+        run: npm ci
+      - name: download the built image
+        uses: actions/download-artifact@v4
+        with:
+          name: image
+      - name: load the built image
+        run: gunzip -c image.tar.gz | docker load
+      # The smoke test starts the fixture server on loopback, runs the image
+      # against it, waits for the container's own health check to go healthy,
+      # and only then asserts the database gained observations and the access
+      # control holds. It never touches ozbargain.com.au, and it could not pass
+      # if it did: /healthz stays unhealthy until a poll has succeeded.
+      - name: smoke test the built image
+        env:
+          OZB_SMOKE_IMAGE: ${{ env.IMAGE_NAME }}
+        run: npm run smoke:image
+
+  publish:
+    name: publish
+    needs: [lint, test, build, smoke]
+    # Only main, and only a push (a PR merge already ran everything on the PR).
+    # Everything above must have passed for this job to be reached at all.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: download the built image
+        uses: actions/download-artifact@v4
+        with:
+          name: image
+      - name: load the built image
+        run: gunzip -c image.tar.gz | docker load
+      - name: log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Exactly two tags (10.2), and no others: `latest` is what production
+      # runs, and `main-<sha>` is the immutable name a rollback points at. There
+      # are no beta, stable or semantic-version tags.
+      - name: tag the immutable name
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          docker tag "${{ env.IMAGE_NAME }}" "${{ env.GHCR_IMAGE }}:latest"
+          docker tag "${{ env.IMAGE_NAME }}" "${{ env.GHCR_IMAGE }}:main-${SHORT_SHA}"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+      - name: push :latest and :main-<sha>
+        run: |
+          docker push "${{ env.GHCR_IMAGE }}:latest"
+          docker push "${{ env.GHCR_IMAGE }}:main-${{ env.SHORT_SHA }}"
