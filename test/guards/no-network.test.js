@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import dns from 'node:dns';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -294,6 +295,78 @@ test('a direct Socket.prototype.connect(port, host, cb) for a non-loopback host 
         return true;
       },
     );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('a dns.lookup of a non-loopback host is blocked (dns.lookup wrapper pinned)', () => {
+  // The guard's fifth wrapped shape: dns.lookup. The wrapper throws
+  // NetworkBlockedError synchronously (BEFORE originalLookup is called), so a
+  // non-loopback hostname never reaches the resolver. We assert the sync throw
+  // (assert.throws, not assert.rejects): the wrapper runs the host check before
+  // invoking the original, so the rejection is a thrown error at the call site.
+  // A reserved literal (203.0.113.9, TEST-NET-2) need not be routable — the
+  // wrapper blocks before any dial — so no skip is needed for the block
+  // direction.
+  assert.throws(
+    () => dns.lookup('203.0.113.9', () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('a dns.lookup of 127.0.0.1 is permitted (real loopback lookup, positive direction)', async () => {
+  // Positive-direction loopback control for the dns.lookup wrapper: a real
+  // loopback lookup must resolve (not throw NetworkBlockedError). If the
+  // wrapper were deleted, this control would still pass (the original lookup
+  // resolves 127.0.0.1) — so the control is what the block test's kill proof
+  // relies on: deleting the wrapper lets the non-loopback block test through
+  // (it resolves instead of throwing), while this control is unaffected.
+  const { address } = await new Promise((resolve, reject) => {
+    dns.lookup('127.0.0.1', (err, addr) => (err ? reject(err) : resolve({ address: addr })));
+  });
+  assert.equal(address, '127.0.0.1');
+});
+
+test('a fetch of a Request object for a non-loopback host is blocked (Request input handled)', async () => {
+  // The fetch wrapper's Request-object branch: `input.url ?? input.href ??
+  // String(input)`. The shipped `new URL(...)` shape is tested above; this pins
+  // the `new Request(...)` shape. A Request exposes .url (not .href), so the
+  // wrapper must read input.url to resolve the host. If the Request branch were
+  // dropped, String(new Request(...)) is "[object Request]" — hostFromUrl
+  // returns null — and the guard would block even loopback Requests (fail-
+  // closed). So the block direction is pinned here, and the loopback control
+  // below is the kill proof: dropping the branch makes the control fail.
+  await assert.rejects(
+    () => globalThis.fetch(new Request('https://www.ozbargain.com.au/deals/feed')),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('a fetch of a Request object for a loopback host is permitted over a real server (positive direction)', async () => {
+  // Positive-direction loopback control for the fetch Request branch: a real
+  // Request for 127.0.0.1 must reach a real server. This is the kill proof for
+  // the Request branch — if `input.url ?? input.href ??` were dropped,
+  // String(new Request(...)) is "[object Request]", hostFromUrl returns null,
+  // and the guard would throw NetworkBlockedError here (fail-closed), so this
+  // test would fail while the non-loopback block test still passes.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await globalThis.fetch(new Request(`http://127.0.0.1:${port}/`));
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'ok');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

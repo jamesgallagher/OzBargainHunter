@@ -148,6 +148,15 @@ net.Socket.prototype.connect = function connect(...args) {
 // --- tls.TLSSocket.prototype.connect (tls.connect) ---
 // TLS sockets do not inherit net.Socket.prototype.connect, so tls.connect is a
 // separate egress path; wrap it with the same fail-closed candidate check.
+//
+// REDUNDANT (no distinct coverage): tls.TLSSocket.prototype inherits from
+// net.Socket.prototype (it has no own `connect`), so the
+// net.Socket.prototype.connect wrapper below it still throws
+// NetworkBlockedError for the same dial. Deleting this tls wrapper therefore
+// leaves tls.connect blocked via the inherited net wrapper — verified by probe
+// at card t_c95fd9e3. This wrapper is defence-in-depth only: it is not pinned
+// by a test (a pin cannot fail on the deletion mutant), and its presence is
+// documented here rather than asserted.
 if (typeof tls.TLSSocket.prototype.connect === 'function') {
   const originalTlsConnect = tls.TLSSocket.prototype.connect;
   tls.TLSSocket.prototype.connect = function connect(...args) {
