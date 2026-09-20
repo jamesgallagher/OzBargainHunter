@@ -300,12 +300,16 @@ describe('route: /rules/<id>/save, /rules/new/create, snooze, enable re-gate (11
   });
 });
 
-// X6 / M2(c): create-after-delete must take MAX(id)+1, never COUNT(*)+1.
+// X6 / M2(c): create-after-delete must take MAX(id)+1 over the whole table.
 // `insertRule` is `ON CONFLICT(id) DO UPDATE`, so a COUNT(*)+1 id after a
 // delete (delete 2 from [1,2,3] -> count 2 -> new id 3) silently overwrites
 // the surviving rule 3. This test seeds the gap a delete leaves and drives
-// the real create handler; it fails under the COUNT(*)+1 mutant
-// (`SELECT MAX(id)` -> `SELECT COUNT(*)` in `nextRuleId`).
+// the real create handler. Rule 3 is seeded 'snoozed' (the state the mute
+// route writes) so any id source that filters the table is also caught: with
+// the gap, the enabled rows are {1} only, so `MAX(id) ... WHERE state =
+// 'enabled'` is 1 and the new id is 2 — not 4. The test fails under both the
+// COUNT(*)+1 mutant (id 3, overwriting rule 3) and the filtered-MAX mutant
+// (id 2), and asserts no rule is lost under either.
 describe('route: create-after-delete takes MAX(id)+1, never COUNT(*)+1 (X6, M2)', () => {
   let jwks;
   let store;
@@ -316,13 +320,15 @@ describe('route: create-after-delete takes MAX(id)+1, never COUNT(*)+1 (X6, M2)'
     dir = mkdtempSync(join(tmpdir(), 'ozb-create-after-delete-'));
     store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
     // Seed a contiguous run 1..3, then delete the middle one: the gap shape.
+    // Rule 3 is seeded 'snoozed' — the state the mute route writes — so an id
+    // source filtered to `state = 'enabled'` sees only {1} and returns 2, not 4.
     const now = '2026-09-19T06:20:00Z';
-    for (const [id, term] of [[1, 'term1'], [2, 'term2'], [3, 'term3']]) {
+    for (const [id, term, state] of [[1, 'term1', 'enabled'], [2, 'term2', 'enabled'], [3, 'term3', 'snoozed']]) {
       store.insertRule({
         id,
         type: 'contains',
         parameters: JSON.stringify({ term }),
-        state: 'enabled',
+        state,
         surfaces: 'deals',
         cooldown_seconds: 86400,
         pinned_slug: null,
@@ -332,6 +338,7 @@ describe('route: create-after-delete takes MAX(id)+1, never COUNT(*)+1 (X6, M2)'
     }
     assert.equal(store.deleteRule(2), 1, 'the middle rule is deleted, leaving the gap [1,_,3]');
     assert.equal(store.countRules(), 2, 'two rules survive the delete');
+    assert.equal(store.getRule(3).state, 'snoozed', 'rule 3 is snoozed (the mute route writes this state)');
     setStoreForTest(store);
   });
   after(async () => {
@@ -355,13 +362,20 @@ describe('route: create-after-delete takes MAX(id)+1, never COUNT(*)+1 (X6, M2)'
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.created, true);
-    // The literal expected value: MAX(id)+1 = 4. Under the COUNT(*)+1 mutant
-    // this is 3 and the assertion fails.
-    assert.equal(body.id, 4, 'the new id is MAX(id)+1 = 4, not COUNT(*)+1 = 3');
-    // The surviving rule 3 keeps its original term (no silent overwrite).
+    // The literal expected value: MAX(id)+1 over the whole table = 4.
+    // Under the COUNT(*)+1 mutant this is 3 (overwriting rule 3); under the
+    // filtered-MAX mutant (WHERE state = 'enabled', enabled rows = {1}) it is 2.
+    assert.equal(body.id, 4, 'the new id is MAX(id)+1 = 4 over the whole table, not COUNT(*)+1 = 3 or MAX(id over enabled)+1 = 2');
+    // No-loss: the create must not have overwritten or consumed any existing
+    // rule — three rules exist after it (1, 3 surviving + the new one).
+    assert.equal(store.countRules(), 3, 'no rule is lost: three rules exist after the create');
+    // The surviving rule 3 keeps its original term and its original state
+    // (snoozed) — neither is clobbered by the insert.
     assert.equal(store.getRule(3).parameters.term, 'term3', 'the surviving rule 3 is not overwritten');
-    // The new rule carries its own term.
-    assert.equal(store.getRule(4).parameters.term, 'term4', 'the new rule carries its own term');
+    assert.equal(store.getRule(3).state, 'snoozed', 'the surviving rule 3 keeps its snoozed state');
+    // The new rule carries its own term at the returned id.
+    assert.equal(store.getRule(body.id).parameters.term, 'term4', 'the new rule carries its own term at the returned id');
+    assert.equal(store.getRule(4).parameters.term, 'term4', 'the new rule is at id 4');
   });
 });
 
