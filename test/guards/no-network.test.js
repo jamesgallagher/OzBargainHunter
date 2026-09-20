@@ -254,3 +254,47 @@ test('a direct Socket.prototype.connect(port, host) for a non-loopback host is b
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('a direct Socket.prototype.connect(port, host, cb) for a non-loopback host is blocked (3-arg port-form candidate)', async () => {
+  // The 3-positional-argument port form: s.connect(port, host, cb). node
+  // normalises this into an options object for the underlying dial, but the
+  // DIRECT Socket.prototype.connect shape relies on the guard's port-form
+  // branch reading the second positional argument (args[1]) as the host; the
+  // third argument is the connect callback.
+  //
+  // The guard throws inside the wrapper BEFORE originalConnect.apply, so the
+  // non-loopback address is never dialled and need not be routable — a
+  // reserved literal (203.0.113.9, TEST-NET-2) satisfies the block assertion
+  // on any host, including a loopback-only sandbox. No skip is needed for the
+  // block direction. The real ephemeral server is still required for the
+  // 127.0.0.1 control (the 3-arg loopback form must actually connect).
+  const server = net.createServer((s) => s.end());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    // Control: the matching loopback 3-arg port-form dials.
+    await new Promise((resolve, reject) => {
+      const s = new net.Socket();
+      s.on('error', reject);
+      s.on('connect', () => { s.destroy(); resolve(); });
+      s.connect(port, '127.0.0.1', () => { /* connect callback */ });
+    });
+
+    // The non-loopback 3-arg port-form must be blocked (not dialled).
+    await assert.rejects(
+      new Promise((resolve, reject) => {
+        const s = new net.Socket();
+        s.on('error', reject);
+        s.on('connect', () => { s.destroy(); resolve(); });
+        s.connect(port, '203.0.113.9', () => { /* connect callback */ });
+      }),
+      (err) => {
+        assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
