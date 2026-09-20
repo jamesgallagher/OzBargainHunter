@@ -260,8 +260,27 @@ describe('engine: expiry beats matching and thresholds', () => {
     const alerts = out.alerts.filter((a) => a.rule_id === 1);
     assert.equal(alerts.length, 1, 'exactly one alert (975704 live)');
     assert.equal(alerts[0].node_id, 975704);
-    const expired = out.suppressions.filter((s) => s.node_id === 975700 && s.kind === 'expired');
-    assert.equal(expired.length, 1, 'one expired suppression for 975700');
+    // The AC's own total-count claim: exactly one `expired` row for the whole
+    // poll. An expired deal the rule never matched (975702, 975672) is not
+    // recorded as suppressed-by-this-rule, so the total is 1, not 3.
+    const expired = out.suppressions.filter((s) => s.kind === 'expired');
+    assert.equal(expired.length, 1, 'exactly one expired suppression row in the whole poll');
+    assert.equal(expired[0].node_id, 975700, 'the single expired row is 975700');
+  });
+
+  it('a rule matching nothing records zero suppressions (no spurious rows)', () => {
+    const store = makeStore();
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'zzzznomatch' }, surfaces: 'deals' });
+    const p1 = evaluatePoll({
+      feeds: [{ surface: 'deals', records: dealsPage0 }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    assert.equal(p1.suppressions.length, 0, 'poll 1: a rule matching nothing writes no rows');
+    const p2 = evaluatePoll({
+      feeds: [{ surface: 'deals', records: poll2Deals() }],
+      store, clock: frozenClock(POLL_2_AT), pollAt: POLL_2_AT,
+    });
+    assert.equal(p2.suppressions.length, 0, 'poll 2: still no rows — no unbounded growth');
   });
 
   it('a threshold at 27 over polls 1 and 2 never fires on the expired 975702', () => {
@@ -559,6 +578,32 @@ describe('engine: freebies', () => {
     assert.ok(freebieN.unsubscribe.url.startsWith('/settings/'), 'unsubscribe points at the settings screen, not a rule');
     assert.ok(!freebieN.unsubscribe.url.includes('/goto/'), 'no /goto/ in the unsubscribe link');
     assert.ok(!JSON.stringify(freebieN).includes('/goto/'), 'no /goto/ anywhere in the freebie notification');
+  });
+
+  it('two freebies in one poll produce two notifications, each naming its own poster (6.6)', () => {
+    const store = makeStore();
+    // Two distinct unpinned listings, retyped to free — one per poster.
+    const freebieA = { ...C.get(975712), type: 'free' }; // poster ausdkunst
+    const freebieB = { ...C.get(975710), type: 'free' }; // poster Booster
+    const out = evaluatePoll({
+      feeds: [{ surface: 'classifieds', records: [freebieA, freebieB] }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    const freebieAlerts = out.alerts.filter((a) => a.kind === 'freebie');
+    assert.equal(freebieAlerts.length, 2, 'two freebie alerts');
+    const notifications = groupAndCompose(out.alerts);
+    const freebieN = notifications.filter((n) => n.kind === 'freebie');
+    assert.equal(freebieN.length, 2, 'two freebie notifications — freebies are never grouped together');
+    // Every poster is named somewhere in the composed output; neither is dropped.
+    const allBodies = freebieN.map((n) => n.body).join('\n');
+    assert.ok(allBodies.includes('ausdkunst'), 'poster ausdkunst is named');
+    assert.ok(allBodies.includes('Booster'), 'poster Booster is named (not silently dropped)');
+    // Each notification claims only its own listing, not both.
+    for (const n of freebieN) {
+      assert.equal(n.nodeIds.length, 1, 'a freebie notification names exactly one listing');
+    }
+    const nodeIds = new Set(freebieN.flatMap((n) => n.nodeIds));
+    assert.deepEqual([...nodeIds].sort((a, b) => a - b), [975710, 975712], 'both listings are covered across the two notifications');
   });
 });
 

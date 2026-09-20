@@ -208,3 +208,55 @@ test('writeSnapshot produces a valid database with identical row counts and sour
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+// A v1-shaped database: the v1 schema (no `sent` column, no unique
+// observations index) carrying a node seen in both the deals feed and the
+// front feed as two rows with the same (deal_id, observed_at) — exactly the
+// state the previous commit's own engine wrote. openStore() must migrate it
+// to v2 without a UNIQUE constraint error, and must leave one row per pair.
+test('openStore migrates a v1 database with a duplicate observation pair to v2 without a UNIQUE constraint error', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-store-'));
+  const dbPath = join(dir, 'test.db');
+  const clock = fixedClock('2026-09-19T06:20:00Z');
+
+  // 1. Build a real store (v2), then roll it back to a v1-shaped database.
+  const build = openStore({ path: dbPath, clock });
+  const db = build.getDb();
+  db.prepare(
+    `INSERT INTO deals (node_id, title, url, author, posted_at, categories, first_seen)
+     VALUES (1, 'test deal', 'https://example.com/node/1', 'author', '2026-09-19T06:20:00Z', '[]', '2026-09-19T06:20:00Z')`,
+  ).run();
+  // Roll the schema back to v1 *first* (drop the unique index), so the two
+  // duplicate rows below are insertable — a v1 database has no unique index,
+  // so the previous commit's engine wrote the node once per feed.
+  db.exec('DROP INDEX idx_observations_deal_poll');
+  db.exec('ALTER TABLE ledger DROP COLUMN sent');
+  // Two rows, same (deal_id, observed_at): one per feed, as v1 left them.
+  db.prepare(
+    `INSERT INTO observations (deal_id, votes_pos, votes_neg, comment_count, click_count, observed_at)
+     VALUES (1, 10, 0, 5, 100, '2026-09-19T07:30:00Z')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO observations (deal_id, votes_pos, votes_neg, comment_count, click_count, observed_at)
+     VALUES (1, 12, 0, 6, 110, '2026-09-19T07:30:00Z')`,
+  ).run();
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM observations').get().n, 2, 'v1 state: two rows for one (deal, poll) pair');
+  db.prepare('DELETE FROM schema_version').run();
+  db.prepare('INSERT INTO schema_version (version, applied_at) VALUES (1, ?)').run('2026-09-19T06:20:00Z');
+  build.close();
+
+  // 2. Re-open: the v2 migration must de-duplicate before creating the index.
+  const store = openStore({ path: dbPath, clock });
+  const db2 = store.getDb();
+  assert.equal(store.schemaVersion, 2, 'migrated to v2');
+  const obs = db2.prepare('SELECT id, deal_id, observed_at FROM observations ORDER BY id').all();
+  assert.equal(obs.length, 1, 'one row per (deal, poll) pair after migration');
+  assert.equal(obs[0].deal_id, 1);
+  // The unique index now exists and the second feed upserts onto it.
+  const idx = db2.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_observations_deal_poll'`,
+  ).get();
+  assert.ok(idx, 'the unique index was created');
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
