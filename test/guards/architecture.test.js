@@ -153,9 +153,11 @@
  *   - object-literal method: `const o = { tick() { setTimeout(o.tick, 1000); } };`
  *     — `callbackReferences` tests `this.NAME` / `NAME.bind`, not `o.NAME`.
  *   - alias indirection: `const s = () => { setTimeout(ref, 1000); }; const ref = s;`
- *   - wrapped mutual recursion: `function mutA(){ setTimeout(() => mutB(), 1000); }
- *     function mutB(){ mutA(); }` — the direct (`setTimeout(mutB, ms)`) form
- *     is caught, the wrapped (`() => mutB()`) form is not.
+ *   - ~~wrapped mutual recursion~~ (now caught): `function mutA(){ setTimeout(() => mutB(), 1000); }
+ *     function mutB(){ mutA(); }` — the one-hop thunk mutual recursion is
+ *     resolved (see the "Mutual recursion through a thunk" note below), so both
+ *     the direct (`setTimeout(mutB, ms)`) and the wrapped (`() => mutB()`)
+ *     forms are flagged.
  *   - `node:timers/promises` awaited loop: `while (true) { await waitMs(5000); }`
  *     where `waitMs` is `import { setTimeout as waitMs } from 'node:timers/promises'`
  *     — no `setInterval` token and no self-referential callback, so neither
@@ -191,16 +193,18 @@
  *     (the timer in module A, the recursive call in module B). The detector
  *     reasons per-module, so a self-re-schedule split across two modules is not
  *     seen by either.
- *   - **Mutual recursion through a thunk** (the `lib/scheduler.js` shape):
- *     `scheduleNextBeat` schedules `() => fireBeat(…)` and `fireBeat` calls
- *     `scheduleNextBeat` — a *different* function is passed to `setTimeout`
- *     and the self-reference is one hop indirect. Neither detector resolves
- *     the two-function ping-pong *through a thunk* (the direct
- *     `setTimeout(mutB, ms)` form is caught, the wrapped `() => mutB()` form
- *     is a recorded blind spot). A `lib/scheduler.js` relocated verbatim into
- *     the server tree is therefore caught by the *import-prefix* check over
- *     the walked closure (the reached path is `lib/scheduler.js`), not by the
- *     loop detector.
+ *   - ~~Mutual recursion through a thunk~~ (now caught — the `lib/scheduler.js`
+ *     shape): `scheduleNextBeat` schedules `() => fireBeat(…)` and `fireBeat`
+ *     calls `scheduleNextBeat` — a *different* function is passed to
+ *     `setTimeout` and the self-reference is one hop indirect. The detector
+ *     resolves the one-hop thunk mutual recursion (the callback's callee `g`
+ *     is looked up and its own body is tested for a reference back to the
+ *     scheduling function), so the `lib/scheduler.js` shape is flagged by the
+ *     loop detector itself. A `lib/scheduler.js` relocated verbatim into the
+ *     server tree (e.g. `cp lib/scheduler.js lib/web/scheduler-echo.js`,
+ *     reached through a route's import) is therefore caught by the *loop*
+ *     detector, not by the import-prefix check (whose destination-path match
+ *     no longer fires once the file is renamed off `lib/scheduler*`).
  * The header's "that is its entire purpose" therefore applies to the three
  * holes and the `setTimeout` / `setImmediate` shapes above, not to the blind
  * spots in this list.
@@ -568,7 +572,7 @@ function functionBodies(source) {
     const body = matchBlock(source, openIdx);
     if (body !== null) add(m[1], body);
   }
-  const assignRe = /\b([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\s+)?\(([^)]*)\)\s*=>\s*\{/g;
+  const assignRe = /\b([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*=>\s*\{/g;
   while ((m = assignRe.exec(source)) !== null) {
     const openIdx = m.index + m[0].length - 1;
     const body = matchBlock(source, openIdx);
@@ -622,27 +626,63 @@ function timerFirstArgs(body, timer) {
 }
 
 /**
+ * The callee of the first top-level call in a wrapped callback (an arrow
+ * body): `fireBeat` in `() => fireBeat(…)`, `() => { fireBeat(…); }`, and
+ * `async () => await fireBeat(…)`. Returns null when the callback is not a
+ * wrapped arrow, when the callee is a keyword, or when the call is a member
+ * access (`this.tick` / `o.tick`) — those are handled by the `this.name`
+ * branch, not the mutual-recursion lookup. The lookbehind rejects a callee
+ * preceded by `.`, so `this.tick` / `o.tick` are not mistaken for a module
+ * function.
+ * @param {string} callback
+ * @returns {string | null}
+ */
+function thunkCallee(callback) {
+  const m = /=>\s*(?:\{)?\s*(?:await\s+)?(?<!\.)([A-Za-z_$][\w$]*)\s*\(/.exec(callback);
+  if (m === null) return null;
+  const name = m[1];
+  const keywords = new Set(['if', 'for', 'while', 'switch', 'catch', 'finally', 'else', 'function', 'return', 'do', 'with', 'await', 'new', 'typeof', 'instanceof', 'in', 'of', 'void', 'delete', 'throw', 'yield']);
+  if (keywords.has(name)) return null;
+  return name;
+}
+
+/**
  * True when the scheduled callback refers back to `name` — the function whose
  * body schedules it. Covers a direct self-pass (`setTimeout(name, ms)`), a
  * wrapped callback that calls it (`setTimeout(() => name(), ms)`), a
- * `this.name` / `name.bind` binding (a method re-scheduling itself), and a
+ * `this.name` / `name.bind` binding (a method re-scheduling itself), a
  * *directly* passed named helper whose own body calls it (the unwrapped
  * two-function ping-pong loop, `setTimeout(mutB, ms)` where `mutB` calls
- * `name`). The *wrapped* mutual-recursion variant — `setTimeout(() => mutB(),
- * ms)` where `mutB` calls `name` — is a recorded blind spot (the callback is
- * an anonymous arrow, so the helper lookup below does not apply).
+ * `name`), and — the one-hop thunk mutual recursion this repo's own
+ * `lib/scheduler.js` is written in — a *wrapped* callback that calls a
+ * *different* module-local function `g` whose own body calls `name`
+ * (`setTimeout(() => fireBeat(…), ms)` where `fireBeat` calls
+ * `scheduleNextBeat`). The last shape is the recorded "mutual recursion
+ * through a thunk" blind spot, now resolved: the callback is an anonymous
+ * arrow, so the direct helper lookup does not apply, but the callee's own
+ * body is looked up and tested for a reference back to `name`.
  */
 function callbackReferences(callback, name, source) {
+  const refRe = new RegExp('\\b' + name + '\\s*\\(|this\\.' + name + '\\b|\\b' + name + '\\s*\\.bind\\b');
   const idMatch = /^([A-Za-z_$][\w$]*)$/.exec(callback);
   if (idMatch !== null) {
     if (idMatch[1] === name) return true;
     const gBody = functionBodyFor(idMatch[1], source);
-    if (gBody !== null && new RegExp('\\b' + name + '\\s*\\(|this\\.' + name + '\\b|\\b' + name + '\\s*\\.bind\\b').test(gBody)) {
-      return true;
-    }
+    if (gBody !== null && refRe.test(gBody)) return true;
     return false;
   }
-  return new RegExp('\\b' + name + '\\s*\\(|this\\.' + name + '\\b|\\b' + name + '\\s*\\.bind\\b').test(callback);
+  // A wrapped callback: does the arrow body call `name` directly…
+  if (refRe.test(callback)) return true;
+  // …or does it call a *different* module-local function `g` whose own body
+  // calls `name`? That is the one-hop thunk mutual recursion — the shape this
+  // repo's own `lib/scheduler.js` schedules a beat in (`scheduleNextBeat`
+  // schedules `() => fireBeat(…)` and `fireBeat` calls `scheduleNextBeat`).
+  const callee = thunkCallee(callback);
+  if (callee !== null) {
+    const gBody = functionBodyFor(callee, source);
+    if (gBody !== null && refRe.test(gBody)) return true;
+  }
+  return false;
 }
 
 /**
@@ -1117,6 +1157,32 @@ test('setTimeout/setImmediate loop detector flags the polling shapes and not one
   const badThunkBlock = 'function pollE(){ setTimeout(() => { pollE(); }, 60000); }\n';
   const badConciseThunk = 'const pf = () => setTimeout(() => pf(), 60000);\n';
   const badAsyncThunk = 'const pf = async () => { await tick(); setTimeout(async () => pf(), 60000); };\n';
+  // The one-hop thunk mutual recursion (the `lib/scheduler.js` shape): the
+  // scheduling function passes a *different* function to `setTimeout` and the
+  // self-reference is one hop indirect (`scheduleNextBeat` schedules
+  // `() => fireBeat(…)` and `fireBeat` calls `scheduleNextBeat`). This was the
+  // recorded "mutual recursion through a thunk" blind spot, now resolved.
+  const badThunkMutualRecursion = 'function scheduleNextBeat(){ setTimeout(() => fireBeat(1), 1000); }\nfunction fireBeat(i){ scheduleNextBeat(i + 1); }\n';
+  // The wrapped mutual recursion (the `mutA` / `mutB` shape) — the direct
+  // (`setTimeout(mutB, ms)`) form was always caught; the wrapped
+  // (`() => mutB()`) form is the one-hop thunk mutual recursion, now caught.
+  const badMutualRecursionWrapped = 'function mutA(){ setTimeout(() => mutB(), 1000); }\nfunction mutB(){ mutA(); }\n';
+  // Lost b53fb5f2 fixtures (Minor 3): an async arrow with a block body and a
+  // direct self-pass, a function-expression binding, and a `}` inside a string
+  // that must not break the brace match.
+  const badAsyncArrowBlock = 'const pf = async () => { setTimeout(pf, 1000); };\n';
+  const badFnExprBinding = 'const X = function () { setTimeout(X, 1000); };\n';
+  const badBraceInString = 'const pf = () => { const s = "}"; setTimeout(pf, 1000); };\n';
+  // The e54d6eec-only pin (review round 1, Minor 1): a loop whose scheduling
+  // body carries a *regex literal* (`s.replace(/"/g, '&quot;')`). The
+  // b202bdeb arm does not blank regex literals, so the `"` inside the literal
+  // breaks its paren/brace matching and it misses the loop; the e54d6eec arm
+  // blanks the regex and sees the `() => pollR()` thunk. Measured on the
+  // union bytes: `b202bdebLoop(S6) === false`, `e54d6eecLoop(S6) === true`.
+  // This is the control that only the e54d6eec arm satisfies — deleting the
+  // e54d6eec arm from the OR (the "land the sibling alone" hole) makes this
+  // assert fail and the suite go red, so the second envelope is pinned.
+  const badRegexLiteralInBody = 'function pollR(){ const esc=(s)=>s.replace(/"/g,\'&quot;\'); setTimeout(() => pollR(), 60000); }\n';
   // Good: the real lib/clock.js idiom (a one-shot timer whose callback is the
   // Promise resolver, not a self-referential function) and one-shot delayed
   // calls to a named function. The one-shot calls sit *inside* a function
@@ -1140,6 +1206,12 @@ test('setTimeout/setImmediate loop detector flags the polling shapes and not one
   assert.ok(hasSelfReschedulingLoop(badThunkBlock, 'setTimeout'), 'must flag the thunk spelling with a block body');
   assert.ok(hasSelfReschedulingLoop(badConciseThunk, 'setTimeout'), 'must flag a concise-body arrow whose body is a self-rescheduling thunk');
   assert.ok(hasSelfReschedulingLoop(badAsyncThunk, 'setTimeout'), 'must flag the async thunk spelling');
+  assert.ok(hasSelfReschedulingLoop(badThunkMutualRecursion, 'setTimeout'), 'must flag the one-hop thunk mutual recursion (the lib/scheduler.js shape — the recorded blind spot, now resolved)');
+  assert.ok(hasSelfReschedulingLoop(badMutualRecursionWrapped, 'setTimeout'), 'must flag the wrapped mutual recursion (the () => mutB() form, now resolved)');
+  assert.ok(hasSelfReschedulingLoop(badAsyncArrowBlock, 'setTimeout'), 'must flag an async arrow with a block body and a direct self-pass (lost b53fb5f2 fixture)');
+  assert.ok(hasSelfReschedulingLoop(badFnExprBinding, 'setTimeout'), 'must flag a function-expression binding re-scheduling itself (lost b53fb5f2 fixture)');
+  assert.ok(hasSelfReschedulingLoop(badBraceInString, 'setTimeout'), 'must flag a loop whose body carries a } inside a string (lost b53fb5f2 fixture — the string must not break the brace match)');
+  assert.ok(hasSelfReschedulingLoop(badRegexLiteralInBody, 'setTimeout'), 'must flag a loop whose scheduling body carries a regex literal (the e54d6eec-only pin — b202bdebLoop misses it, e54d6eecLoop catches it)');
 
   assert.ok(!hasSelfReschedulingLoop(goodClock, 'setTimeout'), 'must not flag the clock.js one-shot advance() idiom');
   assert.ok(!hasSelfReschedulingLoop(goodOneShot, 'setTimeout'), 'must not flag a one-shot delayed call to a named function');
@@ -1427,6 +1499,59 @@ test('no reachable server-tree module runs a setTimeout/setImmediate self-re-sch
         () => assertServerTreeClean(base),
         /must not run a setTimeout self-re-scheduling loop/,
         'the shipped setTimeout assert must flag a statically-reached lib module running a setTimeout self-re-scheduling loop (positive control)',
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+
+  // Pin the one-hop thunk mutual recursion — the `lib/scheduler.js` shape,
+  // relocated verbatim to a non-`lib/scheduler*` server-tree path (review
+  // round 1, blocking Major + the card's named survivor #1). The relocated
+  // body is written into `lib/web/scheduler-echo.js` (a path that does NOT
+  // start with `lib/scheduler`, so the import-prefix check does not fire)
+  // and reached through a route's import. The only mechanism that can see it
+  // is the loop detector resolving the one-hop thunk mutual recursion
+  // (`scheduleNextBeat` schedules `() => fireBeat(…)` and `fireBeat` calls
+  // `scheduleNextBeat`). Deleting the detector's mutual-recursion resolution
+  // (or the `setTimeout` assert) leaves the relocated module unflagged and
+  // `assert.throws` fails — the suite goes red. This is the faithful
+  // construction the earlier round measured (`cp lib/scheduler.js
+  // lib/web/scheduler-echo.js` + an import from a walked file), which the
+  // union's pre-fix bytes left green (exit 0, 7/7 pass).
+  {
+    const base = mkdtempSync(join(tmpdir(), 'guard-schedreloc-'));
+    try {
+      mkdirSync(join(base, 'app'));
+      mkdirSync(join(base, 'lib', 'web'), { recursive: true });
+      writeFileSync(join(base, 'app', 'index.js'), 'import { createScheduler } from "../lib/web/scheduler-echo.js";\n');
+      // The `lib/scheduler.js` shape, relocated to a non-`lib/scheduler*`
+      // path: `scheduleNextBeat` schedules `() => fireBeat(…)` and
+      // `fireBeat` calls `scheduleNextBeat` — a one-hop-indirect self
+      // reference through a thunk.
+      const schedulerBody = `export function createScheduler({ setTimeout, intervalMs, task, log = () => {} }) {
+  let timerId = null;
+  function scheduleNextBeat(nextIndex) {
+    timerId = setTimeout(() => fireBeat(nextIndex), intervalMs);
+  }
+  function fireBeat(nextIndex) {
+    task(nextIndex);
+    scheduleNextBeat(nextIndex + 1);
+  }
+  return { start() { scheduleNextBeat(1); }, stop() {} };
+}
+`;
+      writeFileSync(join(base, 'lib', 'web', 'scheduler-echo.js'), schedulerBody);
+      const t = walkServerTree(base).files;
+      const target = join(base, 'lib', 'web', 'scheduler-echo.js');
+      assert.ok(t.has(target), 'the relocated scheduler module must be in the walked set (reached through the route import)');
+      // The relocated path does not start with `lib/scheduler`, so the
+      // import-prefix check cannot see it — only the loop detector can.
+      assert.ok(!target.slice(base.length + 1).startsWith('lib/scheduler'), 'the relocated path must not start with lib/scheduler (so only the loop detector can flag it)');
+      assert.throws(
+        () => assertServerTreeClean(base),
+        /must not run a setTimeout self-re-scheduling loop/,
+        'the shipped loop detector must flag the relocated scheduler body (the one-hop thunk mutual recursion — the recorded blind spot, now resolved)',
       );
     } finally {
       rmSync(base, { recursive: true, force: true });
