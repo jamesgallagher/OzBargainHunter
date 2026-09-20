@@ -850,3 +850,110 @@ test('a non-Error flush throw with no loop error in flight is rethrown as-is (th
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- Review round-4 follow-up (t_af7ea42c): harden the finally-flush guard ---
+//
+// The delivered 5464f11 guard's `flushErr.cause = flushErr.cause ?? loopError`
+// line was inert (it mutated an object that was immediately discarded) and could
+// itself throw a TypeError for a non-extensible Error, masking the in-flight
+// DeniedPathError. The line is removed; these tests pin the hardened behaviour.
+
+test('a non-extensible (frozen) flush Error while unwinding a DeniedPathError still surfaces the DeniedPathError (no TypeError masks it)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-guard-frozen-'));
+  const clock = fixedClock(POLL_1_AT);
+  const realStore = openStore({ path: join(dir, 'test.db'), clock });
+  // A store wrapper whose observation flush throws a *frozen* (non-extensible)
+  // Error. On the delivered 5464f11 bytes the guard's `flushErr.cause = ...`
+  // line threw `TypeError: Cannot add property cause, object is not extensible`,
+  // which masked the in-flight DeniedPathError. With the line removed, the
+  // DeniedPathError must reach the caller.
+  const store = Object.create(realStore);
+  store.insertObservation = () => {
+    throw Object.freeze(new Error('FLUSH_BUSY'));
+  };
+  const r0 = readFileSync('fixtures/http/r0.xml', 'utf8');
+  const r1 = readFileSync('fixtures/http/r1.xml', 'utf8');
+  const denyFrontClient = {
+    blocked: false,
+    async request(url) {
+      if (url === 'https://www.ozbargain.com.au/feed') {
+        const err = new Error(`Denied path: ${url}`);
+        err.name = 'DeniedPathError';
+        throw err;
+      }
+      if (url.endsWith('page=0')) return { class: 'ok', status: 200, body: r0 };
+      if (url.endsWith('page=1')) return { class: 'ok', status: 200, body: r1 };
+      throw new Error(`unexpected url ${url}`);
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: denyFrontClient, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    // The DeniedPathError must reach the caller — not a TypeError from the
+    // guard's own cause assignment on a non-extensible Error. This assertion
+    // fails on the delivered 5464f11 bytes (which throw the TypeError).
+    assert.ok(threw, 'runDealPoll should reject');
+    assert.equal(threw.name, 'DeniedPathError', 'the DeniedPathError must surface, not a TypeError from the guard');
+    assert.match(threw.message, /Denied path/);
+    // The 60 deals from page 0/1 were committed (upserted before the throw).
+    assert.equal(realStore.countDeals(), 60);
+    // The flush threw on the first insert: no observations landed.
+    assert.equal(realStore.countAllObservations(), 0);
+  } finally {
+    realStore.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a setPollState write that throws while unwinding a DeniedPathError still surfaces the DeniedPathError (guard scope pin)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-guard-state-'));
+  const clock = fixedClock(POLL_1_AT);
+  const realStore = openStore({ path: join(dir, 'test.db'), clock });
+  // A store wrapper whose *setPollState* throws a store error. The finally's
+  // `try` covers setPollState as well as the observation flush, so a setPollState
+  // failure while a DeniedPathError unwinds must be caught by the guard and the
+  // DeniedPathError rethrown — not the store error. A mutant that shrinks the
+  // `try` to the observation loop only (leaving setPollState outside the guard)
+  // surfaces the store error here.
+  const store = Object.create(realStore);
+  store.setPollState = () => {
+    throw new Error('SQLITE_BUSY (setPollState)');
+  };
+  const r0 = readFileSync('fixtures/http/r0.xml', 'utf8');
+  const r1 = readFileSync('fixtures/http/r1.xml', 'utf8');
+  const denyFrontClient = {
+    blocked: false,
+    async request(url) {
+      if (url === 'https://www.ozbargain.com.au/feed') {
+        const err = new Error(`Denied path: ${url}`);
+        err.name = 'DeniedPathError';
+        throw err;
+      }
+      if (url.endsWith('page=0')) return { class: 'ok', status: 200, body: r0 };
+      if (url.endsWith('page=1')) return { class: 'ok', status: 200, body: r1 };
+      throw new Error(`unexpected url ${url}`);
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: denyFrontClient, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    // The configuration error must reach the caller — not the setPollState
+    // store error. This pins the guard's scope over setPollState.
+    assert.ok(threw, 'runDealPoll should reject');
+    assert.equal(threw.name, 'DeniedPathError', 'the DeniedPathError must surface, not the setPollState store error');
+    assert.match(threw.message, /Denied path/);
+    // The 60 deals from page 0/1 were committed (upserted before the throw).
+    assert.equal(realStore.countDeals(), 60);
+  } finally {
+    realStore.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
