@@ -9,8 +9,9 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "test": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/unit/acquisition/*.test.js test/guards/*.test.js",
-    "test:foundation": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/guards/*.test.js"
+    "test": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/unit/acquisition/*.test.js test/unit/rules/*.test.js test/guards/*.test.js",
+    "test:foundation": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/guards/*.test.js",
+    "test:rules": "node --test --import ./test/support/no-network.js test/unit/rules/*.test.js"
   },
   "dependencies": {
     "cheerio": "^1.1.0",
