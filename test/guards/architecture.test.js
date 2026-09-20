@@ -25,8 +25,12 @@
  * function's own name to appear as the first argument of the `setTimeout` call
  * inside its own body. The self-reference is matched as a whole token (so a
  * function named `set`, `setup` or `reset` is not matched inside the word
- * `setTimeout`), and comments and string/template literals are blanked out first
- * (so a name in a comment, or a `}` inside a string, cannot fool the check).
+ * `setTimeout`), and comments, string/template literals, and regex literals are
+ * blanked out first (so a name in a comment, a `}` inside a string, or a quote
+ * inside a regex literal cannot fool the check). Known limit: a quote inside
+ * JSX text (e.g. `<p>it's ok</p>`) is not blanked, so a self-rescheduling loop
+ * after such JSX in the same file can be hidden; no file in the current tree
+ * has one.
  *
  * If a later change moves polling into a route, a shared web module, or the
  * server-start hook, this test fails. That is its entire purpose.
@@ -110,10 +114,18 @@ function serverTreeFiles() {
 }
 
 /**
- * Blank out the contents of comments and string/template literals so that a
- * `{`, `}`, identifier, or the word `setTimeout` inside them cannot affect brace
- * matching or the self-reference test. Returns a string of the same length as
- * `source` (comment/string bodies replaced by spaces; newlines preserved).
+ * Blank out the contents of comments, string/template literals, and regex
+ * literals so that a `{`, `}`, identifier, quote, or the word `setTimeout`
+ * inside them cannot affect brace matching or the self-reference test.
+ * Returns a string of the same length as `source` (bodies replaced by spaces;
+ * newlines preserved).
+ *
+ * A `/` that can start a regex literal (decided from the preceding
+ * non-blanked token — after an identifier, `)`, `]`, a keyword, or at start
+ * of the source it is a division; after any other token it opens a literal)
+ * is blanked through to its unescaped closing `/`, honouring `\` escapes and
+ * `[...]` character classes. Known limit: quotes inside JSX text are not
+ * blanked (no JSX mode in a lexical pass).
  * @param {string} source
  * @returns {string}
  */
@@ -121,10 +133,19 @@ function blankCommentsAndStrings(source) {
   const out = source.split('');
   const n = source.length;
   let i = 0;
+  // The last significant token seen so far, used to decide whether a `/`
+  // opens a regex literal or divides. A string/regex/comment ends in a
+  // sentinel; an identifier or keyword is spelled out in `tok`.
+  let last = '';
+  let tok = '';
   while (i < n) {
     const ch = source[i];
     const next = source[i + 1];
-    // Line comment: blank to end of line (keep the newline).
+    // Line comment: `//` is unambiguous (there is no `//` operator), so it is
+    // recognised in any context. Blank to end of line (keep the newline). A
+    // comment is whitespace-equivalent, so it leaves the token state
+    // (`last`, `tok`) untouched — the token before the comment is the token
+    // before the next line.
     if (ch === '/' && next === '/') {
       let j = i;
       while (j < n && source[j] !== '\n') {
@@ -134,7 +155,9 @@ function blankCommentsAndStrings(source) {
       i = j;
       continue;
     }
-    // Block comment: blank to the closing `*/`, keeping newlines.
+    // Block comment: `/*` is likewise unambiguous (no `/*` operator), so it is
+    // recognised in any context. Blank to the closing `*/`, keeping newlines.
+    // As with a line comment, it leaves the token state untouched.
     if (ch === '/' && next === '*') {
       let j = i;
       out[j] = ' ';
@@ -170,11 +193,92 @@ function blankCommentsAndStrings(source) {
         i += 1;
         if (c === quote) break;
       }
+      last = 'string';
+      tok = '';
       continue;
+    }
+    // Regex literal: a `/` that can start one (decided from the preceding
+    // significant token) is blanked through to its unescaped closing `/`,
+    // honouring `\` escapes and `[...]` character classes.
+    if (ch === '/' && canStartRegex(last, tok)) {
+      let j = i;
+      out[j] = ' ';
+      j += 1;
+      let inClass = false;
+      while (j < n) {
+        const c = source[j];
+        if (c === '\\') {
+          out[j] = ' ';
+          if (j + 1 < n && source[j + 1] !== '\n') out[j + 1] = ' ';
+          j += 2;
+          continue;
+        }
+        if (c === '[') inClass = true;
+        else if (c === ']' && inClass) inClass = false;
+        if (c === '/' && !inClass) {
+          out[j] = ' ';
+          j += 1;
+          break;
+        }
+        if (c !== '\n') out[j] = ' ';
+        j += 1;
+      }
+      i = j;
+      last = 'regex';
+      tok = '';
+      continue;
+    }
+    // A bare significant character: an identifier/keyword char accumulates
+    // into `tok` (reset when a fresh token starts); any other char closes
+    // the token and becomes `last` itself.
+    if (/[A-Za-z0-9_$]/.test(ch)) {
+      if (last !== 'ident') tok = '';
+      tok += ch;
+      last = 'ident';
+    } else if (ch !== ' ' && ch !== '\t' && ch !== '\n' && ch !== '\r') {
+      last = ch;
+      tok = '';
     }
     i += 1;
   }
   return out.join('');
+}
+
+/**
+ * Punctuation after which a `/` opens a regex literal (an expression-start
+ * context). Every other token — an identifier/number, `)`, `]`, a string, a
+ * regex literal, `<`, `>`, `.` — is a division operator (or a JSX/JS
+ * closing tag, which is not a regex).
+ */
+const REGEX_START_CONTEXTS = new Set([
+  '=', '(', '[', '{', '!', '&', '|', '?', ':', ',', ';', '+', '-', '*', '%', '~', '^',
+]);
+
+/**
+ * Keywords after which a `/` opens a regex literal (every other identifier
+ * before a `/` is a division operator — `a / b`, `x / y`, and
+ * `import … from '…'` all end in a non-keyword identifier).
+ */
+const REGEX_START_KEYWORDS = new Set([
+  'return', 'case', 'typeof', 'instanceof', 'in', 'of', 'do', 'else', 'yield',
+  'void', 'delete', 'throw', 'await',
+]);
+
+/**
+ * Can a `/` at the current position open a regex literal, given the preceding
+ * significant token? A regex can only follow an expression-start context
+ * (a whitelisted operator, or a keyword such as `return`/`typeof`/`yield`).
+ * After an identifier/number (unless it is one of those keywords), `)`, `]`,
+ * a string, a regex literal, `<`, `>` or `.` it is a division operator; at
+ * the start of the source it opens a literal.
+ * @param {string} last
+ * @param {string} tok the pending identifier/keyword, if `last` is 'ident'
+ * @returns {boolean}
+ */
+function canStartRegex(last, tok) {
+  if (last === '') return true; // start of source
+  if (last === 'ident') return REGEX_START_KEYWORDS.has(tok);
+  return REGEX_START_CONTEXTS.has(last);
 }
 
 /**
@@ -374,6 +478,10 @@ test('the poll-loop detector catches the shapes it exists for (positive controls
     hasSelfReschedulingTimeout("function pollWithTemplate(){ const b='retry }'; setTimeout(pollWithTemplate,60000); }"),
     'a } inside a string does not hide the loop (strings are blanked before brace matching)',
   );
+  assert.ok(
+    hasSelfReschedulingTimeout("const esc = (s) => s.replace(/\"/g, '&quot;');\nfunction pollEsc(){ setTimeout(pollEsc, 60000); }"),
+    'a quote inside a regex literal does not hide a later self-rescheduling loop (regex literals are blanked, so their quotes are not read as string delimiters)',
+  );
 });
 
 test('the poll-loop detector leaves one-shot timers alone (negative controls)', () => {
@@ -400,5 +508,30 @@ test('the poll-loop detector leaves one-shot timers alone (negative controls)', 
   assert.ok(
     !hasSelfReschedulingTimeout('function scheduleRetryOnce() { /* scheduleRetryOnce … */ setTimeout(() => {}, 250); }'),
     'a name that only appears in a comment is not a self-reschedule',
+  );
+});
+
+// The file-level pin for the regex-literal blanking fix (review round 2, Major
+// 1): `app/rules/[id]/mute/route.js` carries an ordinary HTML escaper
+// (`s.replace(/"/g, '&quot;')`), and a quote inside a regex literal used to be
+// read as a string delimiter, blanking the file to EOF and hiding any loop
+// appended after it. This test reads the real file, appends a self-rescheduling
+// loop, and asserts the detector catches it — the exact "a poll loop parked in
+// a route handler" scenario the guard exists for.
+test('a quote inside a regex literal must not hide a later self-rescheduling loop (file-level pin)', () => {
+  const mutePath = join(root, 'app', 'rules', '[id]', 'mute', 'route.js');
+  const source = readFileSync(mutePath, 'utf8');
+  assert.ok(
+    /replace\(\/"/.test(source) || /replace\(\/'/.test(source),
+    'precondition: the mute route carries a regex-literal HTML escaper (the case this pin protects)',
+  );
+  const withLoop = `${source}\nfunction pollMute(){ setTimeout(pollMute, 60000); }\npollMute();\n`;
+  assert.ok(
+    hasSelfReschedulingTimeout(withLoop),
+    'a self-rescheduling loop appended after the regex-literal escaper in app/rules/[id]/mute/route.js must be caught',
+  );
+  assert.ok(
+    !hasSelfReschedulingTimeout(source),
+    'the pristine mute route (no loop) is not flagged',
   );
 });
