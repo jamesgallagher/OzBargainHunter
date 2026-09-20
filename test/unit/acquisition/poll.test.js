@@ -703,3 +703,150 @@ test('a DeniedPathError on the deals feed (page 0) rejects with 0 deals/observat
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- Review round-4 follow-up (t_1fe5af2b): pin the flush-masking guard ---
+//
+// The 0e7898d guard (a `loopError` capture around the URL loop + a
+// try/catch around the finally's flush) is not exercised by any other test:
+// nothing else in the suite makes a store write throw, so the mutant
+// "delete the guard" (the round-1 bytes b58cb915) left the suite green.
+// These two tests pin both halves of the guard.
+
+test('a flush write (insertObservation) that throws while unwinding a DeniedPathError surfaces the DeniedPathError, not the store error (guard pin)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-guard-pin-'));
+  const clock = fixedClock(POLL_1_AT);
+  const realStore = openStore({ path: join(dir, 'test.db'), clock });
+  // A store wrapper whose observation flush throws a store error (the
+  // better-sqlite3 SQLITE_BUSY shape). Everything else — upsertDeal,
+  // getPollState, setPollState — is the real store.
+  const store = Object.create(realStore);
+  store.insertObservation = () => {
+    throw new Error('SQLITE_BUSY (probe)');
+  };
+  // A client that serves the two deals pages (200, from the r0/r1 fixtures —
+  // together 60 nodes) and throws DeniedPathError on the front URL. The
+  // DeniedPathError unwinds the URL loop; the finally's flush then throws
+  // the store error. Without the guard the store error replaces the
+  // DeniedPathError (the round-1 bytes b58cb915 surface SQLITE_BUSY here).
+  const r0 = readFileSync('fixtures/http/r0.xml', 'utf8');
+  const r1 = readFileSync('fixtures/http/r1.xml', 'utf8');
+  const denyFrontClient = {
+    blocked: false,
+    async request(url) {
+      if (url === 'https://www.ozbargain.com.au/feed') {
+        const err = new Error(`Denied path: ${url}`);
+        err.name = 'DeniedPathError';
+        throw err;
+      }
+      if (url.endsWith('page=0')) return { class: 'ok', status: 200, body: r0 };
+      if (url.endsWith('page=1')) return { class: 'ok', status: 200, body: r1 };
+      throw new Error(`unexpected url ${url}`);
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: denyFrontClient, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    // The configuration error must reach the caller — not the store error.
+    // This assertion fails on the round-1 bytes (b58cb915), where the
+    // unguarded finally flush lets the SQLITE_BUSY error mask the
+    // DeniedPathError.
+    assert.ok(threw, 'runDealPoll should reject');
+    assert.equal(threw.name, 'DeniedPathError', 'the DeniedPathError must surface, not the store error');
+    assert.match(threw.message, /Denied path/);
+    // The 60 deals from page 0/1 were committed (upserted before the throw).
+    assert.equal(realStore.countDeals(), 60);
+    // The flush threw on the first insert: no observations landed.
+    assert.equal(realStore.countAllObservations(), 0);
+  } finally {
+    realStore.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a non-Error flush throw while unwinding a DeniedPathError still surfaces the DeniedPathError (no TypeError masks both)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-guard-primitive-'));
+  const clock = fixedClock(POLL_1_AT);
+  const realStore = openStore({ path: join(dir, 'test.db'), clock });
+  // A store wrapper whose observation flush throws a *non-Error* value.
+  // better-sqlite3 throws Error instances, so this is hardening — but the
+  // guard's cause assignment must not itself throw a TypeError (setting
+  // .cause on a string/number/null) and mask both the flush error and the
+  // in-flight DeniedPathError.
+  const store = Object.create(realStore);
+  store.insertObservation = () => {
+    throw 'SQLITE_BUSY (string)';
+  };
+  const r0 = readFileSync('fixtures/http/r0.xml', 'utf8');
+  const r1 = readFileSync('fixtures/http/r1.xml', 'utf8');
+  const denyFrontClient = {
+    blocked: false,
+    async request(url) {
+      if (url === 'https://www.ozbargain.com.au/feed') {
+        const err = new Error(`Denied path: ${url}`);
+        err.name = 'DeniedPathError';
+        throw err;
+      }
+      if (url.endsWith('page=0')) return { class: 'ok', status: 200, body: r0 };
+      if (url.endsWith('page=1')) return { class: 'ok', status: 200, body: r1 };
+      throw new Error(`unexpected url ${url}`);
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: denyFrontClient, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    // The DeniedPathError must reach the caller whatever the flush threw —
+    // not a TypeError from the guard's own cause assignment.
+    assert.ok(threw, 'runDealPoll should reject');
+    assert.equal(threw.name, 'DeniedPathError', 'the DeniedPathError must surface, not a TypeError from the guard');
+    assert.match(threw.message, /Denied path/);
+    assert.equal(realStore.countDeals(), 60);
+  } finally {
+    realStore.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a non-Error flush throw with no loop error in flight is rethrown as-is (the flush error still reaches the caller)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-guard-flushonly-'));
+  const clock = fixedClock(POLL_1_AT);
+  const realStore = openStore({ path: join(dir, 'test.db'), clock });
+  const store = Object.create(realStore);
+  store.insertObservation = () => {
+    throw 'SQLITE_BUSY (string)';
+  };
+  // A fully happy client (all three URLs 200): no loop error is in flight,
+  // so the flush error itself must reach the caller — a non-Error value
+  // propagates as-is, unmodified by the guard.
+  const r0 = readFileSync('fixtures/http/r0.xml', 'utf8');
+  const r1 = readFileSync('fixtures/http/r1.xml', 'utf8');
+  const feed = readFileSync('fixtures/http/feed_feed.xml', 'utf8');
+  const happyClient = {
+    blocked: false,
+    async request(url) {
+      if (url === 'https://www.ozbargain.com.au/feed') return { class: 'ok', status: 200, body: feed };
+      if (url.endsWith('page=0')) return { class: 'ok', status: 200, body: r0 };
+      if (url.endsWith('page=1')) return { class: 'ok', status: 200, body: r1 };
+      throw new Error(`unexpected url ${url}`);
+    },
+  };
+  let threw = null;
+  try {
+    try {
+      await runDealPoll({ client: happyClient, store, clock, log: () => {} });
+    } catch (err) {
+      threw = err;
+    }
+    assert.equal(threw, 'SQLITE_BUSY (string)', 'the non-Error flush value must be rethrown as-is when no loop error is in flight');
+  } finally {
+    realStore.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
