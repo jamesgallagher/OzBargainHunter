@@ -22,7 +22,10 @@
  *
  * Mutation list — each mutant was applied to a scratch copy of the tree at
  * 04860a2 and run through `npm test` (only the guard test file was modified
- * in the real tree; the mutants below are documentation, not applied code):
+ * in the real tree; the mutants below are documentation, not applied code).
+ * "reachable from app/alerts/page.js" is the actual seed: `app/alerts/page.js`
+ * is the first seed (in walk order) that reaches `lib/web/db.js`, so that is
+ * the path the guard reports.
  *
  *   M1  app/page.js  + `import { getStore } from '../lib/acquire/poll.js'`
  *       -> FAIL, test "no file in the Next.js server tree imports the
@@ -39,8 +42,8 @@
  *   M3  lib/web/db.js + module-scope `setInterval(() => {}, 1000)`
  *       -> FAIL, test "no module reachable from the server tree is
  *          acquisition, scheduler, or worker code":
- *          "lib/web/db.js is reachable from app/page.js and must not contain
- *          setInterval (no polling in the server tree)"
+ *          "lib/web/db.js is reachable from app/alerts/page.js and must not
+ *          contain setInterval (no polling in the server tree)"
  *       (the pre-widening guard passed this mutant — hole 1; every screen
  *        imports lib/web/db.js, so the interval would ride on every route)
  *
@@ -56,10 +59,40 @@
  *       `const pollLoop = () => { setTimeout(pollLoop, 1000); };`
  *       -> FAIL, test "no reachable server-tree module runs a
  *          setTimeout/setImmediate self-re-scheduling loop":
- *          "lib/web/db.js is reachable from app/page.js and must not run a
- *          setTimeout self-re-scheduling loop (a self-re-scheduling timer is
- *          a polling loop with the token rotated)"
+ *          "lib/web/db.js is reachable from app/alerts/page.js and must not
+ *          run a setTimeout self-re-scheduling loop (a self-re-scheduling
+ *          timer is a polling loop with the token rotated)"
  *       (the pre-widening guard passed this mutant — hole 3)
+ *
+ *   M6  lib/web/db.js + `function pollLoop() { setTimeout(pollLoop, 1000); }`
+ *       -> FAIL, test "no reachable server-tree module runs a
+ *          setTimeout/setImmediate self-re-scheduling loop" (a plain function
+ *          declaration — the repo's own top-level style; the pre-widening
+ *          detector only resolved arrow bindings, so this shape survived)
+ *
+ *   M7  lib/web/db.js +
+ *       `const spin = () => { setTimeout(() => spin(), 1000); };`
+ *       -> FAIL, same test (a wrapped callback that re-schedules the binding)
+ *
+ *   M8  lib/web/db.js +
+ *       `setImmediate(function tick() { setImmediate(tick); });`
+ *       -> FAIL, same test (a named function expression handed to
+ *          setImmediate)
+ *
+ *   M9  lib/web/db.js +
+ *       `class Ticker { tick() { setTimeout(this.tick.bind(this), 1000); } }
+ *        new Ticker().tick();`
+ *       -> FAIL, same test (a class method re-scheduling itself via a
+ *          `this.tick` binding)
+ *
+ * M6-M9 were also added as regression fixtures in the positive-control test
+ * below, so the detector's coverage of each shape is proven in-tree.
+ *
+ * Known limitation (recorded, not a defect): `FORBIDDEN_TOKENS` is matched as
+ * a raw substring against every reachable module. A comment or string literal
+ * that merely mentions `setInterval` in a `lib/**` file would trip the guard
+ * (a false positive, not a false negative — it makes the guard stricter, never
+ * looser). The same brittleness exists for `app/**` from card 1.
  */
 
 import { test } from 'node:test';
@@ -68,7 +101,13 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-const root = fileURLToPath(new URL('../..', import.meta.url));
+// `fileURLToPath(new URL('../..', ...))` returns a path ending in a separator
+// on POSIX (e.g. `.../OzBargainHunter/`), so `file.slice(root.length + 1)`
+// would drop the first character of the relative path (`lib/web/db.js` ->
+// `ib/web/db.js`) and every `rel.startsWith('lib/acquire/')` check below
+// would be permanently false. `resolve()` strips the trailing separator, so
+// `file.slice(root.length + 1)` yields the correct repo-relative path.
+const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
 /** Recursively list every file under `dir`. */
 function listFiles(dir) {
@@ -85,6 +124,9 @@ function listFiles(dir) {
 }
 
 const FORBIDDEN_IMPORTS = ['lib/acquire/', 'lib/scheduler', 'worker/'];
+// Matched as a raw substring (see the "Known limitation" note in the header):
+// a comment mentioning the token would trip the guard, but that is a false
+// positive (stricter), never a false negative (looser).
 const FORBIDDEN_TOKENS = ['setInterval'];
 
 test('no file in the Next.js server tree imports the acquisition, scheduler, or worker code', () => {
@@ -163,9 +205,8 @@ function resolveImport(importerFile, spec) {
 /**
  * Walk the transitive server tree: seed with every file under `app/`,
  * `middleware.js`, and a root `instrumentation.js`/`instrumentation.mjs` if
- * present, then follow relative imports. Returns `{ files, parent }` where
- * `files` is a map of reached absolute path -> the seed that reached it, and
- * `parent` maps each non-seed file to the file that first reached it.
+ * present, then follow relative imports. Returns `{ files }` where `files` is
+ * a map of reached absolute path -> the seed that first reached it.
  */
 function walkServerTree() {
   const seeds = [];
@@ -204,73 +245,280 @@ function walkServerTree() {
 }
 
 /**
- * Extract the body of a function/arrow definition assigned to `name` in
- * `source`. Returns the body text (block contents, or the expression for an
- * expression-bodied arrow), or null when `name` is not defined as a function
- * in this module.
+ * Skip past a string literal that starts at `source[i]` (one of `"`, `'`, or
+ * a backtick). Returns the index just past the closing quote. Template-literal
+ * substitutions are not followed — the guard only needs to avoid misreading a
+ * timer token or a name that appears inside a string, which skipping the whole
+ * literal achieves.
  */
-function functionBodyFor(name, source) {
-  const defRe = new RegExp(
-    `\\b${name}\\s*=\\s*(async\\s+)?(function\\s*\\([^)]*\\)\\s*|\\([^)]*\\)\\s*=>\\s*|\\(\\)\\s*=>\\s*)`,
-  );
-  const m = defRe.exec(source);
-  if (m === null) return null;
-  const after = m.index + m[0].length;
-  const rest = source.slice(after);
-  if (rest.startsWith('{')) {
-    // Brace-match the block.
-    let depth = 0;
-    for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === '{') depth++;
-      else if (rest[i] === '}') {
-        depth--;
-        if (depth === 0) return rest.slice(1, i);
-      }
-    }
-    return rest;
+function skipString(source, i) {
+  const quote = source[i];
+  i++;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === quote) { return i + 1; }
+    i++;
   }
-  // Expression body: take to the end of the line (or a semicolon).
-  const lineEnd = rest.indexOf('\n');
-  const expr = lineEnd === -1 ? rest : rest.slice(0, lineEnd);
-  return expr.replace(/;$/, '');
+  return i;
 }
 
 /**
- * True when `source` passes a named function to `timer` (setTimeout or
- * setImmediate) and that function's body schedules a timer again — a
+ * Return the contents of the block whose opening `{` is at `openIdx`, skipping
+ * strings and line or block comments so a brace inside a string or comment
+ * does not break the match. Returns null when unbalanced.
+ */
+function matchBlock(source, openIdx) {
+  let depth = 0;
+  let i = openIdx;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      i = nl === -1 ? source.length : nl + 1;
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      i = skipString(source, i);
+      continue;
+    }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return source.slice(openIdx + 1, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+/**
+ * Return the contents of the argument list whose opening `(` is at `openIdx`,
+ * skipping strings and comments. Returns null when unbalanced.
+ */
+function matchParens(source, openIdx) {
+  let depth = 0;
+  let i = openIdx;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      i = nl === -1 ? source.length : nl + 1;
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      i = skipString(source, i);
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) return source.slice(openIdx + 1, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+/** Split `text` on top-level commas (not inside `()`, `[]`, `{}` or strings). */
+function splitTopLevel(text) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === '`') {
+      const end = skipString(text, i);
+      cur += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    if (c === ',' && depth === 0) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+    i++;
+  }
+  if (cur.trim() !== '') out.push(cur);
+  return out;
+}
+
+/**
+ * Extract the body of a function defined as `name` in `source`. Handles the
+ * shapes a polling loop is most likely to use: a `function name(...)`
+ * declaration, an arrow bound to `name` (with or without a parameter list), a
+ * `function` expression bound to `name`, and a `name(...)` method. Returns the
+ * body text (block contents, or the expression for an expression-bodied arrow),
+ * or null when `name` is not defined as a function in this module.
+ */
+function functionBodyFor(name, source) {
+  const patterns = [
+    new RegExp('\\bfunction\\s+' + name + '\\s*\\(([^)]*)\\)\\s*\\{'),
+    new RegExp('\\b' + name + '\\s*=\\s*(?:async\\s+)?\\(([^)]*)\\)\\s*=>\\s*\\{'),
+    new RegExp('\\b' + name + '\\s*=\\s*(?:async\\s+)?\\(\\)\\s*=>\\s*\\{'),
+    new RegExp('\\b' + name + '\\s*=\\s*(?:async\\s+)?function\\s*\\(([^)]*)\\)\\s*\\{'),
+    new RegExp('\\b' + name + '\\s*\\(([^)]*)\\)\\s*\\{'),
+  ];
+  for (const re of patterns) {
+    const m = re.exec(source);
+    if (m === null) continue;
+    const openIdx = m.index + m[0].length - 1; // index of the opening '{'
+    const body = matchBlock(source, openIdx);
+    if (body !== null) return body;
+  }
+  // Expression-bodied arrow: name = (...) => expr
+  const exprRe = new RegExp('\\b' + name + '\\s*=\\s*(?:async\\s+)?\\(([^)]*)\\)\\s*=>\\s*([^{\\s][^;]*|\\S[^;]*)(?=;|\\n|$)');
+  const em = exprRe.exec(source);
+  if (em !== null) return em[2].replace(/;$/, '');
+  return null;
+}
+
+/**
+ * Collect every function-definition site in `source` as `{ name, body }` —
+ * declarations, arrow/function-expression bindings, and methods. This is the
+ * widened form of `functionBodyFor`: instead of looking up one name, it finds
+ * all functions so `hasSelfReschedulingLoop` can test each one's own body.
+ */
+function functionBodies(source) {
+  const out = [];
+  const seen = new Set();
+  const add = (name, body) => {
+    const key = name + ' ' + body;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ name, body });
+  };
+  let m;
+  const declRe = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g;
+  while ((m = declRe.exec(source)) !== null) {
+    const openIdx = m.index + m[0].length - 1;
+    const body = matchBlock(source, openIdx);
+    if (body !== null) add(m[1], body);
+  }
+  const assignRe = /\b([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*=>\s*\{/g;
+  while ((m = assignRe.exec(source)) !== null) {
+    const openIdx = m.index + m[0].length - 1;
+    const body = matchBlock(source, openIdx);
+    if (body !== null) add(m[1], body);
+  }
+  const assignFnRe = /\b([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function\s*\(([^)]*)\)\s*\{/g;
+  while ((m = assignFnRe.exec(source)) !== null) {
+    const openIdx = m.index + m[0].length - 1;
+    const body = matchBlock(source, openIdx);
+    if (body !== null) add(m[1], body);
+  }
+  // Method: NAME(...) { ... } — skip control-flow keywords so `if (...) {`
+  // and friends are not treated as function definitions.
+  const keywords = new Set(['if', 'for', 'while', 'switch', 'catch', 'finally', 'else', 'function', 'return', 'do', 'with']);
+  const methodRe = /\b([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g;
+  while ((m = methodRe.exec(source)) !== null) {
+    const name = m[1];
+    if (keywords.has(name)) continue;
+    const openIdx = m.index + m[0].length - 1;
+    const body = matchBlock(source, openIdx);
+    if (body !== null) add(name, body);
+  }
+  return out;
+}
+
+/** The first argument of every `timer(...)` call in `body`. */
+function timerFirstArgs(body, timer) {
+  const out = [];
+  const re = new RegExp('\\b' + timer + '\\s*\\(', 'g');
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    const openIdx = m.index + m[0].length - 1;
+    const argsText = matchParens(body, openIdx);
+    if (argsText === null) continue;
+    const args = splitTopLevel(argsText);
+    out.push(args.length > 0 ? args[0].trim() : '');
+  }
+  return out;
+}
+
+/**
+ * True when the scheduled callback refers back to `name` — the function whose
+ * body schedules it. Covers a direct self-pass (`setTimeout(name, ms)`), a
+ * wrapped callback that calls it (`setTimeout(() => name(), ms)`), a
+ * `this.name` / `name.bind` binding (a method re-scheduling itself), and a
+ * named helper whose own body calls it (a two-function ping-pong loop).
+ */
+function callbackReferences(callback, name, source) {
+  const idMatch = /^([A-Za-z_$][\w$]*)$/.exec(callback);
+  if (idMatch !== null) {
+    if (idMatch[1] === name) return true;
+    const gBody = functionBodyFor(idMatch[1], source);
+    if (gBody !== null && new RegExp('\\b' + name + '\\s*\\(|this\\.' + name + '\\b|\\b' + name + '\\s*\\.bind\\b').test(gBody)) {
+      return true;
+    }
+    return false;
+  }
+  return new RegExp('\\b' + name + '\\s*\\(|this\\.' + name + '\\b|\\b' + name + '\\s*\\.bind\\b').test(callback);
+}
+
+/**
+ * True when `source` contains a function whose body schedules `timer`
+ * (setTimeout or setImmediate) with a callback that refers back to it — a
  * self-re-scheduling loop, i.e. a polling loop that avoids the literal
- * `setInterval` token. A one-shot `setTimeout(fn, ms)` where `fn` never
- * schedules a timer is not flagged.
+ * `setInterval` token. A one-shot `setTimeout(fn, ms)` where `fn` never refers
+ * back to the scheduling function is not flagged.
  */
 function hasSelfReschedulingLoop(source, timer) {
-  const callRe = new RegExp(`\\b${timer}\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*(?:\\(\\s*)?[,)]`, 'g');
-  let m;
-  while ((m = callRe.exec(source)) !== null) {
-    const name = m[1];
-    const body = functionBodyFor(name, source);
-    if (body === null) continue;
-    if (new RegExp(`\\b${timer}\\s*\\(`).test(body)) {
-      return true;
+  for (const { name, body } of functionBodies(source)) {
+    for (const callback of timerFirstArgs(body, timer)) {
+      if (callbackReferences(callback, name, source)) return true;
     }
   }
   return false;
 }
 
 /**
- * Positive controls for the loop detector (per the existing pattern: prove
- * the guard is looking at the right thing). The bad sample must be flagged;
- * the good samples — the real `lib/clock.js` sleep idiom and a one-shot
- * delayed call to a named function — must not.
+ * Positive controls for the loop detector (per the existing pattern: prove the
+ * guard is looking at the right thing). The bad samples — one per shape the
+ * detector claims to cover — must be flagged; the good samples — the real
+ * `lib/clock.js` `advance()` one-shot idiom and a one-shot delayed call to a
+ * named function — must not.
  */
-test('setTimeout/setImmediate loop detector flags the polling shape and not one-shot timers', () => {
-  const bad = 'const pollLoop = () => { setTimeout(pollLoop, 1000); };\n';
+test('setTimeout/setImmediate loop detector flags the polling shapes and not one-shot timers', () => {
+  // Bad: one fixture per shape the detector claims to cover.
+  const badArrow = 'const pollLoop = () => { setTimeout(pollLoop, 1000); };\n';
   const badImmediate = 'const spin = () => { setImmediate(spin); };\n';
-  const goodSleep = 'function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }\n';
+  const badDeclaration = 'function pollLoop() { setTimeout(pollLoop, 1000); }\n';
+  const badWrapped = 'const spin = () => { setTimeout(() => spin(), 1000); };\n';
+  const badNamedFnExpr = 'setImmediate(function tick() { setImmediate(tick); });\n';
+  const badMethod = 'class Ticker { tick() { setTimeout(this.tick.bind(this), 1000); } } new Ticker().tick();\n';
+  // Good: the real lib/clock.js idiom (a one-shot timer whose callback is the
+  // Promise resolver, not a self-referential function) and a one-shot delayed
+  // call to a named function.
+  const goodClock = 'function systemClock() { return { advance(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); } }; }\n';
   const goodOneShot = 'const tick = () => { console.log("once"); };\nsetTimeout(tick, 1000);\n';
-  assert.ok(hasSelfReschedulingLoop(bad, 'setTimeout'), 'must flag a setTimeout self-re-scheduling loop');
-  assert.ok(hasSelfReschedulingLoop(badImmediate, 'setImmediate'), 'must flag a setImmediate self-re-scheduling loop');
-  assert.ok(!hasSelfReschedulingLoop(goodSleep, 'setTimeout'), 'must not flag the clock.js sleep idiom');
-  assert.ok(!hasSelfReschedulingLoop(goodOneShot, 'setTimeout'), 'must not flag a one-shot delayed call');
+  const goodOneShotImmediate = 'const tick = () => { console.log("once"); };\nsetImmediate(tick);\n';
+
+  assert.ok(hasSelfReschedulingLoop(badArrow, 'setTimeout'), 'must flag a setTimeout arrow self-re-scheduling loop');
+  assert.ok(hasSelfReschedulingLoop(badImmediate, 'setImmediate'), 'must flag a setImmediate arrow self-re-scheduling loop');
+  assert.ok(hasSelfReschedulingLoop(badDeclaration, 'setTimeout'), 'must flag a setTimeout function-declaration self-re-scheduling loop');
+  assert.ok(hasSelfReschedulingLoop(badWrapped, 'setTimeout'), 'must flag a setTimeout wrapped-callback self-re-scheduling loop');
+  assert.ok(hasSelfReschedulingLoop(badNamedFnExpr, 'setImmediate'), 'must flag a setImmediate named-function-expression self-re-scheduling loop');
+  assert.ok(hasSelfReschedulingLoop(badMethod, 'setTimeout'), 'must flag a setTimeout method (this.bind) self-re-scheduling loop');
+
+  assert.ok(!hasSelfReschedulingLoop(goodClock, 'setTimeout'), 'must not flag the clock.js one-shot advance() idiom');
+  assert.ok(!hasSelfReschedulingLoop(goodOneShot, 'setTimeout'), 'must not flag a one-shot delayed call to a named function');
+  assert.ok(!hasSelfReschedulingLoop(goodOneShotImmediate, 'setImmediate'), 'must not flag a one-shot setImmediate call to a named function');
 });
 
 test('no module reachable from the server tree is acquisition, scheduler, or worker code', () => {
