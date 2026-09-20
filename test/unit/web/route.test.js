@@ -300,6 +300,71 @@ describe('route: /rules/<id>/save, /rules/new/create, snooze, enable re-gate (11
   });
 });
 
+// X6 / M2(c): create-after-delete must take MAX(id)+1, never COUNT(*)+1.
+// `insertRule` is `ON CONFLICT(id) DO UPDATE`, so a COUNT(*)+1 id after a
+// delete (delete 2 from [1,2,3] -> count 2 -> new id 3) silently overwrites
+// the surviving rule 3. This test seeds the gap a delete leaves and drives
+// the real create handler; it fails under the COUNT(*)+1 mutant
+// (`SELECT MAX(id)` -> `SELECT COUNT(*)` in `nextRuleId`).
+describe('route: create-after-delete takes MAX(id)+1, never COUNT(*)+1 (X6, M2)', () => {
+  let jwks;
+  let store;
+  let dir;
+  before(async () => {
+    jwks = await startJwksServer();
+    process.env.CF_JWKS_URL = jwks.url;
+    dir = mkdtempSync(join(tmpdir(), 'ozb-create-after-delete-'));
+    store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    // Seed a contiguous run 1..3, then delete the middle one: the gap shape.
+    const now = '2026-09-19T06:20:00Z';
+    for (const [id, term] of [[1, 'term1'], [2, 'term2'], [3, 'term3']]) {
+      store.insertRule({
+        id,
+        type: 'contains',
+        parameters: JSON.stringify({ term }),
+        state: 'enabled',
+        surfaces: 'deals',
+        cooldown_seconds: 86400,
+        pinned_slug: null,
+        created_at: now,
+        modified_at: now,
+      });
+    }
+    assert.equal(store.deleteRule(2), 1, 'the middle rule is deleted, leaving the gap [1,_,3]');
+    assert.equal(store.countRules(), 2, 'two rules survive the delete');
+    setStoreForTest(store);
+  });
+  after(async () => {
+    setStoreForTest(null);
+    delete process.env.CF_JWKS_URL;
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+    await jwks.close();
+  });
+
+  test('create after delete assigns the literal id 4 (MAX(id)+1) and does not overwrite the surviving rule', async () => {
+    const jwt = await jwks.sign({ email: 'user@example.com' }, { aud: AUD, iss: `https://${TEAM_DOMAIN}` });
+    const csrf = await generateCsrfToken(CSRF_SECRET);
+    const res = await createPost(
+      new Request('https://app.example.com/rules/new/create', {
+        method: 'POST',
+        headers: { 'Cf-Access-Jwt-Assertion': jwt, 'x-csrf-token': csrf, 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'match', term: 'term4' }),
+      }),
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.created, true);
+    // The literal expected value: MAX(id)+1 = 4. Under the COUNT(*)+1 mutant
+    // this is 3 and the assertion fails.
+    assert.equal(body.id, 4, 'the new id is MAX(id)+1 = 4, not COUNT(*)+1 = 3');
+    // The surviving rule 3 keeps its original term (no silent overwrite).
+    assert.equal(store.getRule(3).parameters.term, 'term3', 'the surviving rule 3 is not overwritten');
+    // The new rule carries its own term.
+    assert.equal(store.getRule(4).parameters.term, 'term4', 'the new rule carries its own term');
+  });
+});
+
 // X8: /healthz in both states. The handler reads `process.env` directly (it is
 // a state-reading route; the access check is the middleware's job). The
 // healthcheck-secret check gates it when called directly.
