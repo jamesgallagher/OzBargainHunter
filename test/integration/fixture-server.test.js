@@ -63,19 +63,33 @@ describe('integration: the fixture server', () => {
   });
 
   it('honours If-None-Match with a real 304 and an empty body', async () => {
-    const first = await fetch(`${fx.origin}${DEALS_PATH}?page=0`);
-    const etag = first.headers.get('etag');
-    await first.text();
-    const conditional = await fetch(`${fx.origin}${DEALS_PATH}?page=0`, {
-      headers: { 'if-none-match': etag },
+    // A dedicated server with a single-entry page-0 timeline, so this assertion
+    // is independent of whether the preceding tests advanced the shared server's
+    // timeline (under a `--test-name-pattern` filter they are skipped, leaving
+    // the shared counter at 0). A single entry clamps at its only fixture, so
+    // two successive requests serve the same bytes and therefore the same ETag
+    // — which is what makes the conditional request a real 304.
+    const local = createFixtureServer({
+      timeline: { [`${DEALS_PATH}?page=0`]: ['http/r0.xml'] },
     });
-    assert.equal(conditional.status, 304);
-    assert.equal(await conditional.text(), '');
-    assert.equal(conditional.headers.get('etag'), etag, 'the validator is repeated on the 304');
-    // The stored ETag is what makes the third poll a 304: same fixture, same
-    // bytes, same validator.
-    assert.equal(fx.requests.at(-1).status, 304);
-    assert.equal(fx.requests.at(-1).ifNoneMatch, etag);
+    await local.start();
+    try {
+      const first = await fetch(`${local.origin}${DEALS_PATH}?page=0`);
+      const etag = first.headers.get('etag');
+      await first.text();
+      const conditional = await fetch(`${local.origin}${DEALS_PATH}?page=0`, {
+        headers: { 'if-none-match': etag },
+      });
+      assert.equal(conditional.status, 304);
+      assert.equal(await conditional.text(), '');
+      assert.equal(conditional.headers.get('etag'), etag, 'the validator is repeated on the 304');
+      // The stored ETag is what makes the third poll a 304: same fixture, same
+      // bytes, same validator.
+      assert.equal(local.requests.at(-1).status, 304);
+      assert.equal(local.requests.at(-1).ifNoneMatch, etag);
+    } finally {
+      await local.close();
+    }
   });
 
   it('still answers 200 when the client presents a stale validator', async () => {
