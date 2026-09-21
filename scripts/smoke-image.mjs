@@ -35,11 +35,10 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { startFixtureServer } from './fixture-server.mjs';
+import { createSmokeDataDir } from './smoke-data-dir.mjs';
 import { startJwksServer } from '../test/support/jwks.js';
 
 const run = promisify(execFile);
@@ -124,7 +123,7 @@ async function main() {
 
   const fixture = await startFixtureServer();
   const jwks = await startJwksServer({ kid: 'smoke' });
-  const dataDir = mkdtempSync(join(tmpdir(), 'ozb-smoke-'));
+  const dataDir = createSmokeDataDir();
   let containerStarted = false;
 
   try {

@@ -20,10 +20,11 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULTS } from '../../lib/config.js';
+import { createSmokeDataDir } from '../../scripts/smoke-data-dir.mjs';
 import { REPO_ROOT } from '../support/app-server.js';
 
 const read = (relative) => readFileSync(join(REPO_ROOT, relative), 'utf8');
@@ -198,6 +199,20 @@ describe('integration: the packaging artefacts', () => {
       // wired together.
       assert.match(smoke, /^        run: npm run smoke:image$/m);
       assert.match(smoke, /OZB_SMOKE_IMAGE/);
+    });
+
+    it('makes the smoke bind mount writable by the image user', () => {
+      const parent = mkdtempSync(join(tmpdir(), 'ozb-smoke-parent-'));
+      try {
+        const dataDir = createSmokeDataDir(parent);
+        assert.equal(
+          statSync(dataDir).mode & 0o777,
+          0o777,
+          'uid 1000 can read, write and search the host-owned /data bind mount',
+        );
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
     });
 
     it('publishes only on main, and only after all four jobs passed', () => {
