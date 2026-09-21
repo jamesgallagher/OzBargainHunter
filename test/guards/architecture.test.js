@@ -234,9 +234,16 @@ function importSpecifiers(source) {
   // surrounding whitespace), so a webpack chunk-name comment does not hide
   // the specifier.
   const comment = '(?:\\/\\*[\\s\\S]*?\\*\\/\\s*)*';
+  // `sep` = any run of whitespace and/or block and/or line comments. A legal
+  // comment placed between the `import` keyword and a bare specifier (e.g.
+  // `import /* boundary */ "./x.js"` or `import // note\n"./x.js"`) must not
+  // hide the specifier, so the bare pattern tolerates `sep` there. (`comment`
+  // is block-only and is used by the dynamic-import pattern; `sep`
+  // additionally covers line comments and plain whitespace.)
+  const sep = '(?:\\s|\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*\\n?)*';
   const patterns = [
     /\bfrom\s+['"]([^'"]+)['"]/g,
-    /\bimport\s+['"]([^'"]+)['"]/g,
+    new RegExp(`\\bimport${sep}['"]([^'"]+)['"]`, 'g'),
     new RegExp(`\\bimport\\s*\\(\\s*${comment}['"]([^'"]+)['"]\\s*${comment}\\)`, 'g'),
     /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
     /\bexport\s+(?:\{[^}]*\}|\*)\s+from\s+['"]([^'"]+)['"]/g,
@@ -1380,6 +1387,37 @@ test('denied destinations are rejected by resolved path (a direct import of a de
     mkdirSync(join(base, 'lib', 'web'), { recursive: true });
     writeFileSync(join(base, 'app', 'index.js'), 'import { p } from "../lib/web/db.js";\n');
     writeFileSync(join(base, 'lib', 'web', 'db.js'), 'export function p() {}\n');
+    assertServerTreeClean(base);
+  });
+});
+
+// C18 (the card's correction): a LEGAL commented bare import of a denied
+// module must be followed and denied. `importSpecifiers` tolerates a block
+// comment between the `import` keyword and the specifier, so a denied
+// destination reached through the commented spelling cannot slip past the
+// guard (the pre-fix bypass: `import /* boundary */ "./lib/acquire/poll.js"`
+// was legal JS but dropped by the walk, letting the denied module in).
+test('a commented bare import of a denied module is followed and denied (the legal comment-between-tokens spelling)', () => {
+  withTree('guard-commentbare-bad-', (base) => {
+    writeFileSync(join(base, 'middleware.js'), 'import { NextResponse } from "next/server.js";\nimport /* boundary */ "./lib/acquire/poll.js";\n');
+    mkdirSync(join(base, 'lib', 'acquire'), { recursive: true });
+    writeFileSync(join(base, 'lib', 'acquire', 'poll.js'), 'export function runDealPoll() {}\n');
+    const t = walkServerTree(base).files;
+    const target = join(base, 'lib', 'acquire', 'poll.js');
+    assert.ok(t.has(target), 'the denied module reached through a commented bare import must be in the walked set (the import is followed)');
+    assert.throws(
+      () => assertServerTreeClean(base),
+      /lib\/acquire\/poll\.js is reachable from middleware\.js and is denied/,
+      'the shipped guard must flag a denied module reached through a legal commented bare import (the pre-fix bypass is closed)',
+    );
+  });
+
+  // Unmutated twin: the same commented bare import of an *allowed* module
+  // passes — the comment is legal and the destination is allowed.
+  withTree('guard-commentbare-good-', (base) => {
+    writeFileSync(join(base, 'middleware.js'), 'import { NextResponse } from "next/server.js";\nimport /* boundary */ "./lib/web/db.js";\n');
+    mkdirSync(join(base, 'lib', 'web'), { recursive: true });
+    writeFileSync(join(base, 'lib', 'web', 'db.js'), 'export function getStore() {}\n');
     assertServerTreeClean(base);
   });
 });
