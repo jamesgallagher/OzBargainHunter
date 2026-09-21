@@ -20,10 +20,11 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULTS } from '../../lib/config.js';
+import { createSmokeDataDir } from '../../scripts/smoke-data-dir.mjs';
 import { REPO_ROOT } from '../support/app-server.js';
 
 const read = (relative) => readFileSync(join(REPO_ROOT, relative), 'utf8');
@@ -32,6 +33,7 @@ const DOCKERFILE = read('Dockerfile');
 const ENTRYPOINT = read('docker-entrypoint.sh');
 const CI = read('.github/workflows/ci.yml');
 const UNRAID = read('unraid/my-OzBargainHunter.xml');
+const SMOKE = read('scripts/smoke-image.mjs');
 
 /** Every top-level job name in the workflow, in file order. */
 function jobNames(yaml) {
@@ -246,6 +248,67 @@ describe('integration: the packaging artefacts', () => {
     it('never points the smoke test at the live site', () => {
       assert.ok(!/https?:\/\/www\.ozbargain\.com\.au/.test(CI), 'the workflow does not configure the real feed');
       assert.ok(!/OZB_DEALS_FEED_URL/.test(CI), 'the feed URLs come from the fixture server, never from the workflow');
+    });
+  });
+
+  describe('scripts/smoke-image.mjs', () => {
+    /** A top-level `const NAME = <number>;` from the smoke script. */
+    const smokeConstant = (name) => {
+      const match = new RegExp(`^const ${name} = ([0-9_]+);$`, 'm').exec(SMOKE);
+      assert.ok(match, `${name} is declared as a plain number`);
+      return Number(match[1].replaceAll('_', ''));
+    };
+
+    it('waits longer than one poll interval for the container to go healthy', () => {
+      // The worker's schedulers start with `runImmediately: false`
+      // (lib/scheduler.js), so its first deal-poll beat is due one whole
+      // interval *after* start, and /healthz stays 503 until that poll has
+      // committed (design 3.7). A health window shorter than the interval
+      // therefore can never see a healthy container, however well the image
+      // works: the original fixed 180 s window outlived the container on run
+      // 35610785899 and would have failed the same way on a healthy one.
+      assert.match(
+        SMOKE,
+        /const HEALTH_TIMEOUT_MS = \(POLL_INTERVAL_SECONDS \+ HEALTH_TIMEOUT_SLACK_SECONDS\) \* 1000;/,
+        'the health window is derived from the poll interval, not pinned',
+      );
+      assert.match(
+        SMOKE,
+        /OZB_POLL_INTERVAL_SECONDS: String\(POLL_INTERVAL_SECONDS\)/,
+        'the container is given the same interval the window is sized for',
+      );
+      const interval = smokeConstant('POLL_INTERVAL_SECONDS');
+      const slack = smokeConstant('HEALTH_TIMEOUT_SLACK_SECONDS');
+      assert.ok(
+        slack >= 60,
+        `the window leaves the poll cycle and Docker's health beat at least a minute of slack, got ${slack}s`,
+      );
+      assert.ok(
+        slack > 0 && interval >= DEFAULTS.OZB_POLL_INTERVAL_SECONDS,
+        `the smoke run keeps the production interval: ${interval}s`,
+      );
+    });
+
+    it('makes the bind-mounted data directory writable by the image user', () => {
+      // The image runs as uid 1000 but the CI runner owns the host directory as
+      // another uid, so a default mode 0700 temp directory leaves the worker
+      // unable to open its database at all ("unable to open database file").
+      assert.match(
+        SMOKE,
+        /const dataDir = createSmokeDataDir\(\);/,
+        'the smoke test mounts the helper directory at /data',
+      );
+      const parent = mkdtempSync(join(tmpdir(), 'ozb-smoke-parent-'));
+      try {
+        const dataDir = createSmokeDataDir(parent);
+        assert.equal(
+          statSync(dataDir).mode & 0o777,
+          0o777,
+          'uid 1000 can read, write and search the host-owned /data bind mount',
+        );
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
     });
   });
 

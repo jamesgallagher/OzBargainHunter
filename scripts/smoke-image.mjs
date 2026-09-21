@@ -35,11 +35,10 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { startFixtureServer } from './fixture-server.mjs';
+import { createSmokeDataDir } from './smoke-data-dir.mjs';
 import { startJwksServer } from '../test/support/jwks.js';
 
 const run = promisify(execFile);
@@ -47,8 +46,34 @@ const run = promisify(execFile);
 /** The image under test: `OZB_SMOKE_IMAGE`, or an argument, or a local default. */
 const IMAGE = process.env.OZB_SMOKE_IMAGE ?? process.argv[2] ?? 'ozbargainhunter:smoke';
 
-/** How long the container's health check may take to go healthy. */
-const HEALTH_TIMEOUT_MS = 180_000;
+/**
+ * The poll interval the container is given. 300 s is the production floor
+ * (`MIN_POLL_INTERVAL_SECONDS`), so this is the interval the smoke test must
+ * tolerate — it cannot be shortened, and the image under test is the
+ * production image.
+ */
+const POLL_INTERVAL_SECONDS = 300;
+
+/** Slack on top of the poll interval: the poll cycle's three paced requests,
+ *  the commit, and Docker's own 30 s health-check beat. */
+const HEALTH_TIMEOUT_SLACK_SECONDS = 120;
+
+/**
+ * How long the container's health check may take to go healthy.
+ *
+ * This has to cover **one whole poll interval**, because the worker's
+ * schedulers start with `runImmediately: false` (`lib/scheduler.js`): the first
+ * deal-poll beat is due one interval after the worker starts, not immediately.
+ * /healthz stays 503 until that first poll has committed (design 3.7), so a
+ * window shorter than the interval can never see a healthy container even when
+ * everything works.
+ *
+ * The original 180 s window was shorter than the 300 s interval: on run
+ * 35610785899 it spent the full 180 s polling the health of a container that
+ * had already been down for 179 of them, and would have failed the same way on
+ * a healthy container.
+ */
+const HEALTH_TIMEOUT_MS = (POLL_INTERVAL_SECONDS + HEALTH_TIMEOUT_SLACK_SECONDS) * 1000;
 
 const TEAM_DOMAIN = 'smoke.cloudflareaccess.com';
 const AUD = 'smoke-aud';
@@ -124,7 +149,7 @@ async function main() {
 
   const fixture = await startFixtureServer();
   const jwks = await startJwksServer({ kid: 'smoke' });
-  const dataDir = mkdtempSync(join(tmpdir(), 'ozb-smoke-'));
+  const dataDir = createSmokeDataDir();
   let containerStarted = false;
 
   try {
@@ -137,9 +162,11 @@ async function main() {
       ...fixture.appConfig(),
       OZB_DB_PATH: '/data/ozbargain.db',
       OZB_SNAPSHOT_PATH: '/data/ozbargain-snapshot.db',
-      // The production floor is five minutes; the container gets a poll almost
-      // immediately because the scheduler's first beat is one interval in.
-      OZB_POLL_INTERVAL_SECONDS: '300',
+      // The production floor is five minutes. The scheduler's first beat is one
+      // interval in, so the container's first poll lands ~300 s after the worker
+      // starts: HEALTH_TIMEOUT_MS above is derived from this same constant, so
+      // the wait and the interval cannot drift apart.
+      OZB_POLL_INTERVAL_SECONDS: String(POLL_INTERVAL_SECONDS),
       OZB_CLASSIFIEDS_INTERVAL_SECONDS: '3600',
       OZB_HEALTHCHECK_SECRET: HEALTHCHECK_SECRET,
       OZB_CSRF_SECRET: CSRF_SECRET,
