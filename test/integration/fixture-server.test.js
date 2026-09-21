@@ -5,7 +5,7 @@
  * real conditional request, the two-page cap and the loopback-only bind.
  */
 
-import { after, before, describe, it } from 'node:test';
+import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
@@ -29,6 +29,10 @@ describe('integration: the fixture server', () => {
 
   after(async () => {
     await fx.close();
+  });
+
+  beforeEach(() => {
+    fx.reset();
   });
 
   it('binds loopback only', () => {
@@ -63,10 +67,12 @@ describe('integration: the fixture server', () => {
   });
 
   it('honours If-None-Match with a real 304 and an empty body', async () => {
-    const first = await fetch(`${fx.origin}${DEALS_PATH}?page=0`);
+    // Page 1 repeats the same fixture on its second request, so this assertion
+    // is self-contained and does not rely on earlier tests advancing page 0.
+    const first = await fetch(`${fx.origin}${DEALS_PATH}?page=1`);
     const etag = first.headers.get('etag');
     await first.text();
-    const conditional = await fetch(`${fx.origin}${DEALS_PATH}?page=0`, {
+    const conditional = await fetch(`${fx.origin}${DEALS_PATH}?page=1`, {
       headers: { 'if-none-match': etag },
     });
     assert.equal(conditional.status, 304);

@@ -264,3 +264,8 @@ Three things make it a gate rather than a habit:
 The fixture transport does not open sockets at all — it maps a URL to a file — so under normal
 operation the guard never fires. It exists for the build that wires the real transport into a
 test by accident.
+
+The loopback fixture server also accepts per-test response descriptors in its `timeline` option.
+A descriptor can select a corpus `fixture` or an inline `body`, plus an HTTP `status`,
+`contentType`, and response `headers`. This keeps malformed, empty, and failure shakeouts on the
+same real HTTP transport path without adding synthetic files to the captured corpus.
