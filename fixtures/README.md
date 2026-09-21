@@ -269,3 +269,9 @@ The loopback fixture server also accepts per-test response descriptors in its `t
 A descriptor can select a corpus `fixture` or an inline `body`, plus an HTTP `status`,
 `contentType`, and response `headers`. This keeps malformed, empty, and failure shakeouts on the
 same real HTTP transport path without adding synthetic files to the captured corpus.
+
+The malformed shakeouts derive their body from the capture itself: `mock-shakeout.test.js` cuts
+`http/classifieds-page.html` inside its first listing (before that listing's title heading), the
+same way `derived/deals-page0-truncated.xml` is cut inside its third `<item>`. The cut is made in
+the test rather than committed as a file, so the corpus stays exactly as captured and a truncation
+can never drift away from the bytes it was derived from.
