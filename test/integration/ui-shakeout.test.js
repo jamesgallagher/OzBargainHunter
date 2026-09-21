@@ -29,13 +29,13 @@ function copyWorktreeStandaloneIfNeeded() {
   }
 }
 
-async function submit(page, formSelector, buttonSelector, responsePath) {
+async function submit(page, formSelector, buttonSelector, responsePath, diagnostics = () => '') {
   const [response] = await Promise.all([
     page.waitForResponse((candidate) => new URL(candidate.url()).pathname === responsePath),
     page.locator(formSelector).locator(buttonSelector).click(),
   ]);
   const body = await response.text();
-  assert.equal(response.status(), 200, `${responsePath} returned ${response.status()}: ${body}`);
+  assert.equal(response.status(), 200, `${responsePath} returned ${response.status()}: ${body}\n${diagnostics()}`);
   return body;
 }
 
@@ -187,7 +187,13 @@ describe('integration: browser UI and test-send shakeout', () => {
     assert.equal(temp.store.getProvider('ntfy').config, savedConfig);
     assert.match(await page.locator('table.providers').innerText(), /ntfy\s+yes\s+yes/);
 
-    const testSendBody = await submit(page, 'form.test-send', 'button[type="submit"]', '/delivery/test-send');
+    const testSendBody = await submit(
+      page,
+      'form.test-send',
+      'button[type="submit"]',
+      '/delivery/test-send',
+      () => app.output(),
+    );
     assert.deepEqual(JSON.parse(testSendBody), { sent: true, kind: 'ntfy' });
     assert.equal(sink.messages.length, 1);
     assert.deepEqual(sink.messages[0], {
