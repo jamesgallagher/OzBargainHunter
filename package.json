@@ -1,0 +1,32 @@
+{
+  "name": "ozbargain-hunter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal deal and classifieds watcher for OzBargain",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/foundation/*.test.js test/unit/acquisition/*.test.js test/unit/rules/*.test.js test/unit/web/*.test.js test/guards/*.test.js && node --test --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/*.test.js",
+    "test:foundation": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/guards/*.test.js",
+    "test:rules": "node --test --import ./test/support/no-network.js test/unit/rules/*.test.js",
+    "test:web": "node --test --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/web/*.test.js",
+    "test:integration": "node --test --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/*.test.js",
+    "smoke:image": "node scripts/smoke-image.mjs"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.0",
+    "fast-xml-parser": "^5.2.3",
+    "jose": "^6.1.3",
+    "next": "^15.5.0",
+    "nodemailer": "^7.0.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.31.0",
+    "eslint-config-next": "^15.5.0"
+  }
+}

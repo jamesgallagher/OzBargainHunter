@@ -106,7 +106,8 @@ RE_ABS_TS = re.compile(r"\son (\d{2})/(\d{2})/(\d{4}) - (\d{2}):(\d{2})")
 RE_REL_TS = re.compile(r"</strong>\s*((?:\d+\s+\w+\s+)+)ago")
 RE_PRICE = re.compile(r'<span class="price">\s*([^<]*?)\s*(?:<em>|</span>)', re.S)
 RE_SHIPPING = re.compile(r'<span title="shipping">\s*([^<]*?)\s*</span>')
-RE_THUMB = re.compile(r'<div class="right">.*?<img src="([^"]+)"', re.S)
+RE_THUMB = re.compile(r'<div class="right">\s*(.*?)\s*</div>', re.S)
+RE_THUMB_IMG = re.compile(r'<img src="([^"]+)"')
 RE_LEADING_TAGS = re.compile(r"^\s*(?:\[([^\]]*)\]\s*)+")
 RE_ONE_TAG = re.compile(r"\[([^\]]*)\]")
 
@@ -130,27 +131,56 @@ def relative_to_utc(phrase: str) -> str:
     return (FIXTURE_NOW - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def teaser_div_content(block: str) -> str:
+    """Return the content of the listing's own `div.node.node-classified.node-teaser`,
+    bounded by div-depth matching. This is the scope every field must read from:
+    the raw `block` runs to the next listing (or, for the last listing, to
+    `</html>`), so a raw substring scan of `block` would read page furniture
+    (the footer, the next listing, the page chrome)."""
+    start = block.find('node node-classified node-teaser')
+    if start == -1:
+        return ""
+    # Walk from the opening <div ...> forward, tracking div depth. The teaser
+    # div's content ends when the depth returns to the div's own level.
+    i = block.rfind("<div", 0, start)
+    depth = 0
+    for m in re.finditer(r"<div\b|</div>", block[i:]):
+        if m.group(0) == "</div>":
+            depth -= 1
+            if depth == 0:
+                return block[i:m.start() + i]
+        else:
+            depth += 1
+    return block[i:]
+
+
 def listing_records(path: pathlib.Path) -> list[dict]:
     page = path.read_text(encoding="utf-8")
     out = []
     for block in LISTING_SPLIT.split(page)[1:]:
+        # Scope every field to the listing's own teaser div. The raw `block`
+        # runs to the next listing (or, for the last listing, to `</html>`),
+        # so a raw substring scan of `block` would read page furniture (the
+        # footer flag, the next listing, the page chrome) — the Major 7 /
+        # Minor 15 defect. `teaser` is the bounded scope.
+        teaser = teaser_div_content(block)
         node_id = int(RE_NODE_ID.search(block).group(1))
         title = html.unescape(RE_DATA_TITLE.search(block).group(1))
 
         leading = RE_LEADING_TAGS.match(title)
         tags = RE_ONE_TAG.findall(leading.group(0)) if leading else []
 
-        user = RE_USER.search(block)
+        user = RE_USER.search(teaser)
         poster = user.group(2) if user else None
         poster_id = int(user.group(1)) if user else None
         # OzBargain renders a live /user/ link whose visible text is the literal
-        # string "No user info" when the poster is not shown. That is an absent
-        # poster, not a user named "No user info".
+        # string "No user info" when the poster is not shown — an absent poster,
+        # not a user named "No user info".
         if poster == "No user info":
             poster, poster_id = None, None
 
-        absolute = RE_ABS_TS.search(block)
-        relative = RE_REL_TS.search(block)
+        absolute = RE_ABS_TS.search(teaser)
+        relative = RE_REL_TS.search(teaser)
         if absolute:
             posted_at = melbourne_to_utc(
                 int(absolute.group(1)), int(absolute.group(2)), int(absolute.group(3)),
@@ -161,17 +191,22 @@ def listing_records(path: pathlib.Path) -> list[dict]:
             posted_at = relative_to_utc(relative.group(1))
             precision = "relative"
 
-        price = RE_PRICE.search(block)
-        shipping = RE_SHIPPING.search(block)
-        thumb = RE_THUMB.search(block)
+        price = RE_PRICE.search(teaser)
+        shipping = RE_SHIPPING.search(teaser)
+        # The thumbnail is the image inside the listing's own div.right,
+        # scoped to this listing — never the page-wide footer flag. The
+        # div.right is captured (RE_THUMB), then the img is read from within
+        # that content only. An empty div.right (no image) yields None.
+        thumb_div = RE_THUMB.search(teaser)
+        thumb = RE_THUMB_IMG.search(thumb_div.group(1)) if thumb_div else None
 
         out.append(
             {
                 "node_id": node_id,
                 "title": title,
                 "url": f"https://www.ozbargain.com.au/node/{node_id}",
-                "type": RE_TYPE.search(block).group(1),
-                "pinned": "classified-sticky" in block,
+                "type": RE_TYPE.search(teaser).group(1),
+                "pinned": "classified-sticky" in teaser,
                 "category_tags": [html.unescape(t) for t in tags],
                 "poster": poster,
                 "poster_id": poster_id,

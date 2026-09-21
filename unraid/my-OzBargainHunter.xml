@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!--
+  OzBargain Hunter — the canonical Unraid container template (design 10.6).
+
+  The unfriendly-but-real details this template encodes:
+
+  * <Repository> points at the MOVING tag `:latest`. Unraid decides whether an
+    update exists by comparing the registry's manifest digest behind the tag
+    with the local image's digest, so a pinned tag (:main-<sha>) never produces
+    an update. A pinned tag is the rollback position (10.2), not the production
+    one.
+  * All persistent state lives on the bind mount: /mnt/user/appdata/
+    ozbargain-hunter/ is mounted at /data, and the container writes nothing of
+    value inside itself (10.6).
+  * The container runs as the non-root user `node` (uid 1000), so the host
+    directory must be writable by uid 1000. On Unraid:
+        chown -R 1000:1000 /mnt/user/appdata/ozbargain-hunter
+  * <Icon> is a documented placeholder. The icon asset is versioned at
+    assets/logo/icon-256.png, but the repository is private, so it cannot be
+    served from raw.githubusercontent.com; hosting it (Open Item O15) is what
+    fills this in. O14 notes Unraid may cache a changed icon for a while.
+-->
+<Container version="2">
+  <Name>OzBargainHunter</Name>
+  <Repository>ghcr.io/jamesgallagher/ozbargainhunter:latest</Repository>
+  <Registry>https://github.com/jamesgallagher/OzBargainHunter/pkgs/container/ozbargainhunter</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/jamesgallagher/OzBargainHunter/issues</Support>
+  <Project>https://github.com/jamesgallagher/OzBargainHunter</Project>
+  <Overview>Personal deal and classifieds watcher for OzBargain: a Next.js web UI and a five-minute poll loop in one container, with alerts delivered by email, Matrix or ntfy.</Overview>
+  <Category>Tools: Productivity:</Category>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
+  <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+
+  <Config Name="Web UI port" Target="8000" Default="8000" Mode="tcp" Description="The application's port inside the container (design 2.2). Both paths — the Cloudflare Tunnel hostname and a direct LAN request — arrive here. The application verifies the Cloudflare Access JWT on every request, so publishing the port does not expose the UI." Type="Port" Display="always" Required="true" Mask="false">8000</Config>
+
+  <Config Name="App data" Target="/data" Default="/mnt/user/appdata/ozbargain-hunter/" Mode="rw" Description="ALL persistent state: the SQLite database, its WAL files and the nightly snapshot (design 10.6). Nothing of value is written inside the container. The directory must be writable by uid 1000 (the container's non-root user): chown -R 1000:1000 /mnt/user/appdata/ozbargain-hunter" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/ozbargain-hunter/</Config>
+
+  <!-- Configuration (design 9.1). Rule configuration and thresholds are NOT
+       here: they live in the database so the UI can edit them without a
+       restart (9.2). Everything below needs a restart to change. -->
+
+  <Config Name="Deals feed URL" Target="OZB_DEALS_FEED_URL" Default="https://www.ozbargain.com.au/deals/feed" Mode="" Description="The deals feed. Polled twice per cycle, as page 0 and page 1; the application never requests page 2 (design 3.3, D41)." Type="Variable" Display="always" Required="false" Mask="false">https://www.ozbargain.com.au/deals/feed</Config>
+  <Config Name="Front page feed URL" Target="OZB_FRONT_FEED_URL" Default="https://www.ozbargain.com.au/feed" Mode="" Description="The front-page feed, polled once per cycle. A deal that only ever appears here is still observed and matched (D43)." Type="Variable" Display="always" Required="false" Mask="false">https://www.ozbargain.com.au/feed</Config>
+  <Config Name="Classifieds URL" Target="OZB_CLASSIFIEDS_URL" Default="https://www.ozbargain.com.au/classified" Mode="" Description="The classifieds page, polled on its own longer interval. Requires the session cookie below." Type="Variable" Display="always" Required="false" Mask="false">https://www.ozbargain.com.au/classified</Config>
+  <Config Name="User-Agent" Target="OZB_USER_AGENT" Default="OzBargainHunter/1.0.0 (+https://ozb.gallagherhome.au)" Mode="" Description="The User-Agent every outbound request carries (design 3.8). Leave as-is: it identifies the client honestly." Type="Variable" Display="always" Required="false" Mask="false">OzBargainHunter/1.0.0 (+https://ozb.gallagherhome.au)</Config>
+  <Config Name="Deals poll interval (seconds)" Target="OZB_POLL_INTERVAL_SECONDS" Default="300" Mode="" Description="Seconds between deal polls. 300 (five minutes) is the floor the application enforces." Type="Variable" Display="always" Required="false" Mask="false">300</Config>
+  <Config Name="Classifieds poll interval (seconds)" Target="OZB_CLASSIFIEDS_INTERVAL_SECONDS" Default="3600" Mode="" Description="Seconds between classifieds polls. One hour by default (design 3.6)." Type="Variable" Display="always" Required="false" Mask="false">3600</Config>
+  <Config Name="Database path" Target="OZB_DB_PATH" Default="/data/ozbargain.db" Mode="" Description="The SQLite database. Must stay on the bind mount: the worker and the UI are separate processes that share this one file." Type="Variable" Display="advanced" Required="false" Mask="false">/data/ozbargain.db</Config>
+  <Config Name="Snapshot path" Target="OZB_SNAPSHOT_PATH" Default="/data/ozbargain-snapshot.db" Mode="" Description="Where the nightly snapshot is written. Must stay on the bind mount." Type="Variable" Display="advanced" Required="false" Mask="false">/data/ozbargain-snapshot.db</Config>
+
+  <Config Name="Health check secret" Target="OZB_HEALTHCHECK_SECRET" Default="" Mode="" Description="The container-local secret /healthz authenticates with (D62). Set it to a random string; the image's own health check sends it. Without it /healthz rejects every request, including the container's." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="CSRF secret" Target="OZB_CSRF_SECRET" Default="" Mode="" Description="Signs the double-submit CSRF tokens for every state-changing request (design 8.6). Set it to a random string; an unset value denies every mutation." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Cloudflare Access team domain" Target="CF_ACCESS_TEAM_DOMAIN" Default="ozb.cloudflareaccess.com" Mode="" Description="The Access team host. The JWKS is fetched from it, and the token issuer must be https:// followed by this host (design 8.2)." Type="Variable" Display="always" Required="true" Mask="false">ozb.cloudflareaccess.com</Config>
+  <Config Name="Cloudflare Access audience" Target="CF_ACCESS_AUD" Default="" Mode="" Description="The Access application's AUD tag. Tokens are verified against it on every request." Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Config Name="Icon route public" Target="OZB_ICON_ROUTE_PUBLIC" Default="false" Mode="" Description="Exempt the icon route from the Access check, so a notification client can render the logo without a session (O15). true or false." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="OzBargain account cookie" Target="OZB_ACCOUNT_COOKIE" Default="" Mode="" Description="The session cookie for the classifieds section, pasted from the UI's session screen (screen 9). Until O21 is resolved this is how the classifieds session is supplied; the application never requests /user/login." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+
+  <Config Name="SMTP host" Target="EMAIL_SMTP_HOST" Default="" Mode="" Description="SMTP host for the email provider." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="SMTP port" Target="EMAIL_SMTP_PORT" Default="587" Mode="" Description="SMTP port. 0 means unset." Type="Variable" Display="advanced" Required="false" Mask="false">587</Config>
+  <Config Name="SMTP user" Target="EMAIL_SMTP_USER" Default="" Mode="" Description="SMTP username." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="SMTP password" Target="EMAIL_SMTP_PASS" Default="" Mode="" Description="SMTP password." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Email from" Target="EMAIL_FROM" Default="" Mode="" Description="The From address on alert emails." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Email to" Target="EMAIL_TO" Default="" Mode="" Description="The To address on alert emails." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Matrix homeserver URL" Target="MATRIX_HOMESERVER_URL" Default="" Mode="" Description="The Matrix homeserver the matrix provider posts to." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Matrix access token" Target="MATRIX_ACCESS_TOKEN" Default="" Mode="" Description="The access token for the matrix provider (O11)." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Matrix room id" Target="MATRIX_ROOM_ID" Default="" Mode="" Description="The room alerts are posted to." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Matrix user id" Target="MATRIX_USER_ID" Default="" Mode="" Description="The account the matrix provider posts as." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="ntfy URL" Target="NTfy_URL" Default="" Mode="" Description="The ntfy server the ntfy provider publishes to." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="ntfy token" Target="NTfy_TOKEN" Default="" Mode="" Description="The ntfy access token, when the topic is protected." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+</Container>

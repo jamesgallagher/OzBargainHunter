@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+next-env.d.ts
+
+# Local SQLite databases and snapshots
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
