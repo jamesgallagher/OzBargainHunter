@@ -59,6 +59,8 @@ describe('integration: the fixture server', () => {
 
   it('advances through the timeline on successive requests', async () => {
     // The page-0 timeline is r0 → cmp_deals → cmp_deals.
+    const first = await fetch(`${fx.origin}${DEALS_PATH}?page=0`);
+    await first.text();
     const second = await fetch(`${fx.origin}${DEALS_PATH}?page=0`);
     assert.equal(second.status, 200);
     assert.equal((await second.text()).length, readFileSync(`${FIXTURES_DIR}http/cmp_deals.xml`, 'utf8').length);
