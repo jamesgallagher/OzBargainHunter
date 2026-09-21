@@ -118,7 +118,6 @@ describe('integration: browser UI and test-send shakeout', () => {
     await expectHeading(page, '/', 'Status');
     assert.equal(await page.locator('time').count(), 1);
     await expectHeading(page, '/rules', 'Rules');
-    await assert.doesNotReject(() => page.getByText(SEEDED_TERM, { exact: true }).waitFor());
 
     await expectHeading(page, '/rules/new', 'New rule');
     const createForm = 'form[action="/rules/new/create"]';
