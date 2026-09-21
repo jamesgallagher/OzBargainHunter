@@ -375,3 +375,82 @@ test('safe-failure: a genuine uid-0 page still expires (the fail-closed behavior
     close();
   }
 });
+
+// --- Review round-1 (Abhishek, pinned fb688f3): a fabricated session death ---
+// The parser's gates were token checks and extractUid defaulted an absent or
+// malformed uid to 0, so these two classes of 200 resolved `expired` — an
+// alert, a latch and `classifieds_last_uid=0` written on no evidence. Both
+// must resolve `unknown` (transient: no alert, no latch, no session writes).
+
+test('safe-failure: a non-HTML 200 that merely quotes the OzB_vars and </html> tokens resolves unknown, not expired', async () => {
+  const quoted = JSON.stringify({
+    error: 'bad gateway',
+    upstream: 'OzB_vars = {"site_name":"OzBargain","adstype":"FUSE"}; </html>',
+  });
+  // The 200 carries an ETag, so the client caches a validator for the URL: the
+  // unparseable branch must drop it, or the repeat would be answered 304 and
+  // the bad body would never be seen again.
+  const { run, store, logLines, close } = runCapturing({
+    [URL]: { status: 200, body: quoted, headers: { etag: '"bad-etag"' } },
+  });
+  try {
+    store.setSetting('classifieds_last_uid', '226301');
+    store.setSetting('classifieds_last_confirmed_at', '2026-09-19T07:30:00Z');
+    const result = await run();
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.uid, 0);
+    assert.deepEqual(result.listings, []);
+    assert.equal(result.alert, false, 'a bad body must not raise a session-expiry alert');
+    assert.equal(result.latched, false, 'a bad body must not latch polling off');
+    // Exactly one failures row, classed unparseable, carrying the raw body.
+    const failures = store.getFailures();
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].response_class, 'unparseable');
+    assert.equal(failures[0].body, quoted);
+    const line = logLines.find((l) => l.includes('unparseable'));
+    assert.ok(line && line.includes(URL) && line.includes('missing OzB_vars'), 'the log names the URL, class and reason');
+    // No session state was written or cleared.
+    assert.equal(store.getSetting('classifieds_last_uid'), '226301');
+    assert.equal(store.getSetting('classifieds_last_confirmed_at'), '2026-09-19T07:30:00Z');
+    // The unusable validator for the URL is dropped, so the repeat is a 200.
+    const feed = store.getFeedState(URL);
+    assert.ok(feed !== null && feed.etag === null, 'the cached validator must be cleared');
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: a complete page with no readable uid (absent, quoted or null) resolves unknown, not expired', async () => {
+  const full = readFileSync(new globalThis.URL('../../../fixtures/http/classifieds-page.html', import.meta.url), 'utf8');
+  // Derived by rewriting only the uid field of the complete fixture: the page
+  // is otherwise complete and parses 25 listings, so nothing but the uid field
+  // distinguishes these bodies from a valid page.
+  const cases = [
+    ['absent', full.replace('"uid":226301,', '')],
+    ['quoted string', full.replace('"uid":226301,', '"uid":"226301",')],
+    ['null', full.replace('"uid":226301,', '"uid":null,')],
+  ];
+  for (const [what, body] of cases) {
+    assert.notEqual(body, full, `${what}: the derived body must differ from the fixture`);
+    const { run, store, close } = runCapturing({ [URL]: { status: 200, body } });
+    try {
+      store.setSetting('classifieds_last_uid', '226301');
+      store.setSetting('classifieds_last_confirmed_at', '2026-09-19T07:30:00Z');
+      const result = await run();
+      assert.equal(result.state, 'unknown', `${what}: a uid-less page must never resolve as a session state`);
+      assert.equal(result.alert, false, `${what}: no expiry alert`);
+      assert.equal(result.latched, false, `${what}: no latch`);
+      const failures = store.getFailures();
+      assert.equal(failures.length, 1, `${what}: exactly one failures row`);
+      assert.equal(failures[0].response_class, 'unparseable', `${what}: classed unparseable`);
+      assert.equal(store.getSetting('classifieds_last_uid'), '226301', `${what}: the persisted uid is untouched`);
+      assert.equal(
+        store.getSetting('classifieds_last_confirmed_at'),
+        '2026-09-19T07:30:00Z',
+        `${what}: the confirmation instant is untouched`,
+      );
+    } finally {
+      close();
+    }
+  }
+});
