@@ -201,20 +201,6 @@ describe('integration: the packaging artefacts', () => {
       assert.match(smoke, /OZB_SMOKE_IMAGE/);
     });
 
-    it('makes the smoke bind mount writable by the image user', () => {
-      const parent = mkdtempSync(join(tmpdir(), 'ozb-smoke-parent-'));
-      try {
-        const dataDir = createSmokeDataDir(parent);
-        assert.equal(
-          statSync(dataDir).mode & 0o777,
-          0o777,
-          'uid 1000 can read, write and search the host-owned /data bind mount',
-        );
-      } finally {
-        rmSync(parent, { recursive: true, force: true });
-      }
-    });
-
     it('publishes only on main, and only after all four jobs passed', () => {
       const publish = jobBlock(CI, 'publish');
       assert.match(publish, /needs: \[lint, test, build, smoke\]/);
@@ -261,6 +247,22 @@ describe('integration: the packaging artefacts', () => {
     it('never points the smoke test at the live site', () => {
       assert.ok(!/https?:\/\/www\.ozbargain\.com\.au/.test(CI), 'the workflow does not configure the real feed');
       assert.ok(!/OZB_DEALS_FEED_URL/.test(CI), 'the feed URLs come from the fixture server, never from the workflow');
+    });
+  });
+
+  describe('the smoke data directory', () => {
+    it('makes the bind mount writable by the image user', () => {
+      const parent = mkdtempSync(join(tmpdir(), 'ozb-smoke-parent-'));
+      try {
+        const dataDir = createSmokeDataDir(parent);
+        assert.equal(
+          statSync(dataDir).mode & 0o777,
+          0o777,
+          'uid 1000 can read, write and search the host-owned /data bind mount',
+        );
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
     });
   });
 
