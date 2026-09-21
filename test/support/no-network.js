@@ -7,12 +7,21 @@
  * integration tests run a real server there.
  *
  * The predicate is "is this host loopback", not "is this host OzBargain":
- * every non-loopback egress — including hosts the test suite never names —
- * is blocked. Where a call shape can carry more than one host (e.g. an options
- * object with both `hostname` and `host`), the guard blocks if ANY present
- * candidate is non-loopback. node's net/tls dial `host` when both are present,
- * so trusting `hostname` first would fail open; blocking on any non-loopback
- * candidate keeps it fail-closed (a self-contradictory object is blocked).
+ * every non-loopback egress THROUGH THE WRAPPED CALL SHAPES — including hosts
+ * the test suite never names — is blocked. The wrapped shapes are the five
+ * above (fetch, http/https.request, net.Socket/tls.TLSSocket connect, dns.lookup).
+ * This is an in-process, opt-in guard and does NOT wrap the surrounding
+ * envelope: `dns.promises` / `dns.resolve*`, `dgram` (UDP), a caller-supplied
+ * `lookup` function, spawned child processes, and the ESM named-import path
+ * (`import { lookup } from 'node:dns'` binds to the underlying function at
+ * module-link time, not to the namespace property the guard mutates, so it
+ * returns the unwrapped function) are out of scope and are not blocked here.
+ * Where a wrapped call shape can carry more than one host
+ * (e.g. an options object with both `hostname` and `host`), the guard blocks
+ * if ANY present candidate is non-loopback. node's net/tls dial `host` when
+ * both are present, so trusting `hostname` first would fail open; blocking on
+ * any non-loopback candidate keeps it fail-closed (a self-contradictory object
+ * is blocked).
  */
 
 import http from 'node:http';
@@ -140,8 +149,14 @@ net.Socket.prototype.connect = function connect(...args) {
 };
 
 // --- tls.TLSSocket.prototype.connect (tls.connect) ---
-// TLS sockets do not inherit net.Socket.prototype.connect, so tls.connect is a
-// separate egress path; wrap it with the same fail-closed candidate check.
+// REDUNDANT (no distinct coverage): tls.TLSSocket.prototype inherits from
+// net.Socket.prototype (it has no own `connect`), so the
+// net.Socket.prototype.connect wrapper above it still throws
+// NetworkBlockedError for the same dial. Deleting this tls wrapper therefore
+// leaves tls.connect blocked via the inherited net wrapper — verified by probe
+// at card t_c95fd9e3. This wrapper is defence-in-depth only: it is not pinned
+// by a test (a pin cannot fail on the deletion mutant), and its presence is
+// documented here rather than asserted.
 if (typeof tls.TLSSocket.prototype.connect === 'function') {
   const originalTlsConnect = tls.TLSSocket.prototype.connect;
   tls.TLSSocket.prototype.connect = function connect(...args) {

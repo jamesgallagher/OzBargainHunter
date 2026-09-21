@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import dns from 'node:dns';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
+import os from 'node:os';
 import { NetworkBlockedError } from '../support/no-network.js';
 
 test('the sentinel is set (guard is loaded)', () => {
@@ -41,6 +44,33 @@ test('a fetch of a URL object for a non-loopback host is blocked (URL input hand
   );
 });
 
+test('a fetch of a URL object for a loopback host is permitted over a real server (positive direction)', async () => {
+  // Positive-direction loopback control for the fetch URL-object branch. The
+  // URL-object block test above is block-direction only: it stays green under
+  // a wrapper that reduces `const url = typeof input === 'string' ? input :
+  // input.url` (dropping the `?? input.href` fallback) because
+  // hostFromUrl(undefined) returns null and the guard fails closed. This
+  // control is the kill proof: a real URL object for 127.0.0.1 must reach a
+  // real server. Under that mutant the wrapper reads input.url (undefined for
+  // a URL object), hostFromUrl(undefined) is null, and the guard throws
+  // NetworkBlockedError (host "undefined") instead of letting the request
+  // through — so this test fails while the block test stays green.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await globalThis.fetch(new URL(`http://127.0.0.1:${port}/`));
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'ok');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('http.request with an options object for a non-loopback host is blocked', async () => {
   await assert.rejects(
     new Promise((resolve, reject) => {
@@ -51,6 +81,109 @@ test('http.request with an options object for a non-loopback host is blocked', a
       req.on('error', reject);
       req.end();
     }),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('https.request with a non-loopback host throws at the request layer before any dial (https.request wrap pinned)', () => {
+  // Pins the https.request wrap (the https.request = wrapRequest(https.request)
+  // line) by making the request-layer check the ONLY barrier: the never-dialing
+  // agent stub is passed INSIDE the single options object (addRequest() {} — no
+  // socket is ever created, so the net.Socket.prototype.connect wrapper is never
+  // reached). Deleting the https wrap lets the call through to the original
+  // https.request, which — with the stub agent — returns a ClientRequest instead
+  // of throwing (the stub is consulted, no dial happens) — and this
+  // assert.throws would fail. A reserved literal (203.0.113.9, TEST-NET-2) need
+  // not be routable — the wrapper blocks before any dial — so no skip is needed.
+  // (The agent must be inside the options object: node discards a 2nd options
+  // object in https.request(options, options, cb) and never consults the stub,
+  // so that shape would not isolate the request-layer check.)
+  const stubAgent = { addRequest() {}, protocol: 'https:', defaultPort: 443, maxSockets: Infinity };
+  assert.throws(
+    () => https.request({ hostname: '203.0.113.9', port: 443, path: '/', agent: stubAgent }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Regression net: with the default agent the block still holds via the
+  // net.Socket.prototype.connect wrapper (the default agent dials synchronously
+  // inside ClientRequest, so the wrapper throws in place) — so deleting the
+  // https wrap is caught by the stub assertion above, and the block itself
+  // survives the wrap's absence.
+  assert.throws(
+    () => https.request({ hostname: '203.0.113.9', port: 443, path: '/' }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('http.request with a string URL for a non-loopback host throws at the request layer before any dial (string-URL branch pinned)', () => {
+  // Pins the string-URL branch of wrapRequest (the `typeof input === 'string'`
+  // branch that reads the host from the URL) by making the request-layer check
+  // the ONLY barrier: the never-dialing agent stub below (addRequest() {} — no
+  // socket is ever created) means the net.Socket.prototype.connect wrapper is
+  // never reached, so disabling the string-URL branch (the M5b mutant) would let
+  // the call through to the original http.request, which returns a ClientRequest
+  // instead of throwing — and this assert.throws would fail. A reserved literal
+  // (203.0.113.9, TEST-NET-2) need not be routable — the wrapper blocks before
+  // any dial — so no skip is needed.
+  const stubAgent = { addRequest() {}, protocol: 'http:', defaultPort: 80, maxSockets: Infinity };
+  assert.throws(
+    () => http.request('http://203.0.113.9/', { agent: stubAgent }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Regression net: with the default agent the block still holds via the
+  // net.Socket.prototype.connect wrapper (the default agent dials synchronously
+  // inside ClientRequest, so the wrapper throws in place) — so disabling the
+  // string-URL branch is caught by the stub assertion above, and the block
+  // itself survives the branch's absence.
+  assert.throws(
+    () => http.request('http://203.0.113.9/', () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('http.request with a 2nd-arg options object carrying a non-loopback host throws at the request layer before any dial (2nd-arg options branch pinned)', () => {
+  // Pins the 2nd-arg options branch of wrapRequest (http.request(url, options,
+  // callback), where the options object may also carry a host) by making the
+  // request-layer check the ONLY barrier: the never-dialing agent stub below
+  // (addRequest() {} — no socket is ever created) means the
+  // net.Socket.prototype.connect wrapper is never reached. The URL is a loopback
+  // host but the 2nd-arg options carry a non-loopback hostname — the guard blocks
+  // if ANY present candidate is non-loopback (fail-closed). Disabling the
+  // 2nd-arg options branch (the M5c mutant) leaves the loopback URL passing the
+  // string-URL branch and the non-loopback hostname unchecked, so the call
+  // reaches the original http.request, which (with the stub agent) returns a
+  // ClientRequest instead of throwing — and this assert.throws would fail. A
+  // reserved literal (203.0.113.9, TEST-NET-2) need not be routable — the
+  // wrapper blocks before any dial — so no skip is needed.
+  const stubAgent = { addRequest() {}, protocol: 'http:', defaultPort: 80, maxSockets: Infinity };
+  assert.throws(
+    () => http.request('http://127.0.0.1:1/', { hostname: '203.0.113.9', agent: stubAgent }, () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Regression net: with the default agent the block still holds via the
+  // net.Socket.prototype.connect wrapper (the default agent dials synchronously
+  // inside ClientRequest, so the wrapper throws in place) — so disabling the
+  // 2nd-arg options branch is caught by the stub assertion above, and the block
+  // itself survives the branch's absence.
+  assert.throws(
+    () => http.request('http://127.0.0.1:1/', { hostname: '203.0.113.9' }, () => {}),
     (err) => {
       assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
       return true;
@@ -125,7 +258,7 @@ test('http.request with an options object for a loopback host is permitted over 
   }
 });
 
-test('a [::1] request over real IPv6 to a real server is permitted (returns 200)', async () => {
+test('a [::1] request over real IPv6 to a real server is permitted (returns 200)', async (t) => {
   // Positive-direction loopback assertion for the IPv6 bracket strip:
   // "[::1]" normalises to "::1", which is an allowed host, so a real
   // IPv6 server on loopback must be reachable. Skipped if the host has no
@@ -134,10 +267,20 @@ test('a [::1] request over real IPv6 to a real server is permitted (returns 200)
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok6');
   });
-  await new Promise((resolve, reject) => {
+  const listening = await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '::1', resolve);
+  }).catch((err) => {
+    // No IPv6 loopback on this host: server.listen(0, '::1') rejects with
+    // EADDRNOTAVAIL. Skip rather than fail (the carve-out is
+    // address-family-agnostic).
+    server.removeAllListeners('error');
+    return { skipped: true, reason: err?.code ?? 'EADDRNOTAVAIL' };
   });
+  if (listening?.skipped) {
+    t.skip(`no IPv6 loopback (${listening.reason})`);
+    return;
+  }
   const { port } = server.address();
 
   try {
@@ -184,4 +327,216 @@ test('a self-contradictory options object is blocked in BOTH directions (fail-cl
       return true;
     },
   );
+});
+
+test('a direct Socket.prototype.connect(port, host) for a non-loopback host is blocked (port-form candidate)', async (t) => {
+  // node normalises the net.connect(port, host) / createConnection forms into
+  // an options object, so only the DIRECT Socket.prototype.connect(port, host)
+  // shape relies on the guard's port-form branch (the host is the second
+  // positional argument, args[1]). Without that branch, this call dials
+  // (ECONNREFUSED) instead of blocking. A real ephemeral port is used so the
+  // loopback control actually connects; the non-loopback address is read from
+  // os.networkInterfaces() (not hard-coded). Skipped if the host has no
+  // non-loopback IPv4 (a loopback-only sandbox has no non-loopback address to
+  // dial, so the test cannot run — the same environment-dependency the IPv6
+  // test handles nine lines above).
+  const interfaces = os.networkInterfaces();
+  let nonLoopback = null;
+  for (const name of Object.keys(interfaces)) {
+    for (const entry of interfaces[name] ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        nonLoopback = entry.address;
+        break;
+      }
+    }
+    if (nonLoopback) break;
+  }
+  if (!nonLoopback) {
+    t.skip('no non-loopback IPv4');
+    return;
+  }
+
+  const server = net.createServer((s) => s.end());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    // Control: the matching loopback port-form dials.
+    await new Promise((resolve, reject) => {
+      const s = new net.Socket();
+      s.on('error', reject);
+      s.on('connect', () => { s.destroy(); resolve(); });
+      s.connect(port, '127.0.0.1');
+    });
+
+    // The non-loopback port-form must be blocked (not dialled).
+    await assert.rejects(
+      new Promise((resolve, reject) => {
+        const s = new net.Socket();
+        s.on('error', reject);
+        s.on('connect', () => { s.destroy(); resolve(); });
+        s.connect(port, nonLoopback);
+      }),
+      (err) => {
+        assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('a direct Socket.prototype.connect(port, host, cb) for a non-loopback host is blocked (3-arg port-form candidate)', async () => {
+  // The 3-positional-argument port form: s.connect(port, host, cb). node
+  // normalises this into an options object for the underlying dial, but the
+  // DIRECT Socket.prototype.connect shape relies on the guard's port-form
+  // branch reading the second positional argument (args[1]) as the host; the
+  // third argument is the connect callback.
+  //
+  // The guard throws inside the wrapper BEFORE originalConnect.apply, so the
+  // non-loopback address is never dialled and need not be routable — a
+  // reserved literal (203.0.113.9, TEST-NET-2) satisfies the block assertion
+  // on any host, including a loopback-only sandbox. No skip is needed for the
+  // block direction. The real ephemeral server is still required for the
+  // 127.0.0.1 control (the 3-arg loopback form must actually connect).
+  const server = net.createServer((s) => s.end());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    // Control: the matching loopback 3-arg port-form dials.
+    await new Promise((resolve, reject) => {
+      const s = new net.Socket();
+      s.on('error', reject);
+      s.on('connect', () => { s.destroy(); resolve(); });
+      s.connect(port, '127.0.0.1', () => { /* connect callback */ });
+    });
+
+    // The non-loopback 3-arg port-form must be blocked (not dialled).
+    await assert.rejects(
+      new Promise((resolve, reject) => {
+        const s = new net.Socket();
+        s.on('error', reject);
+        s.on('connect', () => { s.destroy(); resolve(); });
+        s.connect(port, '203.0.113.9', () => { /* connect callback */ });
+      }),
+      (err) => {
+        assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+        return true;
+      },
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('a dns.lookup of a non-loopback host is blocked (dns.lookup predicate, not one literal)', () => {
+  // The guard's fifth wrapped shape: dns.lookup. The wrapper throws
+  // NetworkBlockedError synchronously (BEFORE originalLookup is called), so a
+  // non-loopback hostname never reaches the resolver. We assert the sync throw
+  // (assert.throws, not assert.rejects): the wrapper runs the host check before
+  // invoking the original, so the rejection is a thrown error at the call site.
+  // Two reserved literals (203.0.113.9 TEST-NET-2, 198.51.100.7 TEST-NET-1)
+  // need not be routable — the wrapper blocks before any dial — so no skip is
+  // needed for the block direction. The guard does NOT hard-code 198.51.100.7
+  // (its predicate is "is this loopback", with no per-host allow/block list),
+  // so asserting it is blocked pins the PREDICATE rather than one hard-coded
+  // literal: a wrapper that blacklisted only 203.0.113.9 would let
+  // 198.51.100.7 through (a numeric literal needs no resolver, so it would
+  // resolve instead of throwing) and this test would fail.
+  // This mirrors the fetch-layer predicate test above (nonexistent-host.invalid,
+  // a host the suite never names).
+  assert.throws(
+    () => dns.lookup('203.0.113.9', () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  assert.throws(
+    () => dns.lookup('198.51.100.7', () => {}),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('a dns.lookup of a non-loopback host never reaches the resolver (check-before-resolve ordering)', async () => {
+  // Pins the wrapper's ORDERING, which the sync-throw test above cannot:
+  // a wrapper that calls originalLookup BEFORE the host check would still
+  // throw NetworkBlockedError to the caller (the sync throw is the same), but
+  // the non-loopback hostname would have reached the resolver first — DNS
+  // egress that the caller still sees as a block. The shipped wrapper checks
+  // first, so the resolver callback must NEVER fire. We record the callback
+  // and wait a short beat after the sync throw to prove it never fired (the
+  // guard throws before originalLookup is invoked, so the callback is never
+  // registered and cannot fire). A reserved literal (198.51.100.7, TEST-NET-1)
+  // need not be routable — the block happens before any resolver call.
+  let callbackFired = false;
+  assert.throws(
+    () => dns.lookup('198.51.100.7', () => { callbackFired = true; }),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+  // Give any (incorrectly) registered callback time to fire, then assert it did not.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(callbackFired, false, 'the resolver callback must never fire (check runs before the resolver is invoked)');
+});
+
+test('a dns.lookup of 127.0.0.1 is permitted (real loopback lookup, positive direction)', async () => {
+  // Positive-direction loopback control for the dns.lookup wrapper: a real
+  // loopback lookup must resolve (not throw NetworkBlockedError). If the
+  // wrapper were deleted, this control would still pass (the original lookup
+  // resolves 127.0.0.1) — so the control is what the block test's kill proof
+  // relies on: deleting the wrapper lets the non-loopback block test through
+  // (it resolves instead of throwing), while this control is unaffected.
+  const { address } = await new Promise((resolve, reject) => {
+    dns.lookup('127.0.0.1', (err, addr) => (err ? reject(err) : resolve({ address: addr })));
+  });
+  assert.equal(address, '127.0.0.1');
+});
+
+test('a fetch of a Request object for a non-loopback host is blocked (Request input handled)', async () => {
+  // The fetch wrapper's Request-object branch: `input.url ?? input.href ??
+  // String(input)`. The shipped `new URL(...)` shape is tested above; this pins
+  // the `new Request(...)` shape. A Request exposes .url (not .href), so the
+  // wrapper must read input.url to resolve the host. If the Request branch were
+  // dropped, String(new Request(...)) is "[object Request]" — hostFromUrl
+  // returns null — and the guard would block even loopback Requests (fail-
+  // closed). So the block direction is pinned here, and the loopback control
+  // below is the kill proof: dropping the branch makes the control fail.
+  await assert.rejects(
+    () => globalThis.fetch(new Request('https://www.ozbargain.com.au/deals/feed')),
+    (err) => {
+      assert.ok(err instanceof NetworkBlockedError, `expected NetworkBlockedError, got ${err.name}: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('a fetch of a Request object for a loopback host is permitted over a real server (positive direction)', async () => {
+  // Positive-direction loopback control for the fetch Request branch: a real
+  // Request for 127.0.0.1 must reach a real server. This is the kill proof for
+  // the Request branch — if `input.url ?? input.href ??` were dropped,
+  // String(new Request(...)) is "[object Request]", hostFromUrl returns null,
+  // and the guard would throw NetworkBlockedError here (fail-closed), so this
+  // test would fail while the non-loopback block test still passes.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await globalThis.fetch(new Request(`http://127.0.0.1:${port}/`));
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), 'ok');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
