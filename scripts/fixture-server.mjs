@@ -110,8 +110,10 @@ export function resolveKey(requestUrl) {
  * Create (but do not start) the fixture server.
  *
  * @param {object} [options]
- * @param {Record<string, string[]>} [options.timeline] the per-URL fixture
- *   lists; defaults to `TIMELINE`
+ * @param {Record<string, (string | { body?: string, status?: number, contentType?: string, fixture?: string })[]>} [options.timeline] the per-URL
+ *   fixture lists; each entry is a fixture file name (the corpus behaviour) or
+ *   an inline descriptor so a test can serve arbitrary content over a real
+ *   socket. Defaults to `TIMELINE`.
  * @param {string} [options.host] the bind address; `127.0.0.1` only by default
  * @param {number} [options.port] the port; 0 asks the OS for a free one
  * @param {(line: string) => void} [options.log] a request log sink
@@ -173,15 +175,33 @@ export function createFixtureServer({
 
     const index = Math.min(counters.get(key) ?? 0, list.length - 1);
     counters.set(key, (counters.get(key) ?? 0) + 1);
-    const name = list[index];
-    const body = fixtureBody(name);
+    // A timeline entry is either a fixture file name (the corpus behaviour) or
+    // an inline descriptor `{ body, status?, contentType?, fixture? }` so a test
+    // can serve arbitrary (malformed) content over a real socket without adding
+    // files to the corpus.
+    const item = list[index];
+    let name;
+    let body;
+    let contentType;
+    let status = 200;
+    if (typeof item === 'string') {
+      name = item;
+      body = fixtureBody(name);
+      contentType = contentTypeFor(name);
+    } else {
+      name = item.fixture ?? 'inline';
+      body = item.body ?? '';
+      contentType = item.contentType ?? 'text/html; charset=utf-8';
+      if (item.status !== undefined) status = item.status;
+    }
     const etag = etagFor(body);
     entry.fixture = name;
     entry.index = index;
 
     // A real conditional request: the client echoes the ETag it stored, and a
-    // match is answered 304 with no body and no re-serialisation.
-    if (ifNoneMatch && ifNoneMatch === etag) {
+    // match is answered 304 with no body and no re-serialisation. (Only a
+    // 200-class entry is eligible for a 304; an inline non-200 is served as-is.)
+    if (ifNoneMatch && ifNoneMatch === etag && status === 200) {
       entry.status = 304;
       requests.push(entry);
       log?.(`${entry.at} ${req.url} 304 (${name})`);
@@ -190,12 +210,12 @@ export function createFixtureServer({
       return;
     }
 
-    entry.status = 200;
+    entry.status = status;
     served.set(key, etag);
     requests.push(entry);
-    log?.(`${entry.at} ${req.url} 200 (${name})`);
-    res.writeHead(200, {
-      'Content-Type': contentTypeFor(name),
+    log?.(`${entry.at} ${req.url} ${status} (${name})`);
+    res.writeHead(status, {
+      'Content-Type': contentType,
       'Content-Length': Buffer.byteLength(body, 'utf8'),
       ETag: etag,
       'Cache-Control': 'no-cache',
@@ -204,6 +224,16 @@ export function createFixtureServer({
   }
 
   const server = createServer(handle);
+
+  // Track live connections so close() can destroy them. Node's http.Server.close()
+  // waits for every open connection to end, and the application's fetch (undici)
+  // keeps its keep-alive connection open after the response — so without this,
+  // close() hangs forever and the test process never exits.
+  const liveConnections = new Set();
+  server.on('connection', (socket) => {
+    liveConnections.add(socket);
+    socket.on('close', () => liveConnections.delete(socket));
+  });
 
   return {
     /** The requests served so far (a copy). */
@@ -266,9 +296,11 @@ export function createFixtureServer({
     cycleRequests(cycle) {
       return requests.slice((cycle - 1) * 3, cycle * 3);
     },
-    /** Stop listening. */
+    /** Stop listening. Destroys live connections first (the application's
+     *  keep-alive socket) so the close does not hang. */
     async close() {
       if (!server.listening) return;
+      for (const socket of liveConnections) socket.destroy();
       await new Promise((resolve) => server.close(resolve));
     },
   };

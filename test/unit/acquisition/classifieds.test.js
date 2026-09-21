@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { runClassifiedsPoll } from '../../../lib/acquire/classifieds.js';
 import { createFixtureTransport } from '../../support/fixtureTransport.js';
 import { makeAcquisition } from '../../support/acquisition.js';
@@ -201,6 +202,175 @@ test('M1: with neither a stored cookie nor the env value, no Cookie header is se
     assert.equal(transport.requestLog.length, 1);
     const headers = transport.requestLog[0].options.headers ?? {};
     assert.equal(headers.cookie, undefined);
+  } finally {
+    close();
+  }
+});
+
+// --- Safe-failure: unparseable 200 bodies resolve unknown, never expired ---
+// The malformed bodies are derived (or minimal synthetic) so the corpus in
+// fixtures/http is never edited.
+
+function runCapturing(routes, config = {}) {
+  const transport = createFixtureTransport(routes);
+  const { client, store, clock, close } = makeAcquisition({ transport, config });
+  const logLines = [];
+  return {
+    transport,
+    store,
+    clock,
+    close,
+    run: () => runClassifiedsPoll({ client, store, clock, config, log: (line) => logLines.push(line) }),
+    logLines,
+  };
+}
+
+test('safe-failure: a truncated 200 resolves unknown (never expired), writes one unparseable failures row with the raw body, and logs the URL, class and parser reason', async () => {
+  const full = readFileSync(new globalThis.URL('../../../fixtures/http/classifieds-page.html', import.meta.url), 'utf8');
+  // Cut off the first 4000 chars: the head (with OzB_vars) is kept and the
+  // closing </html> is not — the exact shape of a stream that died mid-body.
+  // 4000 chars is under the store's 8KB failure-body cap, so the whole body
+  // is stored and can be asserted for equality.
+  const truncated = full.slice(0, 4000);
+  const { run, store, logLines, close } = runCapturing({ [URL]: { status: 200, body: truncated } });
+  try {
+    const result = await run();
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.uid, 0);
+    assert.deepEqual(result.listings, []);
+    assert.equal(result.alert, false);
+    assert.equal(result.latched, false);
+    // Exactly one failures row, classed unparseable, carrying the raw body.
+    const failures = store.getFailures();
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].response_class, 'unparseable');
+    assert.equal(failures[0].body, truncated);
+    // The log names the URL, the class and the parser reason.
+    const line = logLines.find((l) => l.includes('unparseable'));
+    assert.ok(line, 'an unparseable log line must be written');
+    assert.ok(line.includes(URL), 'the log must name the URL');
+    assert.ok(line.includes('missing closing </html> terminator'), 'the log must carry the parser reason');
+    // No session state was written or cleared.
+    assert.equal(store.getSetting('classifieds_last_uid'), null);
+    assert.equal(store.getSetting('classifieds_last_confirmed_at'), null);
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: an empty 200 resolves unknown, not expired', async () => {
+  const { run, store, close } = runCapturing({ [URL]: { status: 200, body: '' } });
+  try {
+    const result = await run();
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.uid, 0);
+    assert.equal(result.alert, false);
+    assert.equal(result.latched, false);
+    assert.equal(store.getFailures().length, 1);
+    assert.equal(store.getFailures()[0].response_class, 'unparseable');
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: a whitespace-only 200 resolves unknown, not expired', async () => {
+  const ws = [' ', ' ', '\n', '\t', ' ', ' '].join('');
+  const { run, close } = runCapturing({ [URL]: { status: 200, body: ws } });
+  try {
+    const result = await run();
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.alert, false);
+    assert.equal(result.latched, false);
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: a JSON (non-HTML) 200 resolves unknown, not expired', async () => {
+  const json = JSON.stringify({ error: 'rate limited', retry: 60 });
+  const { run, store, close } = runCapturing({ [URL]: { status: 200, body: json } });
+  try {
+    const result = await run();
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.uid, 0);
+    assert.equal(result.alert, false);
+    assert.equal(result.latched, false);
+    assert.equal(store.getFailures().length, 1);
+    assert.equal(store.getFailures()[0].response_class, 'unparseable');
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: an unparseable 200 does not write or clear classifieds_last_uid / classifieds_last_confirmed_at', async () => {
+  // Seed both settings, then feed a malformed 200: the unparseable branch
+  // must leave both exactly as they were (no write, no clear).
+  const { run, store, close } = runCapturing({ [URL]: { status: 200, body: 'not html at all' } });
+  try {
+    store.setSetting('classifieds_last_uid', '226301');
+    store.setSetting('classifieds_last_confirmed_at', '2026-09-19T07:30:00Z');
+    const result = await run();
+    assert.equal(result.state, 'unknown');
+    assert.equal(store.getSetting('classifieds_last_uid'), '226301');
+    assert.equal(store.getSetting('classifieds_last_confirmed_at'), '2026-09-19T07:30:00Z');
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: a repeated malformed 200 is fetched as 200, not hidden behind a 304 (validators cleared)', async () => {
+  // The 200 carries an ETag (so the client caches a validator), but the body
+  // is unparseable. The first poll must clear the cached validator, so the
+  // second poll goes out without If-None-Match — a real server would then
+  // answer 200 with a full body instead of 304.
+  const { transport, run, store, close } = runCapturing({
+    [URL]: { status: 200, body: 'not html at all', headers: { etag: '"bad-etag"' } },
+  });
+  try {
+    const first = await run();
+    assert.equal(first.state, 'unknown');
+    // The validator was cached by the 200 and then cleared by the
+    // unparseable branch.
+    const state = store.getFeedState(URL);
+    assert.equal(state.etag, null, 'the cached etag must be cleared');
+    const second = await run();
+    assert.equal(second.state, 'unknown', 'the repeated bad body is still unparseable, not resolved from a 304');
+    const secondCall = transport.requestLog[1];
+    assert.equal(secondCall.options.headers['if-none-match'], undefined, 'the second request must not carry If-None-Match');
+    // One failures row per unparseable 200: two polls, two rows.
+    assert.equal(store.getFailures().length, 2);
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: a valid 200 retains its validators (unchanged behavior)', async () => {
+  const { transport, run, store, close } = runCapturing({
+    [URL]: { status: 200, fixture: 'http/classifieds-page.html', headers: { etag: '"valid-etag"' } },
+  });
+  try {
+    const first = await run();
+    assert.equal(first.state, 'valid');
+    assert.equal(first.uid, 226301);
+    const state = store.getFeedState(URL);
+    assert.equal(state.etag, '"valid-etag"', 'a valid 200 must keep its validator');
+    const second = await run();
+    assert.equal(second.state, 'valid');
+    const secondCall = transport.requestLog[1];
+    assert.equal(secondCall.options.headers['if-none-match'], '"valid-etag"', 'the second request must carry If-None-Match');
+  } finally {
+    close();
+  }
+});
+
+test('safe-failure: a genuine uid-0 page still expires (the fail-closed behavior is preserved)', async () => {
+  const { run, close } = runCapturing({ [URL]: { status: 200, fixture: 'http/derived/classifieds-page-anon.html' } });
+  try {
+    const result = await run();
+    assert.equal(result.state, 'expired');
+    assert.equal(result.uid, 0);
+    assert.equal(result.alert, true);
+    assert.equal(result.latched, true);
   } finally {
     close();
   }

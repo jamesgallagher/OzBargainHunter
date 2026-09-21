@@ -20,6 +20,7 @@ import { createHttpTransport } from '../../lib/http/transport.js';
 import { fixedClock } from '../../lib/clock.js';
 import { seededRandom } from '../../lib/random.js';
 import { runDealPoll } from '../../lib/acquire/poll.js';
+import { runClassifiedsPoll } from '../../lib/acquire/classifieds.js';
 import { evaluatePoll } from '../../lib/rules/engine.js';
 import { groupAndCompose } from '../../lib/notify/compose.js';
 import { fanout } from '../../lib/notify/fanout.js';
@@ -118,6 +119,36 @@ export function createCaptureProvider(kind = 'capture') {
 export function registerProvider(store, { kind, provider }) {
   void provider;
   store.upsertProvider(kind, '{}', 1);
+}
+
+/**
+ * Run one classifieds poll cycle end to end: fetch the classifieds URL through
+ * the real transport over a real socket, with the real HTTP client (so the
+ * conditional requests and the validator cache are real) and the real store on
+ * a temporary database. The classifieds URL comes from `config` (the fixture
+ * server's `OZB_CLASSIFIEDS_URL`).
+ *
+ * Each cycle gets its own `fixedClock` pinned at the poll instant, because the
+ * client takes its inter-request pause from the clock.
+ *
+ * @param {object} args
+ * @param {object} args.store
+ * @param {object} args.config the config the classifieds URL comes from
+ * @param {string} args.pollAt the poll instant
+ * @param {(line: string) => void} [args.log]
+ * @returns {Promise<object>} the `runClassifiedsPoll` result
+ */
+export async function runClassifiedsCycle({ store, config, pollAt, log = () => {} }) {
+  const fetchClock = fixedClock(pollAt);
+  const client = createOzbClient({
+    transport: createHttpTransport({ userAgent: 'ozbargain-hunter-integration-test' }),
+    store,
+    clock: fetchClock,
+    random: seededRandom(1),
+    config,
+    log,
+  });
+  return runClassifiedsPoll({ client, store, clock: fetchClock, config, log });
 }
 
 /**
