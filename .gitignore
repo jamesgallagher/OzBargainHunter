@@ -13,3 +13,6 @@ next-env.d.ts
 
 # Logs
 *.log
+
+# Playwright browser builds (downloaded into a repo-local, gitignored path)
+.playwright-browsers/

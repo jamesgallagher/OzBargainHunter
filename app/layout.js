@@ -10,6 +10,15 @@
 
 import { getStore } from '../lib/web/db.js';
 
+// FIX-A (measured-necessary and measured-sufficient, spec §5): force every screen
+// to be server-rendered **per request** instead of prerendered at build time.
+// The screens mint a CSRF token from `OZB_CSRF_SECRET` and read live store
+// state; when they were prerendered at build time the runtime secret was unset
+// (so `_csrf` rendered empty and every write 403'd "csrf") and the store showed
+// build-time state. Forcing dynamic rendering makes `_csrf` mint per request and
+// the screens reflect the store at request time.
+export const dynamic = 'force-dynamic';
+
 /**
  * The layout.
  * @param {{ children: React.ReactNode }} props
