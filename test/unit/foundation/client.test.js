@@ -107,3 +107,53 @@ test('a 304 returns not_modified, zero-length body, and leaves feed_state untouc
     cleanup();
   }
 });
+
+test('forgetValidators clears the cached validators for a URL; the next request goes out without them', async () => {
+  const url = 'https://www.ozbargain.com.au/classified';
+  const { client, transport, store, cleanup } = makeClient({
+    [url]: {
+      status: 200,
+      headers: { etag: '"abc123"', 'last-modified': 'Sat, 19 Sep 2026 06:20:00 GMT' },
+      body: '<html></html>',
+    },
+  });
+
+  try {
+    // A 200 caches the validators.
+    await client.request(url);
+    let state = store.getFeedState(url);
+    assert.equal(state.etag, '"abc123"');
+
+    // forgetValidators drops them (nulls the nullable feed_state row).
+    client.forgetValidators(url);
+    state = store.getFeedState(url);
+    assert.equal(state.etag, null);
+    assert.equal(state.last_modified, null);
+
+    // The next request goes out without If-None-Match / If-Modified-Since.
+    await client.request(url);
+    const secondCall = transport.requestLog[1];
+    assert.equal(secondCall.options.headers['if-none-match'], undefined);
+    assert.equal(secondCall.options.headers['if-modified-since'], undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test('forgetValidators on a URL with no cached state does not throw and leaves no usable validators', async () => {
+  const url = 'https://www.ozbargain.com.au/classified';
+  const { client, store, cleanup } = makeClient({
+    [url]: { status: 200, headers: {}, body: '<html></html>' },
+  });
+
+  try {
+    // No throw, and the resulting state carries no usable validators.
+    client.forgetValidators(url);
+    const state = store.getFeedState(url);
+    // setFeedState(url, null, null) upserts a row, so the row exists but its
+    // validators are null — i.e. nothing to send on the next request.
+    assert.ok(state === null || (state.etag === null && state.last_modified === null));
+  } finally {
+    cleanup();
+  }
+});

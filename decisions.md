@@ -26,6 +26,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D41 — Deal pagination cap.** Pages 0 and 1 only, then stop. No page beyond 1 is ever requested, including to recover a gap. Effective observation window: about 30 hours. **DECIDED**
 - **D6 — Beta container.** Not built. The tool serves one person, so there is no separate beta instance. **DECIDED**
 - **D16 — Registry retention policy** for per-commit tags. **OPEN (O16)**
+- **D64 — Merge gate.** Branch protection, rulesets and merge queues are unavailable here — a private repository on a personal Free plan; both GitHub endpoints (`/rulesets`, `/branches/main/protection`) return 403 "Upgrade to GitHub Pro or make this repository public to enable this feature." **Descoped to convention by choice, not by oversight: the publish condition is the gate, not the merge.** CI refuses to publish `:latest` unless lint, tests, the build and the smoke test all pass, so a failing commit cannot reach the host. Resolves the fallback choice rationale.md §8.4 left open under D1. **DECIDED**
 
 ## Exposure and access control
 
@@ -102,7 +103,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Counts
 
-**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D41, D42, D60, D61
+**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D41, D42, D60, D61, D64
 **SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34, D62, D63
 **OPEN:** D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D38, D39, D40
 **SUPERSEDED:** D11 (by D22), D36 (by D60), D37 (by D50)

@@ -122,6 +122,41 @@ export function registerProvider(store, { kind, provider }) {
 }
 
 /**
+ * Run one classifieds fetch end to end: fetch the classifieds URL through the
+ * real transport over a real socket, with the real HTTP client (so the
+ * conditional requests and the validator cache are real) and the real store on
+ * a temporary database. The classifieds URL comes from `config` (the fixture
+ * server's `OZB_CLASSIFIEDS_URL`).
+ *
+ * This is the fetch-only helper: it returns the `runClassifiedsPoll` result
+ * without the evaluate/fan-out stage, so a test can assert on the poll state
+ * and the store without a rule or capture provider. The full-cycle helper is
+ * `runClassifiedsCycle` below.
+ *
+ * Each cycle gets its own `fixedClock` pinned at the poll instant, because the
+ * client takes its inter-request pause from the clock.
+ *
+ * @param {object} args
+ * @param {object} args.store
+ * @param {object} args.config the config the classifieds URL comes from
+ * @param {string} args.pollAt the poll instant
+ * @param {(line: string) => void} [args.log]
+ * @returns {Promise<object>} the `runClassifiedsPoll` result
+ */
+export async function runClassifiedsFetch({ store, config, pollAt, log = () => {} }) {
+  const fetchClock = fixedClock(pollAt);
+  const client = createOzbClient({
+    transport: createHttpTransport({ userAgent: 'ozbargain-hunter-integration-test' }),
+    store,
+    clock: fetchClock,
+    random: seededRandom(1),
+    config,
+    log,
+  });
+  return runClassifiedsPoll({ client, store, clock: fetchClock, config, log });
+}
+
+/**
  * Run one deal poll cycle end to end: fetch the three URLs through the real
  * transport, upsert and observe, evaluate the rules, compose and fan out.
  *

@@ -207,7 +207,7 @@ describe('integration: full mock shakeout', () => {
     surfaces: 'classifieds',
   };
 
-  it('classifieds malformed 200: the parse failure reaches the caller, delivers nothing, and writes no session state', async () => {
+  it('classifieds malformed 200: the unparseable page resolves unknown (never expired), writes one unparseable failure row, and delivers nothing', async () => {
     const listingStart = classifiedsCorpus.indexOf('<div class="node node-classified');
     const truncated = classifiedsCorpus.slice(
       0,
@@ -220,24 +220,31 @@ describe('integration: full mock shakeout', () => {
       async ({ fx, temp, capture }) => {
         insertRules(temp.store, [classifiedsRule]);
 
-        await assert.rejects(
-          runClassifiedsCycle({
-            store: temp.store,
-            config: fx.appConfig(),
-            pollAt: POLL_1_AT,
-            capture,
-            coldStart: false,
-          }),
-          /classifieds: listing without a numeric node id/,
-        );
+        // The accepted fix (33b3255) resolves an unparseable 200 as `unknown`,
+        // never as a session expiry: the page is fetched, the parse failure is
+        // recorded as one `unparseable` failure row, and nothing is delivered.
+        const cycle = await runClassifiedsCycle({
+          store: temp.store,
+          config: fx.appConfig(),
+          pollAt: POLL_1_AT,
+          capture,
+          coldStart: false,
+        });
 
+        assert.equal(cycle.poll.state, 'unknown');
+        assert.equal(cycle.poll.uid, 0);
+        assert.deepEqual(cycle.poll.listings, []);
+        assert.equal(cycle.poll.alert, false);
+        assert.equal(cycle.poll.latched, false);
+        assert.equal(cycle.evaluation, null, 'no feed is evaluated from an unparseable page');
+        assert.equal(cycle.notifications.length, 0);
         assert.equal(capture.notifications.length, 0, 'nothing reached the mock sink');
         assert.equal(temp.store.countDeals(), 0);
         assert.equal(temp.store.countAllObservations(), 0);
         assert.deepEqual(
-          temp.store.getFailures(),
-          [],
-          'a body that is not a classifieds page writes no session trace and no failure row',
+          temp.store.getFailures().map((failure) => failure.response_class),
+          ['unparseable'],
+          'an unparseable 200 writes exactly one unparseable failure row',
         );
         assert.equal(temp.store.getSetting('classifieds_last_uid'), null, 'no uid is persisted');
         assert.deepEqual(
@@ -249,7 +256,7 @@ describe('integration: full mock shakeout', () => {
     );
   });
 
-  it('classifieds empty 200 body: the documented uid-0 rule holds, nothing is evaluated, nothing is delivered', async () => {
+  it('classifieds empty 200 body: the unparseable page resolves unknown (never expired), nothing is evaluated, nothing is delivered', async () => {
     await withHarness(
       { [CLASSIFIEDS_PATH]: [{ body: '', contentType: 'text/html; charset=utf-8' }] },
       async ({ fx, temp, capture }) => {
@@ -263,11 +270,14 @@ describe('integration: full mock shakeout', () => {
           coldStart: false,
         });
 
-        // The authoritative session check is the page's own uid (design 3.6), so a
-        // body carrying no `OzB_vars` yields uid 0, and uid 0 is `expired`. That is
-        // the documented fail-closed rule and it delivers nothing: with no listings
-        // there is no feed to evaluate, so no notification can reach a provider.
-        assert.equal(cycle.poll.state, 'expired');
+        // The accepted fix (33b3255) resolves an unparseable 200 as `unknown`,
+        // never as a session expiry: the body carries no `OzB_vars`, the parser
+        // reports a parse failure, and the failure is recorded as one
+        // `unparseable` failure row — no `session_expired` trace, no latch, no
+        // alert. With no listings there is no feed to evaluate, so no
+        // notification can reach a provider.
+        assert.equal(cycle.poll.state, 'unknown');
+        assert.equal(cycle.poll.uid, 0);
         assert.equal(cycle.poll.listings.length, 0);
         assert.equal(cycle.evaluation, null, 'no feed is evaluated from a page with no listings');
         assert.equal(cycle.notifications.length, 0);
@@ -276,20 +286,19 @@ describe('integration: full mock shakeout', () => {
         assert.equal(temp.store.countAllObservations(), 0);
         assert.deepEqual(fx.requests.map((request) => request.key), [CLASSIFIEDS_PATH]);
 
-        // The hazard this case exposes is pinned here rather than left implicit:
-        // the empty body reaches the parser, the parser reports uid 0, and the
-        // uid-0 rule writes a durable `session_expired` trace and latches the
-        // session off. No delivery results from it, but the trace is a false
-        // session expiry for a body that is not a page at all. Changing that is a
-        // `lib/acquire/classifieds.js` change, which this card's approved file set
-        // excludes; it is recorded on the card as a finding for routing.
-        assert.equal(cycle.poll.alert, true);
-        assert.equal(cycle.poll.latched, true);
+        // The behaviour this case pins is the post-fix contract: an empty body
+        // is not a session signal. The parser cannot extract a uid, so the
+        // state is `unknown`, the failure is recorded as `unparseable`, and no
+        // session state is written — the body is not a page at all, and the
+        // store must not record a false session expiry for it.
+        assert.equal(cycle.poll.alert, false);
+        assert.equal(cycle.poll.latched, false);
         assert.deepEqual(
           temp.store.getFailures().map((failure) => failure.response_class),
-          ['session_expired'],
+          ['unparseable'],
+          'an empty 200 writes exactly one unparseable failure row, never a session expiry',
         );
-        assert.equal(temp.store.getSetting('classifieds_last_uid'), '0');
+        assert.equal(temp.store.getSetting('classifieds_last_uid'), null, 'no uid is persisted');
 
         // Positive control: the same rule and the same sink DO deliver when the page
         // is the real capture, so the zero above is a property of the response and
