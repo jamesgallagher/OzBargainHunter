@@ -14,6 +14,7 @@
     "test:rules": "node --test --import ./test/support/no-network.js test/unit/rules/*.test.js",
     "test:web": "node --test --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/web/*.test.js",
     "test:integration": "node --test --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/*.test.js",
+    "test:guards": "node --test --import ./test/support/no-network.js test/guards/*.test.js",
     "smoke:image": "node scripts/smoke-image.mjs"
   },
   "dependencies": {

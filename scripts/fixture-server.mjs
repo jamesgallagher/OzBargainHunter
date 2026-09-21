@@ -110,8 +110,10 @@ export function resolveKey(requestUrl) {
  * Create (but do not start) the fixture server.
  *
  * @param {object} [options]
- * @param {Record<string, string[]>} [options.timeline] the per-URL fixture
- *   lists; defaults to `TIMELINE`
+ * @param {Record<string, (string|object)[]>} [options.timeline] the per-URL
+ *   response lists. A string names a fixture and implies status 200. An object
+ *   may set `fixture`, `body`, `status`, `contentType`, and `headers`; defaults
+ *   to `TIMELINE`.
  * @param {string} [options.host] the bind address; `127.0.0.1` only by default
  * @param {number} [options.port] the port; 0 asks the OS for a free one
  * @param {(line: string) => void} [options.log] a request log sink
@@ -173,11 +175,27 @@ export function createFixtureServer({
 
     const index = Math.min(counters.get(key) ?? 0, list.length - 1);
     counters.set(key, (counters.get(key) ?? 0) + 1);
-    const name = list[index];
-    const body = fixtureBody(name);
-    const etag = etagFor(body);
+    const responseSpec = typeof list[index] === 'string'
+      ? { fixture: list[index] }
+      : list[index];
+    const name = responseSpec.fixture ?? null;
+    const status = responseSpec.status ?? 200;
+    const body = responseSpec.body ?? (name ? fixtureBody(name) : '');
+    const etag = responseSpec.headers?.ETag ?? responseSpec.headers?.etag ?? etagFor(body);
     entry.fixture = name;
     entry.index = index;
+
+    if (status !== 200) {
+      entry.status = status;
+      requests.push(entry);
+      log?.(`${entry.at} ${req.url} ${status} (${name ?? 'inline body'})`);
+      res.writeHead(status, {
+        'Content-Type': responseSpec.contentType ?? (name ? contentTypeFor(name) : 'text/plain; charset=utf-8'),
+        ...responseSpec.headers,
+      });
+      res.end(status === 304 ? '' : body);
+      return;
+    }
 
     // A real conditional request: the client echoes the ETag it stored, and a
     // match is answered 304 with no body and no re-serialisation.
@@ -195,10 +213,11 @@ export function createFixtureServer({
     requests.push(entry);
     log?.(`${entry.at} ${req.url} 200 (${name})`);
     res.writeHead(200, {
-      'Content-Type': contentTypeFor(name),
+      'Content-Type': responseSpec.contentType ?? (name ? contentTypeFor(name) : 'text/plain; charset=utf-8'),
       'Content-Length': Buffer.byteLength(body, 'utf8'),
       ETag: etag,
       'Cache-Control': 'no-cache',
+      ...responseSpec.headers,
     });
     res.end(body);
   }

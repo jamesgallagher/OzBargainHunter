@@ -20,6 +20,7 @@ import { createHttpTransport } from '../../lib/http/transport.js';
 import { fixedClock } from '../../lib/clock.js';
 import { seededRandom } from '../../lib/random.js';
 import { runDealPoll } from '../../lib/acquire/poll.js';
+import { runClassifiedsPoll } from '../../lib/acquire/classifieds.js';
 import { evaluatePoll } from '../../lib/rules/engine.js';
 import { groupAndCompose } from '../../lib/notify/compose.js';
 import { fanout } from '../../lib/notify/fanout.js';
@@ -187,6 +188,63 @@ export async function runPollCycle({ store, config, pollAt, capture, coldStart, 
     }
   }
   return { poll, evaluation, notifications, coldStart };
+}
+
+/**
+ * Run one classifieds cycle through the real HTTP client, parser, rules
+ * engine, compositor, and fan-out path.
+ * @param {object} args
+ * @param {object} args.store
+ * @param {object} args.config
+ * @param {string} args.pollAt
+ * @param {{ kind: string, provider: object, notifications: object[] }} args.capture
+ * @param {boolean} [args.coldStart]
+ * @param {(line: string) => void} [args.log]
+ * @returns {Promise<{ poll: object, evaluation: object|null, notifications: object[], coldStart: boolean }>}
+ */
+export async function runClassifiedsCycle({
+  store,
+  config,
+  pollAt,
+  capture,
+  coldStart,
+  log = () => {},
+}) {
+  const isColdStart = coldStart ?? (store.countDeals() === 0 && store.countAllObservations() === 0);
+  const clock = fixedClock(pollAt);
+  const client = createOzbClient({
+    transport: createHttpTransport({ userAgent: 'ozbargain-hunter-integration-test' }),
+    store,
+    clock,
+    random: seededRandom(1),
+    config,
+    log,
+  });
+  const poll = await runClassifiedsPoll({ client, store, clock, config, log });
+  let evaluation = null;
+  const notifications = [];
+  if (poll.listings.length > 0) {
+    evaluation = evaluatePoll({
+      feeds: [{ surface: 'classifieds', records: poll.listings }],
+      store,
+      clock,
+      pollAt,
+      coldStart: isColdStart,
+      gapMs: null,
+      log,
+    });
+    if (evaluation.alerts.length > 0) {
+      const composed = groupAndCompose(evaluation.alerts);
+      await fanout({
+        notifications: composed,
+        providers: [capture.provider],
+        store,
+        clock,
+      });
+      notifications.push(...composed);
+    }
+  }
+  return { poll, evaluation, notifications, coldStart: isColdStart };
 }
 
 /**
