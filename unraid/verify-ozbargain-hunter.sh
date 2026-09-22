@@ -5,8 +5,19 @@
 #   ssh -i <key> root@<host> 'sh -s' < unraid/verify-ozbargain-hunter.sh
 #
 # Prints one PASS/FAIL/NOTE line per criterion and exits 0 iff every required
-# criterion passes. It never reads or prints a secret value: masked template
-# fields are tested only for emptiness.
+# criterion passes. It is strictly read-only: it never reads, prints, or
+# compares a secret value, and it never inspects masked (credential) fields.
+# The deployed template is a configured dockerMan host template (dockerMan
+# re-serializes it and the Sponsor sets masked values in the GUI), so this
+# verifier checks SEMANTIC deployment fields only — never a byte or hash
+# identity with the repository template.
+#
+# Health is a required post-credential invariant. The verifier reads only
+# .State.Health.Status, waits at most 360 seconds in fixed short intervals,
+# and fails unless it reaches exactly "healthy". It never reads the health
+# command, the health log, the container environment, a request header, or a
+# secret. Docker's own "healthy" result is the credential-free proof that the
+# image healthcheck received a successful /healthz response.
 set -u
 
 C=0
@@ -17,43 +28,59 @@ note(){ printf 'NOTE: %s\n' "$1"; }
 
 T=/boot/config/plugins/dockerMan/templates-user/my-ozbargain-hunter.xml
 N=ozbargain-hunter
-# SHA256 of the repository template at the same revision as this verifier.
-EXPECTED_TEMPLATE_SHA256=5cf4bc5e88c68f945210b1129a945bddbbe4d86525b064ba3929df3fb602da52
+HEALTH_WAIT_SECONDS=360
+HEALTH_INTERVAL_SECONDS=5
 
-# 1. The deployed user template is the exact repository template.
+# Semantic Config check: the deployed template is re-serialized by dockerMan,
+# so attribute order and spacing are not a stable invariant. Each Config is
+# one line; match the Target attribute and the element content on the same
+# line with a tolerant pattern. The content is anchored to the closing
+# </Config> tag (the content is the text immediately before it), so a literal
+# ">" inside a Description attribute cannot create a false boundary. This
+# never selects or counts masked (credential) fields.
+cfg() { grep -Eq "Target=\"$1\".*>$2</Config>" "$T"; }
+
+# 1. The deployed user template exists, is well-formed XML, and its stem and
+#    Name bind to the canonical container name.
 if [ -f "$T" ]; then
   ok "template present at $T"
-  ACTUAL_TEMPLATE_SHA256=$(sha256sum "$T" | awk '{print $1}')
-  if [ "$ACTUAL_TEMPLATE_SHA256" = "$EXPECTED_TEMPLATE_SHA256" ]; then
-    ok "deployed template is byte-identical to repository template ($EXPECTED_TEMPLATE_SHA256)"
+  STEM=$(basename "$T" .xml)
+  [ "$STEM" = "$N" ] && ok "template file stem binds to $N" || bad "template file stem binds to $N (got ${STEM:-none})"
+
+  # Well-formedness: prefer xmllint, fall back to python3/python. If neither
+  # is available the check is reported as a NOTE (not a failure) — the
+  # semantic field checks below are the load-bearing contract.
+  if command -v xmllint >/dev/null 2>&1; then
+    if xmllint --noout "$T" >/dev/null 2>&1; then
+      ok "deployed template is well-formed XML"
+    else
+      bad "deployed template is well-formed XML"
+    fi
+  elif command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+    PY=$(command -v python3 || command -v python)
+    if "$PY" -c 'import sys,xml.dom.minidom;xml.dom.minidom.parse(sys.argv[1])' "$T" >/dev/null 2>&1; then
+      ok "deployed template is well-formed XML"
+    else
+      bad "deployed template is well-formed XML"
+    fi
   else
-    bad "deployed template is byte-identical to repository template (expected $EXPECTED_TEMPLATE_SHA256, got $ACTUAL_TEMPLATE_SHA256)"
+    note "no XML parser available on host; well-formedness not checked"
   fi
+
+  grep -q '<Name>ozbargain-hunter</Name>' "$T" && ok "template Name is ozbargain-hunter" || bad "template Name is ozbargain-hunter"
+  grep -q '<Repository>ghcr.io/jamesgallagher/ozbargainhunter:latest</Repository>' "$T" && ok "template Repository is ghcr.io/jamesgallagher/ozbargainhunter:latest" || bad "template Repository is ghcr.io/jamesgallagher/ozbargainhunter:latest"
+  grep -q '<Network>bridge</Network>' "$T" && ok "template network is bridge" || bad "template network is bridge"
+  cfg '8000' '7171' && ok "template maps host 7171 to container 8000" || bad "template maps host 7171 to container 8000"
+  cfg '/data' '/mnt/user/appdata/ozbargain-hunter/' && ok "template mounts /mnt/user/appdata/ozbargain-hunter/ at /data" || bad "template mounts /mnt/user/appdata/ozbargain-hunter/ at /data"
+  grep -q '<ExtraParams>--restart unless-stopped</ExtraParams>' "$T" && ok "template ExtraParams carries --restart unless-stopped" || bad "template ExtraParams carries --restart unless-stopped"
+  cfg 'TZ' 'Australia/Sydney' && ok "template sets TZ=Australia/Sydney" || bad "template sets TZ=Australia/Sydney"
+  cfg 'CF_ACCESS_TEAM_DOMAIN' 'tailormade.cloudflareaccess.com' && ok "template CF_ACCESS_TEAM_DOMAIN is tailormade.cloudflareaccess.com" || bad "template CF_ACCESS_TEAM_DOMAIN is tailormade.cloudflareaccess.com"
+  grep -q '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>' "$T" && ok "template uses the canonical public icon URL" || bad "template uses the canonical public icon URL"
 else
   bad "template present at $T"
 fi
 
-# 2. Template contract and empty masked fields.
-if [ -f "$T" ]; then
-  grep -q '<Name>ozbargain-hunter</Name>' "$T" && ok "template Name is ozbargain-hunter" || bad "template Name is ozbargain-hunter"
-  grep -q '<Repository>ghcr.io/jamesgallagher/ozbargainhunter:latest</Repository>' "$T" && ok "template Repository is ghcr.io/jamesgallagher/ozbargainhunter:latest" || bad "template Repository is ghcr.io/jamesgallagher/ozbargainhunter:latest"
-  grep -q '<Network>bridge</Network>' "$T" && ok "template network is bridge" || bad "template network is bridge"
-  grep -q 'Target="8000"[^>]*>7171<' "$T" && ok "template maps host 7171 to container 8000" || bad "template maps host 7171 to container 8000"
-  grep -q 'Target="/data"[^>]*>/mnt/user/appdata/ozbargain-hunter/<' "$T" && ok "template mounts /mnt/user/appdata/ozbargain-hunter/ at /data" || bad "template mounts /mnt/user/appdata/ozbargain-hunter/ at /data"
-  grep -q '<ExtraParams>--restart unless-stopped</ExtraParams>' "$T" && ok "template ExtraParams carries --restart unless-stopped" || bad "template ExtraParams carries --restart unless-stopped"
-  grep -q 'Target="TZ"[^>]*>Australia/Sydney<' "$T" && ok "template sets TZ=Australia/Sydney" || bad "template sets TZ=Australia/Sydney"
-  grep -q 'Target="CF_ACCESS_TEAM_DOMAIN"[^>]*>tailormade.cloudflareaccess.com<' "$T" && ok "template CF_ACCESS_TEAM_DOMAIN is tailormade.cloudflareaccess.com" || bad "template CF_ACCESS_TEAM_DOMAIN is tailormade.cloudflareaccess.com"
-  grep -q '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>' "$T" && ok "template uses the canonical public icon URL" || bad "template uses the canonical public icon URL"
-
-  NONEMPTY=$(sed -n 's/.*<Config[^>]*Mask="true"[^>]*>\(.*\)<\/Config>.*/\1/p' "$T" | grep -c '.' || true)
-  if [ "$NONEMPTY" -eq 0 ]; then
-    ok "no value in any Mask=true Config element"
-  else
-    bad "no value in any Mask=true Config element (found $NONEMPTY non-empty)"
-  fi
-fi
-
-# 3. Persistent host directory contract.
+# 2. Persistent host directory contract.
 if [ -d /mnt/user/appdata/ozbargain-hunter ]; then
   OW=$(stat -c '%u:%g' /mnt/user/appdata/ozbargain-hunter)
   [ "$OW" = "1000:1000" ] && ok "appdata /mnt/user/appdata/ozbargain-hunter owned 1000:1000" || bad "appdata /mnt/user/appdata/ozbargain-hunter owned 1000:1000 (got $OW)"
@@ -61,7 +88,7 @@ else
   bad "appdata /mnt/user/appdata/ozbargain-hunter exists"
 fi
 
-# 4. Running dockerMan-managed runtime contract.
+# 3. Running dockerMan-managed runtime contract.
 if docker inspect "$N" >/dev/null 2>&1; then
   ok "container $N exists"
 
@@ -86,10 +113,26 @@ if docker inspect "$N" >/dev/null 2>&1; then
   ST=$(docker inspect -f '{{.State.Status}}' "$N")
   if [ "$ST" = "running" ]; then
     ok "container is running"
-    HS=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$N")
-    note "container health=$HS (pre-credential health may be unhealthy until the Sponsor sets masked secrets in the GUI)"
   else
     bad "container is running (status=${ST:-unknown})"
+  fi
+
+  # 4. Health is a required post-credential invariant. Read ONLY the health
+  #    status; wait at most HEALTH_WAIT_SECONDS in fixed short intervals and
+  #    fail unless it reaches exactly "healthy". A permanently "starting" or
+  #    "unhealthy" container fails the feature. No permanent pre-credential exception.
+  ELAPSED=0
+  HS=""
+  while [ "$ELAPSED" -lt "$HEALTH_WAIT_SECONDS" ]; do
+    HS=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$N")
+    [ "$HS" = "healthy" ] && break
+    sleep "$HEALTH_INTERVAL_SECONDS"
+    ELAPSED=$((ELAPSED + HEALTH_INTERVAL_SECONDS))
+  done
+  if [ "$HS" = "healthy" ]; then
+    ok "container health=healthy"
+  else
+    bad "container health=healthy (status=${HS:-unknown} after ${HEALTH_WAIT_SECONDS}s)"
   fi
 
   if (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | awk '{print $4}' | grep -Eq '(^|[:.])7171$'; then
@@ -104,6 +147,7 @@ if docker inspect "$N" >/dev/null 2>&1; then
     *) bad "application responds on http://127.0.0.1:7171/ (HTTP ${HTTP_CODE:-none})" ;;
   esac
 
+  # Supervisor startup evidence: one log line containing BOTH markers.
   if docker logs "$N" 2>&1 | grep -F 'supervisor: started the Next.js server' | grep -Fq 'and the worker'; then
     ok "container log records supervisor starting the Next.js server and worker"
   else
