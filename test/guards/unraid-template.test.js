@@ -299,6 +299,31 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     const resDup = runUpdater(dup);
     assert.notEqual(resDup.code, 0, 'duplicate old elements must fail');
     assert.equal(readFileSync(dup, 'utf8'), dupBefore, 'duplicate-old fixture must be unchanged');
+
+    // Duplicate old elements on one line (ambiguous). This proves occurrence
+    // counting does not accidentally count matching lines instead.
+    const dupSameLine = join(dir, 'dup-same-line.xml');
+    const dupSameLineBefore =
+      '<?xml version="1.0"?>\n<Container version="2">' +
+      '<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>' +
+      '<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>' +
+      '</Container>\n';
+    writeFileSync(dupSameLine, dupSameLineBefore);
+    const resDupSameLine = runUpdater(dupSameLine);
+    assert.notEqual(resDupSameLine.code, 0, 'same-line duplicate old elements must fail');
+    assert.equal(readFileSync(dupSameLine, 'utf8'), dupSameLineBefore, 'same-line duplicate-old fixture must be unchanged');
+
+    // An Icon nested below a top-level child is not the authorised top-level
+    // target, even when its complete bytes otherwise match the old element.
+    const nestedOnly = join(dir, 'nested-only.xml');
+    const nestedOnlyBefore =
+      '<?xml version="1.0"?>\n<Container version="2">\n  <Nested>' +
+      '<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>' +
+      '</Nested>\n</Container>\n';
+    writeFileSync(nestedOnly, nestedOnlyBefore);
+    const resNestedOnly = runUpdater(nestedOnly);
+    assert.notEqual(resNestedOnly.code, 0, 'nested-only Icon must fail');
+    assert.equal(readFileSync(nestedOnly, 'utf8'), nestedOnlyBefore, 'nested-only fixture must be unchanged');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
