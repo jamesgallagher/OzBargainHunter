@@ -17,7 +17,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Delivery and packaging
 
-- **D1 — Repository visibility.** PRIVATE, accessed with a PAT. **DECIDED**
+- **D1 — Repository visibility.** PUBLIC, accessed with the two `gh` identities (the writer `jamesgallagher` and the read-only `TheJamesAIBot`); the platform default branch is `main`. **DECIDED**
 - **D2 — Production tag.** `:latest`, moved by every successful build on `main`. Exactly two tags exist: `:latest` and the immutable `:main-<sha>`. No beta, stable or semantic-version tags. **DECIDED**
 - **D7 — Branch structure.** One long-lived branch, `main`. No beta or integration branch. **DECIDED**
 - **D42 — Update path.** The assistant monitors CI and applies the update on the host via Unraid's own `update_container` script, verifying by image digest. A host-side scheduled check is the backstop. **DECIDED**
@@ -26,7 +26,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D41 — Deal pagination cap.** Pages 0 and 1 only, then stop. No page beyond 1 is ever requested, including to recover a gap. Effective observation window: about 30 hours. **DECIDED**
 - **D6 — Beta container.** Not built. The tool serves one person, so there is no separate beta instance. **DECIDED**
 - **D16 — Registry retention policy** for per-commit tags. **OPEN (O16)**
-- **D64 — Merge gate.** Branch protection, rulesets and merge queues are unavailable here — a private repository on a personal Free plan; both GitHub endpoints (`/rulesets`, `/branches/main/protection`) return 403 "Upgrade to GitHub Pro or make this repository public to enable this feature." **Descoped to convention by choice, not by oversight: the publish condition is the gate, not the merge.** CI refuses to publish `:latest` unless lint, tests, the build and the smoke test all pass, so a failing commit cannot reach the host. Resolves the fallback choice rationale.md §8.4 left open under D1. **DECIDED**
+- **D64 — Merge gate.** `main` is protected with classic branch protection requiring the four CI checks `lint`, `test`, `build`, `smoke` with `strict: true` and `enforce_admins: true`. No required approval is set: GitHub counts only write-access approvals, the approver is deliberately read-only, so the independent approval is enforced by the pipeline, not the platform. The `publish` condition remains the deployment gate: CI refuses to publish `ghcr.io` images unless the four jobs pass. Supersedes the earlier descoping to convention (the repository is now public and the protection endpoints are available). **DECIDED**
 
 ## Exposure and access control
 
