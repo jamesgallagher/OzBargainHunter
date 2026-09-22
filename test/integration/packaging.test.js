@@ -32,7 +32,7 @@ const read = (relative) => readFileSync(join(REPO_ROOT, relative), 'utf8');
 const DOCKERFILE = read('Dockerfile');
 const ENTRYPOINT = read('docker-entrypoint.sh');
 const CI = read('.github/workflows/ci.yml');
-const UNRAID = read('unraid/my-OzBargainHunter.xml');
+const UNRAID = read('unraid/my-ozbargain-hunter.xml');
 const SMOKE = read('scripts/smoke-image.mjs');
 
 /** Every top-level job name in the workflow, in file order. */
@@ -312,17 +312,23 @@ describe('integration: the packaging artefacts', () => {
     });
   });
 
-  describe('unraid/my-OzBargainHunter.xml', () => {
+  describe('unraid/my-ozbargain-hunter.xml', () => {
     it('names the container and points at the moving tag', () => {
-      assert.match(UNRAID, /<Name>OzBargainHunter<\/Name>/);
+      assert.match(UNRAID, /<Name>ozbargain-hunter<\/Name>/);
       assert.match(UNRAID, /<Repository>ghcr\.io\/jamesgallagher\/ozbargainhunter:latest<\/Repository>/);
       // A pinned tag would never produce an update from Unraid's point of view.
       assert.ok(!/main-[0-9a-f]{7}<\/Repository>/.test(UNRAID));
     });
 
-    it('maps the appdata directory to /data and publishes port 8000', () => {
+    it('maps the appdata directory to /data and publishes 7171 to 8000', () => {
       assert.match(UNRAID, /Target="\/data"[^>]*>\/mnt\/user\/appdata\/ozbargain-hunter\/</);
       assert.match(UNRAID, /Target="8000"[^>]*Type="Port"/);
+      assert.match(UNRAID, /Target="8000"[^>]*>7171</);
+    });
+
+    it('restarts unless-stopped and pins the time zone explicitly', () => {
+      assert.match(UNRAID, /<ExtraParams>--restart unless-stopped<\/ExtraParams>/);
+      assert.match(UNRAID, /Target="TZ"[^>]*>Australia\/Sydney</);
     });
 
     it('carries every 9.1 environment variable the application reads', () => {
@@ -343,13 +349,14 @@ describe('integration: the packaging artefacts', () => {
       }
     });
 
-    it('leaves the icon as a documented placeholder rather than an invented URL', () => {
+    it('uses the canonical public icon URL', () => {
       const icon = /<Icon>(.*)<\/Icon>/.exec(UNRAID);
       assert.ok(icon, 'an Icon element is present');
-      assert.match(icon[1], /icon-256\.png/, 'it names the asset that exists in assets/logo/');
-      assert.match(icon[1], /\.invalid\//, 'the host is a placeholder that cannot resolve');
-      assert.match(UNRAID, /O15/, 'the open item that decides the hosting is named');
-      assert.match(UNRAID, /raw\.githubusercontent\.com/);
+      assert.equal(
+        icon[1],
+        'https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png',
+      );
+      assert.doesNotMatch(UNRAID, /ozb-icon-hosting\.invalid/);
     });
   });
 

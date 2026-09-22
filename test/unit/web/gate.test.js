@@ -8,6 +8,7 @@ import {
   CSRF_HEADER,
 } from '../../../lib/web/gate.js';
 import { generateCsrfToken } from '../../../lib/csrf.js';
+import { normalizeAppSecret } from '../../../lib/env-secret.js';
 import { startJwksServer } from '../../support/jwks.js';
 
 const AUD = 'test-audience';
@@ -262,5 +263,41 @@ describe('gate: independent access + CSRF checks (11.3.6)', () => {
     );
     assert.equal(res.ok, false);
     assert.equal(res.response.status, 401, 'the header alone must not authenticate');
+  });
+
+  // D7: the configured CSRF secret is normalized (surrounding whitespace
+  // stripped) at the gate boundary. A padded configured value must behave
+  // exactly like the unpadded value (a token minted under the normalized
+  // secret verifies); a whitespace-only value normalizes to empty and fails
+  // closed. The generated token is never trimmed.
+  test('requireCsrf: a padded configured secret behaves like the unpadded value (D7)', async () => {
+    const token = await generateCsrfToken(CSRF_SECRET);
+    const ok = await requireCsrf(
+      new Request('https://app.example.com/x', { headers: { [CSRF_HEADER]: token } }),
+      envFor(jwks.url, { OZB_CSRF_SECRET: `  ${CSRF_SECRET}\t\n` }),
+    );
+    assert.equal(ok, true, 'a token minted under the normalized secret verifies under a padded configured secret');
+  });
+
+  test('requireCsrf: a whitespace-only configured secret fails closed (D7)', async () => {
+    const token = await generateCsrfToken(CSRF_SECRET);
+    const ok = await requireCsrf(
+      new Request('https://app.example.com/x', { headers: { [CSRF_HEADER]: token } }),
+      envFor(jwks.url, { OZB_CSRF_SECRET: '   \t\n' }),
+    );
+    assert.equal(ok, false, 'a whitespace-only configured secret normalizes to empty and rejects');
+  });
+
+  test('requireCsrf: a padded secret normalized before minting verifies under the same padded value (D7 end-to-end)', async () => {
+    // The minting pages read a padded configured secret, normalize it, and
+    // mint with the normalized value. The gate reads the same padded secret
+    // and normalizes it to verify. The two must agree end-to-end.
+    const padded = `  end-to-end-secret\t\n`;
+    const token = await generateCsrfToken(normalizeAppSecret(padded));
+    const ok = await requireCsrf(
+      new Request('https://app.example.com/x', { headers: { [CSRF_HEADER]: token } }),
+      envFor(jwks.url, { OZB_CSRF_SECRET: padded }),
+    );
+    assert.equal(ok, true, 'the minting-side and verification-side normalization agree on the same padded secret');
   });
 });

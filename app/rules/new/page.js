@@ -9,6 +9,7 @@
  */
 
 import { generateCsrfToken } from '../../../lib/csrf.js';
+import { normalizeAppSecret } from '../../../lib/env-secret.js';
 
 /**
  * The rule-create page.
@@ -16,7 +17,8 @@ import { generateCsrfToken } from '../../../lib/csrf.js';
  */
 export default async function NewRulePage() {
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
-  const secret = process.env.OZB_CSRF_SECRET ?? '';
+  // D7: normalize the configured secret; the presented token is never trimmed.
+  const secret = normalizeAppSecret(process.env.OZB_CSRF_SECRET);
   const token = secret ? await generateCsrfToken(secret) : '';
 
   return (

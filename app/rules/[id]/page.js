@@ -16,6 +16,8 @@
  *
  * @param {{ params: { id: string } }} props
  */
+import { normalizeAppSecret } from '../../../lib/env-secret.js';
+
 export default async function EditRulePage({ params }) {
   const { getStore } = await import('../../../lib/web/db.js');
   const { generateCsrfToken } = await import('../../../lib/csrf.js');
@@ -28,8 +30,9 @@ export default async function EditRulePage({ params }) {
   const isThreshold = rule.type === 'threshold';
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3) for
-  // the three forms (save, mute, delete).
-  const secret = process.env.OZB_CSRF_SECRET ?? '';
+  // the three forms (save, mute, delete). D7: normalize the configured secret;
+  // the presented token is never trimmed.
+  const secret = normalizeAppSecret(process.env.OZB_CSRF_SECRET);
   const token = secret ? await generateCsrfToken(secret) : '';
 
   return (

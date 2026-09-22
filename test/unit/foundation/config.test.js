@@ -60,3 +60,49 @@ test('loadConfig reads explicit env values', () => {
 test('loadConfig rejects an invalid boolean', () => {
   assert.throws(() => loadConfig({ OZB_ICON_ROUTE_PUBLIC: 'maybe' }), /must be "true" or "false"/);
 });
+
+// D7: the two application-generated secrets are normalized (surrounding
+// whitespace stripped) at the config boundary. Synthetic test-only values only;
+// the failure messages never interpolate the secret content.
+test('loadConfig trims surrounding whitespace from the two app-generated secrets (D7)', () => {
+  const config = loadConfig({
+    OZB_HEALTHCHECK_SECRET: '  healthcheck-secret\t\n',
+    OZB_CSRF_SECRET: '\n csrf-secret \t',
+  });
+  assert.equal(config.OZB_HEALTHCHECK_SECRET, 'healthcheck-secret');
+  assert.equal(config.OZB_CSRF_SECRET, 'csrf-secret');
+});
+
+test('loadConfig leaves the two app-generated secrets unchanged when unpadded (D7)', () => {
+  const config = loadConfig({
+    OZB_HEALTHCHECK_SECRET: 'healthcheck-secret',
+    OZB_CSRF_SECRET: 'csrf-secret',
+  });
+  assert.equal(config.OZB_HEALTHCHECK_SECRET, 'healthcheck-secret');
+  assert.equal(config.OZB_CSRF_SECRET, 'csrf-secret');
+});
+
+test('loadConfig normalizes whitespace-only secrets to empty (fail closed, D7)', () => {
+  const config = loadConfig({
+    OZB_HEALTHCHECK_SECRET: '   \t\n',
+    OZB_CSRF_SECRET: '',
+  });
+  assert.equal(config.OZB_HEALTHCHECK_SECRET, '');
+  assert.equal(config.OZB_CSRF_SECRET, '');
+});
+
+test('loadConfig does not trim the provider-owned opaque credentials (D7)', () => {
+  // OZB_ACCOUNT_COOKIE may contain cookie syntax; EMAIL_SMTP_PASS is a
+  // provider-defined password; MATRIX_ACCESS_TOKEN / NTfy_TOKEN are opaque.
+  // Their contract is byte-exact: the application must not strip their bytes.
+  const config = loadConfig({
+    OZB_ACCOUNT_COOKIE: '  leading-space-cookie',
+    EMAIL_SMTP_PASS: '  provider-password',
+    MATRIX_ACCESS_TOKEN: '  opaque-token',
+    NTfy_TOKEN: '  ntfy-token',
+  });
+  assert.equal(config.OZB_ACCOUNT_COOKIE, '  leading-space-cookie');
+  assert.equal(config.EMAIL_SMTP_PASS, '  provider-password');
+  assert.equal(config.MATRIX_ACCESS_TOKEN, '  opaque-token');
+  assert.equal(config.NTfy_TOKEN, '  ntfy-token');
+});

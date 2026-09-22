@@ -414,6 +414,39 @@ describe('route: /healthz reports acquisition health (3.7)', () => {
     assert.equal(res.status, 401, 'wrong secret -> 401');
   });
 
+  // D7: the configured healthcheck secret is normalized (surrounding
+  // whitespace stripped) at the route boundary. A padded configured value must
+  // behave exactly like the unpadded value; a whitespace-only value normalizes
+  // to empty and fails closed.
+  test('a padded configured secret behaves like the unpadded value (D7)', async () => {
+    process.env.OZB_HEALTHCHECK_SECRET = '  healthcheck-secret-for-tests\t\n';
+    try {
+      const { GET } = await import('../../../app/healthz/route.js');
+      const res = await GET(
+        new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'healthcheck-secret-for-tests' } }),
+      );
+      // 401 would mean the normalized secret did not match the presented
+      // header; anything else (503 here, since no poll state is set yet)
+      // proves the secret gate passed.
+      assert.notEqual(res.status, 401, 'a padded configured secret matches the unpadded header (secret gate passes)');
+    } finally {
+      process.env.OZB_HEALTHCHECK_SECRET = 'healthcheck-secret-for-tests';
+    }
+  });
+
+  test('a whitespace-only configured secret fails closed (D7)', async () => {
+    process.env.OZB_HEALTHCHECK_SECRET = '   \t\n';
+    try {
+      const { GET } = await import('../../../app/healthz/route.js');
+      const res = await GET(
+        new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'healthcheck-secret-for-tests' } }),
+      );
+      assert.equal(res.status, 401, 'a whitespace-only configured secret normalizes to empty and rejects');
+    } finally {
+      process.env.OZB_HEALTHCHECK_SECRET = 'healthcheck-secret-for-tests';
+    }
+  });
+
   test('a successful poll within three intervals is healthy (200)', async () => {
     const { GET } = await import('../../../app/healthz/route.js');
     // Two intervals ago: within the three-interval threshold.
