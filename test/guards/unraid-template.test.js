@@ -311,6 +311,8 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     writeFileSync(dupSameLine, dupSameLineBefore);
     const resDupSameLine = runUpdater(dupSameLine);
     assert.notEqual(resDupSameLine.code, 0, 'same-line duplicate old elements must fail');
+    assert.equal(resDupSameLine.stdout, 'FAIL: ambiguous icon state; no change made\n', 'same-line duplicate output is fixed and safe');
+    assert.equal(resDupSameLine.stderr, '', 'same-line duplicate failure must not leak parser output');
     assert.equal(readFileSync(dupSameLine, 'utf8'), dupSameLineBefore, 'same-line duplicate-old fixture must be unchanged');
 
     // An Icon nested below a top-level child is not the authorised top-level
@@ -323,6 +325,8 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     writeFileSync(nestedOnly, nestedOnlyBefore);
     const resNestedOnly = runUpdater(nestedOnly);
     assert.notEqual(resNestedOnly.code, 0, 'nested-only Icon must fail');
+    assert.equal(resNestedOnly.stdout, 'FAIL: ambiguous icon state; no change made\n', 'nested-only output is fixed and safe');
+    assert.equal(resNestedOnly.stderr, '', 'nested-only failure must not leak parser output');
     assert.equal(readFileSync(nestedOnly, 'utf8'), nestedOnlyBefore, 'nested-only fixture must be unchanged');
   } finally {
     rmSync(dir, { recursive: true, force: true });
