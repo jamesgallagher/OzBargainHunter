@@ -14,3 +14,8 @@ out
 unraid
 docs
 coverage
+
+# Local environment files and pipeline worktrees must not enter the build context.
+.env
+.env.*
+.worktrees/
