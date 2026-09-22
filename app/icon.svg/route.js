@@ -8,18 +8,16 @@
  * A state-reading route (no CSRF).
  */
 
-const ICON_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">' +
-  '<rect width="256" height="256" rx="48" fill="#1a1a2e"/>' +
-  '<text x="128" y="168" font-family="sans-serif" font-size="120" ' +
-  'fill="#4ecca3" text-anchor="middle">O</text></svg>';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * The icon handler.
  * @returns {Response}
  */
 export function GET() {
-  return new Response(ICON_SVG, {
+  const icon = readFileSync(join(process.cwd(), 'public', 'logo.svg'), 'utf8');
+  return new Response(icon, {
     headers: { 'Content-Type': 'image/svg+xml' },
   });
 }

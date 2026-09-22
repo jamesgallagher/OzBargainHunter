@@ -1,13 +1,25 @@
 /**
- * Screen 2 — Rules list (design 7.1). Enabled, muted or snoozed state; match
- * counts over 7 and 30 days; last fired; cooldown; optional pinned slug; and
- * which surfaces the rule applies to (fixed to deals-only for threshold rules,
- * not editable).
+ * Screen 2 — Rules list (spec §6.2). Each rule shows a human label, explicit
+ * type, state badge, surfaces, 7-day and 30-day counts, last fired and
+ * cooldown. Desktop/tablet render a semantic table; on phone each row
+ * transforms into a labelled card (D5). Headers are static — no
+ * sortable-looking styling because no sorting is implemented.
  *
- * Server component.
+ * Server component: it reads the live store state.
  */
 
 import { getStore } from '../../lib/web/db.js';
+import {
+  PageHeader,
+  DataTable,
+  Badge,
+  EmptyState,
+  stateTone,
+  ruleLabel,
+} from '../components/ui.js';
+import LocalTime from '../components/local-time.js';
+
+export const metadata = { title: 'Rules' };
 
 /**
  * The rules list page.
@@ -16,53 +28,56 @@ import { getStore } from '../../lib/web/db.js';
 export default function RulesPage() {
   const store = getStore();
   const rules = store.getRules();
-  const now = new Date().toISOString();
   const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
+  const columns = ['Rule', 'Type', 'State', 'Surfaces', '7d', '30d', 'Last fired', 'Cooldown'];
+
+  const rows = rules.map((rule) => {
+    const label = ruleLabel(rule);
+    const rows30 = store.getLedgerWithTitles(rule.id, since30);
+    const rows7 = store.getLedgerWithTitles(rule.id, since7);
+    const lastFired = store.getRuleLastFire(rule.id);
+    return [
+      <a key="rule" href={`/rules/${rule.id}`}>
+        {label}
+        {rule.pinned_slug ? ` (#${rule.pinned_slug})` : ''}
+      </a>,
+      <span key="type">{rule.type}</span>,
+      <Badge key="state" tone={stateTone(rule.state)}>
+        {rule.state}
+      </Badge>,
+      <span key="surfaces">{rule.surfaces}</span>,
+      <span key="c7" className="tabular">{rows7.length}</span>,
+      <span key="c30" className="tabular">{rows30.length}</span>,
+      lastFired ? (
+        <LocalTime key="lf" iso={lastFired} />
+      ) : (
+        <span key="lf">—</span>
+      ),
+      <span key="cd" className="tabular">{rule.cooldown_seconds}s</span>,
+    ];
+  });
+
   return (
     <section>
-      <h2>Rules</h2>
-      <a href="/rules/new">New rule</a>
-      <table className="rules">
-        <thead>
-          <tr>
-            <th>Rule</th>
-            <th>State</th>
-            <th>7d</th>
-            <th>30d</th>
-            <th>Last fired</th>
-            <th>Cooldown</th>
-            <th>Surfaces</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rules.map((rule) => {
-            const label =
-              rule.type === 'match'
-                ? rule.parameters?.term ?? 'match'
-                : `${rule.parameters?.threshold ?? ''}+ upvotes`;
-            const rows30 = store.getLedgerWithTitles(rule.id, since30);
-            const rows7 = store.getLedgerWithTitles(rule.id, since7);
-            const lastFired = store.getRuleLastFire(rule.id);
-            return (
-              <tr key={rule.id}>
-                <td>
-                  <a href={`/rules/${rule.id}`}>{label}</a>
-                  {rule.pinned_slug ? ` (#${rule.pinned_slug})` : ''}
-                </td>
-                <td>{rule.state}</td>
-                <td>{rows7.length}</td>
-                <td>{rows30.length}</td>
-                <td>{lastFired ?? '—'}</td>
-                <td>{rule.cooldown_seconds}s</td>
-                <td>{rule.surfaces}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <span className="sr-only">{now}</span>
+      <PageHeader
+        title="Rules"
+        description="Match and threshold rules that trigger alerts."
+        action={<a className="btn btn-primary" href="/rules/new">New rule</a>}
+      />
+
+      {rules.length > 0 ? (
+        <div className="card">
+          <DataTable columns={columns} rows={rows} />
+        </div>
+      ) : (
+        <EmptyState
+          title="No rules yet."
+          body="A rule watches for a term or an upvote threshold and alerts you when it matches. Create your first rule to start watching."
+          action={<a className="btn btn-primary" href="/rules/new">Create first rule</a>}
+        />
+      )}
     </section>
   );
 }

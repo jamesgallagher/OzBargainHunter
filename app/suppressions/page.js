@@ -6,6 +6,11 @@
  */
 
 import { getStore } from '../../lib/web/db.js';
+import LocalTime from '../components/local-time.js';
+import { Badge, DataTable, EmptyState, PageHeader, Subnav } from '../components/ui.js';
+
+export const metadata = { title: 'Suppressions' };
+const activityLinks = [{ label: 'Alerts', href: '/alerts' }, { label: 'Suppressions', href: '/suppressions' }];
 
 /**
  * The suppressions page.
@@ -17,30 +22,17 @@ export default function SuppressionsPage() {
 
   return (
     <section>
-      <h2>Suppressions</h2>
-      <p>
+      <PageHeader title="Suppressions" description="Matches withheld by cooldown and deduplication rules." />
+      <Subnav label="Activity" links={activityLinks} activeHref="/suppressions" />
+      <p className="summary-count">
         {rows.length} suppressed {rows.length === 1 ? 'alert' : 'alerts'}
       </p>
-      <table className="suppressions">
-        <thead>
-          <tr>
-            <th>Poll at</th>
-            <th>Node</th>
-            <th>Rule</th>
-            <th>Kind</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id}>
-              <td>{r.poll_at}</td>
-              <td>{r.node_id}</td>
-              <td>#{r.rule_id}</td>
-              <td>{r.kind}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {rows.length ? <DataTable className="suppressions" columns={['Poll at', 'Node', 'Rule', 'Reason']} rows={rows.map((r) => [
+        <LocalTime key="time" iso={r.poll_at} />,
+        <span key="node">Node {r.node_id}</span>,
+        <span key="rule">Rule #{r.rule_id}</span>,
+        <Badge key="kind" tone="neutral">{r.kind}</Badge>,
+      ])} /> : <EmptyState title="No suppressions." body="No alerts have been withheld." />}
     </section>
   );
 }
