@@ -13,3 +13,22 @@ next-env.d.ts
 
 # Logs
 *.log
+
+# Local environment files — never commit
+.env
+.env.*
+!.env.example
+
+# Local key material and credential files — never commit
+*.pem
+*.key
+*.p12
+*.pfx
+*.p8
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Pipeline worktrees live inside the repo root and are never committed
+.worktrees/
