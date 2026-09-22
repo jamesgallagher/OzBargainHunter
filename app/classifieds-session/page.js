@@ -14,6 +14,7 @@
 
 import { getStore } from '../../lib/web/db.js';
 import { generateCsrfToken } from '../../lib/csrf.js';
+import { normalizeAppSecret } from '../../lib/env-secret.js';
 
 const LAST_UID_KEY = 'classifieds_last_uid';
 const LAST_CONFIRMED_KEY = 'classifieds_last_confirmed_at';
@@ -29,7 +30,9 @@ export default async function ClassifiedsSessionPage() {
   const lastConfirmed = store.getSetting(LAST_CONFIRMED_KEY);
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
-  const secret = process.env.OZB_CSRF_SECRET ?? '';
+  // D7: normalize the configured secret (surrounding whitespace is never
+  // meaningful); the presented token is never trimmed.
+  const secret = normalizeAppSecret(process.env.OZB_CSRF_SECRET);
   const token = secret ? await generateCsrfToken(secret) : '';
 
   return (

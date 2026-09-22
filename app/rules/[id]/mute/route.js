@@ -1,6 +1,7 @@
 import { requireAuthenticated, verifyAccess } from '../../../../lib/web/gate.js';
 import { generateCsrfToken } from '../../../../lib/csrf.js';
 import { getStore } from '../../../../lib/web/db.js';
+import { normalizeAppSecret } from '../../../../lib/env-secret.js';
 
 /**
  * Screen 4 — Mute / unsubscribe (design 6.4). The notification's unsubscribe
@@ -80,8 +81,9 @@ export async function GET(request, { params }) {
   applyMute(store, id, nowIso);
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3) for
-  // the undo / snooze forms on the confirmation.
-  const secret = process.env.OZB_CSRF_SECRET ?? '';
+  // the undo / snooze forms on the confirmation. D7: normalize the configured
+  // secret; the presented token is never trimmed.
+  const secret = normalizeAppSecret(process.env.OZB_CSRF_SECRET);
   const token = secret ? await generateCsrfToken(secret) : '';
 
   const label = rule.parameters?.term ?? `${rule.parameters?.threshold ?? ''}+ upvotes`;
