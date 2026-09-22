@@ -72,6 +72,13 @@ jobs:
           cache: npm
       - name: install from the lockfile
         run: npm ci
+      # The browser journey (test/integration/ui-shakeout.test.js) drives
+      # headless Chromium via Playwright. Install it into the repo-local,
+      # gitignored path before `npm test`; `test/support/browser.js` forces the
+      # same path at launch so the run resolves the browser here. `--with-deps`
+      # pulls the system libraries the browser links against on ubuntu-latest.
+      - name: install the Playwright Chromium build
+        run: PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" npx playwright install --with-deps chromium
       # `npm test` is the card's gate: every unit test, every guard and the
       # integration suite in one command, with the network guard imported so the
       # suite cannot reach anything but loopback.
