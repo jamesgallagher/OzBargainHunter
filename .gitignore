@@ -32,3 +32,6 @@ id_ed25519.*
 
 # Pipeline worktrees live inside the repo root and are never committed
 .worktrees/
+
+# Playwright browser builds (downloaded into a repo-local, gitignored path)
+.playwright-browsers/
