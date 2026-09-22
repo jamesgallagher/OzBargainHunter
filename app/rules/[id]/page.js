@@ -66,7 +66,8 @@ export default async function EditRulePage({ params, searchParams }) {
         </Notice>
       ) : null}
       {confirmDelete ? (
-        <Notice tone="warning" title={`Confirm deletion of ${label}`}>
+        <Notice tone="warning">
+          <h2 className="notice-title">Confirm deletion of {label}</h2>
           <p>This permanently deletes the rule and cannot be undone.</p>
           <form method="POST" action={`/rules/${rule.id}/delete`} className="rule-delete-confirmation">
             <input type="hidden" name="_csrf" value={token} />
