@@ -11,6 +11,7 @@
 import { generateCsrfToken } from '../../../lib/csrf.js';
 import RuleForm from '../../components/rule-form.js';
 import { PageHeader } from '../../components/ui.js';
+import Link from 'next/link.js';
 
 export const metadata = { title: 'New rule' };
 
@@ -25,7 +26,7 @@ export default async function NewRulePage() {
 
   return (
     <section>
-      <div className="breadcrumb"><a href="/rules">Rules</a><span className="sep">/</span><span>New rule</span></div>
+      <div className="breadcrumb"><Link href="/rules">Rules</Link><span className="sep">/</span><span>New rule</span></div>
       <PageHeader title="New rule" description="Create a term match or upvote threshold alert." />
       <div className="card form-card"><RuleForm mode="create" action="/rules/new/create" csrf={token} /></div>
     </section>

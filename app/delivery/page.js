@@ -60,7 +60,7 @@ export default async function DeliveryPage() {
       ))}</div> : <EmptyState title="No providers configured." body="Provider rows are created by the application configuration." />}
       <div className="card form-card settings-card">
       <h2>Test delivery</h2>
-      <AsyncForm action="/delivery/test-send" formClassName="test-send" pendingLabel="Sending test…" successMessage="Test notification sent.">
+      <AsyncForm action="/delivery/test-send" formClassName="test-send" pendingLabel="Sending test…" successMessage="Test notification sent via {kind}.">
         <input type="hidden" name="_csrf" value={token} />
         <div className="field"><label htmlFor="test-provider">
           Provider

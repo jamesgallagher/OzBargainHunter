@@ -64,6 +64,7 @@ export default function AsyncForm({
     if (pending) return; // duplicate submission guard (spec §7.3.4)
 
     const form = event.currentTarget;
+    const submitter = event.nativeEvent.submitter;
     const formData = new FormData(form);
     const config = formData.get('config');
     if (typeof config === 'string' && config.trim()) {
@@ -77,6 +78,11 @@ export default function AsyncForm({
     }
 
     setPending(true);
+    // Disable only the control that submitted this form. The rest of the
+    // fields stay available and retain their values while the request runs.
+    if (submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement) {
+      submitter.disabled = true;
+    }
     setError('');
     setStatus(pendingLabel);
 
@@ -91,11 +97,11 @@ export default function AsyncForm({
 
       if (response.ok) {
         if (resetOnSuccess) form.reset();
-        setStatus(successMessage ?? 'Done.');
-        if (successMessage) {
-          // Announce the success message, then navigate/refresh.
-          await new Promise((resolve) => setTimeout(resolve, 400));
-        }
+        const resolvedMessage = (successMessage ?? 'Done.').replace(
+          '{kind}',
+          String(formData.get('kind') ?? ''),
+        );
+        setStatus(resolvedMessage);
         if (onSuccess === 'push' && destination) {
           router.push(destination);
         } else {
@@ -113,6 +119,9 @@ export default function AsyncForm({
       setError(`${errorPrefix} ${err?.message ?? String(err)}`.slice(0, 400));
       setStatus('');
     } finally {
+      if (submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement) {
+        submitter.disabled = false;
+      }
       setPending(false);
     }
   }
@@ -130,7 +139,7 @@ export default function AsyncForm({
       {children}
       <div className="async-form-status" aria-live="polite" id={liveRegionId}>
         {pending ? <span className="async-form-pending">{pendingLabel}</span> : null}
-        {successMessage && status === successMessage ? (
+        {!pending && status ? (
           <span className="async-form-success" role="status">
             {status}
           </span>

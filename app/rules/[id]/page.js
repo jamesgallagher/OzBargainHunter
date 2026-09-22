@@ -2,6 +2,7 @@ import RuleForm from '../../components/rule-form.js';
 import AsyncForm from '../../components/async-form.js';
 import ConfirmDialog from '../../components/confirm-dialog.js';
 import { EmptyState, Notice, PageHeader, ruleLabel } from '../../components/ui.js';
+import Link from 'next/link.js';
 
 export const metadata = { title: 'Edit rule' };
 
@@ -33,7 +34,7 @@ export default async function EditRulePage({ params, searchParams }) {
     return (
       <section>
         <PageHeader title="Rule not found" description="This rule may have been deleted." />
-        <EmptyState title="Rule not found" body="Return to the rules list to choose another rule." action={<a className="btn" href="/rules">Back to Rules</a>} />
+        <EmptyState title="Rule not found" body="Return to the rules list to choose another rule." action={<Link className="btn" href="/rules">Back to Rules</Link>} />
       </section>
     );
   }
@@ -47,7 +48,7 @@ export default async function EditRulePage({ params, searchParams }) {
 
   return (
     <section>
-      <div className="breadcrumb"><a href="/rules">Rules</a><span className="sep">/</span><span>Edit {label}</span></div>
+      <div className="breadcrumb"><Link href="/rules">Rules</Link><span className="sep">/</span><span>Edit {label}</span></div>
       <PageHeader title={`Edit rule ${rule.id}`} description={label} />
       {notice === 'muted' ? (
         <Notice tone="warning" title="Rule muted">

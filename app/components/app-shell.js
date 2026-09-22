@@ -10,6 +10,10 @@
  * reads the store and passes only presentation values in.
  */
 
+/* The authenticated static asset must be requested directly rather than
+ * through Next's image optimizer, which would create a second asset boundary. */
+/* eslint-disable @next/next/no-img-element */
+
 import AppNav from './app-nav.js';
 import ThemeControl from './theme-control.js';
 

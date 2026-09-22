@@ -18,6 +18,7 @@ import {
   ruleLabel,
 } from '../components/ui.js';
 import LocalTime from '../components/local-time.js';
+import Link from 'next/link.js';
 
 export const metadata = { title: 'Rules' };
 
@@ -39,10 +40,10 @@ export default function RulesPage() {
     const rows7 = store.getLedgerWithTitles(rule.id, since7);
     const lastFired = store.getRuleLastFire(rule.id);
     return [
-      <a key="rule" href={`/rules/${rule.id}`}>
+      <Link key="rule" href={`/rules/${rule.id}`}>
         {label}
         {rule.pinned_slug ? ` (#${rule.pinned_slug})` : ''}
-      </a>,
+      </Link>,
       <span key="type">{rule.type}</span>,
       <Badge key="state" tone={stateTone(rule.state)}>
         {rule.state}
@@ -64,7 +65,7 @@ export default function RulesPage() {
       <PageHeader
         title="Rules"
         description="Match and threshold rules that trigger alerts."
-        action={<a className="btn btn-primary" href="/rules/new">New rule</a>}
+        action={<Link className="btn btn-primary" href="/rules/new">New rule</Link>}
       />
 
       {rules.length > 0 ? (
@@ -75,7 +76,7 @@ export default function RulesPage() {
         <EmptyState
           title="No rules yet."
           body="A rule watches for a term or an upvote threshold and alerts you when it matches. Create your first rule to start watching."
-          action={<a className="btn btn-primary" href="/rules/new">Create first rule</a>}
+          action={<Link className="btn btn-primary" href="/rules/new">Create first rule</Link>}
         />
       )}
     </section>
