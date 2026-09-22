@@ -106,7 +106,7 @@ const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.jsx', '.ts', '.tsx']);
 
 // The guard's contract — non-empty and applied by `assertServerTreeClean`.
 const DENIED_FAMILIES = ['lib/acquire/', 'lib/http/', 'lib/parse/', 'lib/rules/', 'lib/scheduler.js', 'worker/'];
-const ALLOWED_FAMILIES = ['lib/clock.js', 'lib/config.js', 'lib/csrf.js', 'lib/notify/', 'lib/random.js', 'lib/store/', 'lib/time.js', 'lib/web/'];
+const ALLOWED_FAMILIES = ['lib/clock.js', 'lib/config.js', 'lib/csrf.js', 'lib/env-secret.js', 'lib/notify/', 'lib/random.js', 'lib/store/', 'lib/time.js', 'lib/web/'];
 const FORBIDDEN_TOKENS = ['setInterval'];
 const DENIED_BARE_IMPORTS = new Set([
   'child_process',

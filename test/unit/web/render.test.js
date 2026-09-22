@@ -133,7 +133,7 @@ describe('render: one render test per screen (7.1)', () => {
   test('the status screen counts the fixture deals (M-m8)', () => {
     const html = renderToStaticMarkup(StatusPage());
     const dealsFixture = JSON.parse(readFileSync(join(FIXTURES, 'deals-page0.json'), 'utf8'));
-    assert.match(html, new RegExp(`<dd>${dealsFixture.records.length}</dd>`), 'the fixture deal count is shown');
+    assert.match(html, new RegExp(`<span class="stat-value">${dealsFixture.records.length}</span>`), 'the fixture deal count is shown');
   });
 
   test('screen 2 (rules list) renders both rules with their state', () => {
@@ -174,8 +174,8 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /cooldown/, 'the suppression kind');
   });
 
-  test('screen 7 (thresholds) renders the threshold rule and the freebie checkbox', () => {
-    const html = renderToStaticMarkup(ThresholdsPage());
+  test('screen 7 (thresholds) renders the threshold rule and the freebie checkbox', async () => {
+    const html = renderToStaticMarkup(await ThresholdsPage());
     assert.match(html, /Thresholds/, 'the screen heading');
     assert.match(html, /5\+ upvotes/, 'the threshold rule label');
     assert.match(html, /Always notify on freebie/, 'the freebie checkbox');
@@ -195,11 +195,25 @@ describe('render: one render test per screen (7.1)', () => {
   test('screen 9 (classifieds session) renders validity, last-confirmed and the cookie form', async () => {
     const html = renderToStaticMarkup(await ClassifiedsSessionPage());
     assert.match(html, /Classifieds session/, 'the screen heading');
-    assert.match(html, /yes/, 'the session is valid');
+    assert.match(html, /Valid/, 'the session is valid');
     assert.match(html, /226301/, 'the uid is bound');
     assert.match(html, /Last confirmed working/, 'the last-confirmed label');
     assert.match(html, /2026-09-19T06:00:00Z/, 'the last-confirmed instant');
     assert.match(html, /\/classifieds-session\/set/, 'the cookie form posts to its own segment');
+  });
+
+  test('screen 9 distinguishes valid, expired and not-yet-confirmed session states', async () => {
+    store.setSetting('classifieds_last_uid', '0');
+    const expired = renderToStaticMarkup(await ClassifiedsSessionPage());
+    assert.match(expired, /class="badge" data-tone="danger">Expired</, 'uid 0 is explicitly expired');
+    assert.doesNotMatch(expired, />Not yet confirmed</, 'uid 0 is not an unknown session');
+
+    store.deleteSetting('classifieds_last_uid');
+    const unknown = renderToStaticMarkup(await ClassifiedsSessionPage());
+    assert.match(unknown, /class="badge" data-tone="neutral">Not yet confirmed</, 'an absent uid has no confirmed state');
+    assert.doesNotMatch(unknown, />Expired</, 'an absent uid is not known to be expired');
+
+    store.setSetting('classifieds_last_uid', '226301');
   });
 });
 

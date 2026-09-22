@@ -6,6 +6,11 @@
  */
 
 import { getStore } from '../../lib/web/db.js';
+import LocalTime from '../components/local-time.js';
+import { DataTable, EmptyState, PageHeader, Subnav } from '../components/ui.js';
+
+export const metadata = { title: 'Alerts' };
+const activityLinks = [{ label: 'Alerts', href: '/alerts' }, { label: 'Suppressions', href: '/suppressions' }];
 
 /**
  * The alert history page.
@@ -33,27 +38,15 @@ export default function AlertsPage() {
 
   return (
     <section>
-      <h2>Alert history</h2>
-      <table className="alerts">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Rule</th>
-            <th>Deal / listing</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id}>
-              <td>{r.firedAt}</td>
-              <td>#{r.ruleId}</td>
-              <td>
-                <a href={r.url}>{r.title}</a>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <PageHeader title="Alert history" description="Notifications sent for matched deals and listings." />
+      <Subnav label="Activity" links={activityLinks} activeHref="/alerts" />
+      {rows.length ? (
+        <DataTable className="alerts" columns={['When', 'Rule', 'Deal / listing']} rows={rows.map((r) => [
+          <LocalTime key="time" iso={r.firedAt} />,
+          <span key="rule">Rule #{r.ruleId}</span>,
+          <a key="deal" href={r.url} target="_blank" rel="noreferrer">{r.title} <span aria-hidden="true">↗</span></a>,
+        ])} />
+      ) : <EmptyState title="No alerts yet." body="Alerts will appear here after a rule fires." />}
     </section>
   );
 }

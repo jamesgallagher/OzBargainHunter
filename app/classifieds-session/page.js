@@ -14,6 +14,13 @@
 
 import { getStore } from '../../lib/web/db.js';
 import { generateCsrfToken } from '../../lib/csrf.js';
+import AsyncForm from '../components/async-form.js';
+import SecretField from '../components/secret-field.js';
+import LocalTime from '../components/local-time.js';
+import { Badge, PageHeader, Subnav } from '../components/ui.js';
+
+export const metadata = { title: 'Classifieds' };
+const settingsLinks = [{ label: 'Thresholds', href: '/thresholds' }, { label: 'Delivery', href: '/delivery' }, { label: 'Classifieds', href: '/classifieds-session' }];
 
 const LAST_UID_KEY = 'classifieds_last_uid';
 const LAST_CONFIRMED_KEY = 'classifieds_last_confirmed_at';
@@ -25,7 +32,11 @@ const LAST_CONFIRMED_KEY = 'classifieds_last_confirmed_at';
 export default async function ClassifiedsSessionPage() {
   const store = getStore();
   const uid = store.getSetting(LAST_UID_KEY);
-  const valid = uid !== null && uid !== '0';
+  const sessionStatus = uid === null
+    ? { label: 'Not yet confirmed', tone: 'neutral' }
+    : uid === '0'
+      ? { label: 'Expired', tone: 'danger' }
+      : { label: 'Valid', tone: 'success' };
   const lastConfirmed = store.getSetting(LAST_CONFIRMED_KEY);
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
@@ -34,23 +45,26 @@ export default async function ClassifiedsSessionPage() {
 
   return (
     <section>
-      <h2>Classifieds session</h2>
-      <dl className="classifieds-session">
-        <dt>Valid</dt>
-        <dd>{valid ? 'yes' : 'no'}</dd>
+      <PageHeader title="Classifieds session" description="Account session health for classifieds acquisition." />
+      <Subnav label="Settings" links={settingsLinks} activeHref="/classifieds-session" />
+      <dl className="classifieds-session card status-details">
+        <dt>Status</dt>
+        <dd><Badge tone={sessionStatus.tone}>{sessionStatus.label}</Badge></dd>
         <dt>UID</dt>
         <dd>{uid ?? '—'}</dd>
         <dt>Last confirmed working</dt>
-        <dd>{lastConfirmed ?? '—'}</dd>
+        <dd>{lastConfirmed ? <LocalTime iso={lastConfirmed} /> : '—'}</dd>
       </dl>
-      <form method="POST" action="/classifieds-session/set">
+      <div className="card form-card settings-card">
+      <AsyncForm action="/classifieds-session/set" resetOnSuccess successMessage="Session cookie updated; validity is confirmed on the next classifieds poll.">
         <input type="hidden" name="_csrf" value={token} />
-        <label>
-          Session cookie
-          <input type="text" name="cookie" placeholder="ozbargain session cookie" />
-        </label>
-        <button type="submit">Set session</button>
-      </form>
+        <div className="field"><label htmlFor="session-cookie">Session cookie</label>
+          <SecretField id="session-cookie" name="cookie" placeholder="OzBargain session cookie" />
+          <span className="help">The cookie is stored server-side and is never displayed again.</span>
+        </div>
+        <button className="btn btn-primary" type="submit">Set session</button>
+      </AsyncForm>
+      </div>
     </section>
   );
 }

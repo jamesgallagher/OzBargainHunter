@@ -193,6 +193,35 @@ describe('middleware: Cloudflare Access verification', () => {
     });
   });
 
+  // D7: the configured healthcheck secret is normalized (surrounding
+  // whitespace stripped) at the middleware boundary. A padded configured value
+  // must behave exactly like the unpadded value; a whitespace-only value
+  // normalizes to empty and fails closed. The presented header is never
+  // trimmed, so a padded header is rejected.
+  test('/healthz: a padded configured secret behaves like the unpadded value (D7)', async () => {
+    await withEnv({ OZB_HEALTHCHECK_SECRET: '  the-secret\t\n' }, async () => {
+      const res = await middleware(
+        new Request('https://app.example.com/healthz', {
+          headers: { 'x-healthcheck-secret': 'the-secret' },
+        }),
+        { waitUntil() {} },
+      );
+      assert.equal(res.status, 200, 'a padded configured secret matches the unpadded header');
+    });
+  });
+
+  test('/healthz: a whitespace-only configured secret fails closed (D7)', async () => {
+    await withEnv({ OZB_HEALTHCHECK_SECRET: '   \t\n' }, async () => {
+      const res = await middleware(
+        new Request('https://app.example.com/healthz', {
+          headers: { 'x-healthcheck-secret': 'the-secret' },
+        }),
+        { waitUntil() {} },
+      );
+      assert.equal(res.status, 401, 'a whitespace-only configured secret normalizes to empty and rejects');
+    });
+  });
+
   test('the icon route is exempt only when OZB_ICON_ROUTE_PUBLIC is set', async () => {
     // Without the flag: rejected like any other path.
     await withEnv({}, async () => {

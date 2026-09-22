@@ -12,6 +12,7 @@
 
 import { getStore } from '../../lib/web/db.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { normalizeAppSecret } from '../../lib/env-secret.js';
 
 /** How many poll intervals before a poll is "stale". 3 (design 3.7). */
 const STALE_INTERVALS = 3;
@@ -45,7 +46,7 @@ export async function GET(request) {
   // unset secret through (a LAN request with no secret reached the handler).
   // The middleware rejects a missing secret with 401; the handler does the
   // same.
-  const secret = process.env.OZB_HEALTHCHECK_SECRET ?? '';
+  const secret = normalizeAppSecret(process.env.OZB_HEALTHCHECK_SECRET);
   const presented = request.headers.get('x-healthcheck-secret') ?? '';
   if (!secret || !secretsEqual(presented, secret)) {
     return new Response('unauthorized', { status: 401 });

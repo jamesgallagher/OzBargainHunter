@@ -1,5 +1,4 @@
 import { requireAuthenticated, verifyAccess } from '../../../../lib/web/gate.js';
-import { generateCsrfToken } from '../../../../lib/csrf.js';
 import { getStore } from '../../../../lib/web/db.js';
 
 /**
@@ -79,40 +78,7 @@ export async function GET(request, { params }) {
   const nowIso = new Date().toISOString();
   applyMute(store, id, nowIso);
 
-  // Mint an unbound CSRF token (production relies on the token TTL, m3) for
-  // the undo / snooze forms on the confirmation.
-  const secret = process.env.OZB_CSRF_SECRET ?? '';
-  const token = secret ? await generateCsrfToken(secret) : '';
-
-  const label = rule.parameters?.term ?? `${rule.parameters?.threshold ?? ''}+ upvotes`;
-  const html = `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Muted</title></head>
-<body>
-<h2>Muted</h2>
-<p>Alerts for <strong>${escapeHtml(label)}</strong> are off. You will not be notified for this rule.</p>
-<form method="POST" action="/rules/${id}/mute">
-  <input type="hidden" name="_csrf" value="${escapeHtml(token)}" />
-  <input type="hidden" name="action" value="enable" />
-  <button type="submit">Undo</button>
-</form>
-<form method="POST" action="/rules/${id}/mute">
-  <input type="hidden" name="_csrf" value="${escapeHtml(token)}" />
-  <input type="hidden" name="action" value="snooze24" />
-  <button type="submit">Snooze 24 hours</button>
-</form>
-<form method="POST" action="/rules/${id}/mute">
-  <input type="hidden" name="_csrf" value="${escapeHtml(token)}" />
-  <input type="hidden" name="action" value="snooze7" />
-  <button type="submit">Snooze 7 days</button>
-</form>
-<p><a href="/rules/${id}">Back to rule</a></p>
-</body>
-</html>`;
-  return new Response(html, {
-    status: 200,
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
+  return Response.redirect(new URL(`/rules/${id}?notice=muted`, request.url), 303);
 }
 
 /**
@@ -174,18 +140,4 @@ export async function POST(request, { params }) {
   }
 
   return Response.json({ id, state: next });
-}
-
-/**
- * Escape a string for safe embedding in HTML.
- * @param {string} s
- * @returns {string}
- */
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }

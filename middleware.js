@@ -44,6 +44,7 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { NextResponse } from 'next/server.js';
+import { normalizeAppSecret } from './lib/env-secret.js';
 
 /** The header the container health check sends the shared secret in. */
 export const HEALTHCHECK_HEADER = 'x-healthcheck-secret';
@@ -108,7 +109,7 @@ export function readConfig(env = process.env) {
   const teamDomain = String(env.CF_ACCESS_TEAM_DOMAIN ?? '');
   const aud = String(env.CF_ACCESS_AUD ?? '');
   const jwksUrlOverride = env.CF_JWKS_URL;
-  const healthcheckSecret = String(env.OZB_HEALTHCHECK_SECRET ?? '');
+  const healthcheckSecret = normalizeAppSecret(env.OZB_HEALTHCHECK_SECRET);
   const iconRoutePublic = String(env.OZB_ICON_ROUTE_PUBLIC ?? '');
   return {
     teamDomain,

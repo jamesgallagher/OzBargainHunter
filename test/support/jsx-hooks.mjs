@@ -16,7 +16,17 @@ const SWC_OPTS = {
   module: { type: 'es6' },
 };
 
+export function resolve(specifier, context, nextResolve) {
+  if (specifier === 'next/navigation' || specifier === 'next/navigation.js') {
+    return { url: new URL('./next-navigation-stub.mjs', import.meta.url).href, shortCircuit: true };
+  }
+  return nextResolve(specifier, context);
+}
+
 export function load(url, context, nextLoad) {
+  if (url.startsWith('file:') && url.endsWith('.css')) {
+    return { format: 'module', source: 'export default {};', url, shortCircuit: true };
+  }
   if (url.startsWith('file:') && JSX_TARGET.test(fileURLToPath(url))) {
     // Read the raw source ourselves. Calling nextLoad() on a JSX file would
     // throw a SyntaxError before we get a chance to transform it.

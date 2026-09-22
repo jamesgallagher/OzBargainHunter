@@ -10,6 +10,7 @@ import { setStoreForTest, getStore } from '../../../lib/web/db.js';
 import { generateCsrfToken } from '../../../lib/csrf.js';
 import { startJwksServer } from '../../support/jwks.js';
 import { POST as mutePost } from '../../../app/rules/[id]/mute/route.js';
+import { POST as deletePost } from '../../../app/rules/[id]/delete/route.js';
 import { POST as savePost } from '../../../app/rules/[id]/save/route.js';
 import { POST as createPost } from '../../../app/rules/new/create/route.js';
 
@@ -127,6 +128,21 @@ describe('route: /rules/<id>/mute re-gates a directly-driven request (11.3.6)', 
     );
     assert.equal(res.status, 400, 'a mute without confirm is refused');
     assert.equal(store.getRule(1).state, 'enabled', 'the rule is not muted without confirm');
+  });
+
+  test('a delete without explicit confirmation is rejected without removing the rule', async () => {
+    const jwt = await jwks.sign({ email: 'user@example.com' }, { aud: AUD, iss: `https://${TEAM_DOMAIN}` });
+    const csrf = await generateCsrfToken(CSRF_SECRET);
+    const res = await deletePost(
+      new Request('https://app.example.com/rules/1/delete', {
+        method: 'POST',
+        headers: { 'Cf-Access-Jwt-Assertion': jwt, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ _csrf: csrf }),
+      }),
+      { params: { id: '1' } },
+    );
+    assert.equal(res.status, 400, 'a delete without confirm is refused');
+    assert.notEqual(store.getRule(1), null, 'the rule remains after an unconfirmed delete request');
   });
 
   // X8: muting suppresses that rule's already-queued rows in `pending_alerts`.
@@ -412,6 +428,39 @@ describe('route: /healthz reports acquisition health (3.7)', () => {
       new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'wrong' } }),
     );
     assert.equal(res.status, 401, 'wrong secret -> 401');
+  });
+
+  // D7: the configured healthcheck secret is normalized (surrounding
+  // whitespace stripped) at the route boundary. A padded configured value must
+  // behave exactly like the unpadded value; a whitespace-only value normalizes
+  // to empty and fails closed.
+  test('a padded configured secret behaves like the unpadded value (D7)', async () => {
+    process.env.OZB_HEALTHCHECK_SECRET = '  healthcheck-secret-for-tests\t\n';
+    try {
+      const { GET } = await import('../../../app/healthz/route.js');
+      const res = await GET(
+        new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'healthcheck-secret-for-tests' } }),
+      );
+      // 401 would mean the normalized secret did not match the presented
+      // header; anything else (503 here, since no poll state is set yet)
+      // proves the secret gate passed.
+      assert.notEqual(res.status, 401, 'a padded configured secret matches the unpadded header (secret gate passes)');
+    } finally {
+      process.env.OZB_HEALTHCHECK_SECRET = 'healthcheck-secret-for-tests';
+    }
+  });
+
+  test('a whitespace-only configured secret fails closed (D7)', async () => {
+    process.env.OZB_HEALTHCHECK_SECRET = '   \t\n';
+    try {
+      const { GET } = await import('../../../app/healthz/route.js');
+      const res = await GET(
+        new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'healthcheck-secret-for-tests' } }),
+      );
+      assert.equal(res.status, 401, 'a whitespace-only configured secret normalizes to empty and rejects');
+    } finally {
+      process.env.OZB_HEALTHCHECK_SECRET = 'healthcheck-secret-for-tests';
+    }
   });
 
   test('a successful poll within three intervals is healthy (200)', async () => {
