@@ -328,6 +328,26 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     assert.equal(resNestedOnly.stdout, 'FAIL: ambiguous icon state; no change made\n', 'nested-only output is fixed and safe');
     assert.equal(resNestedOnly.stderr, '', 'nested-only failure must not leak parser output');
     assert.equal(readFileSync(nestedOnly, 'utf8'), nestedOnlyBefore, 'nested-only fixture must be unchanged');
+
+    // Exact old-element bytes in comments or CDATA are decoys, not authorised
+    // targets. An unexpected direct-child Icon must still fail closed.
+    for (const [kind, decoy] of [
+      ['comment', '<!-- <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon> -->'],
+      ['cdata', '<Decoy><![CDATA[<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>]]></Decoy>'],
+    ]) {
+      const decoyPath = join(dir, `${kind}-decoy.xml`);
+      const decoyBefore =
+        '<?xml version="1.0"?>\n<Container version="2">\n' +
+        `  ${decoy}\n` +
+        '  <Icon>https://example.invalid/unexpected.png</Icon>\n' +
+        '</Container>\n';
+      writeFileSync(decoyPath, decoyBefore);
+      const resDecoy = runUpdater(decoyPath);
+      assert.notEqual(resDecoy.code, 0, `${kind} decoy with unexpected direct-child Icon must fail`);
+      assert.equal(resDecoy.stdout, 'FAIL: ambiguous icon state; no change made\n', `${kind} decoy output is fixed and safe`);
+      assert.equal(resDecoy.stderr, '', `${kind} decoy failure must not leak parser output`);
+      assert.equal(readFileSync(decoyPath, 'utf8'), decoyBefore, `${kind} decoy fixture must be byte-for-byte unchanged`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

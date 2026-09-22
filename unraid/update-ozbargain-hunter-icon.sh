@@ -37,6 +37,7 @@ TARGET="${OZB_UNRAID_TEMPLATE_PATH:-/boot/config/plugins/dockerMan/templates-use
 # occurrences on one line. This is a literal substring count, not a count of
 # matching lines.
 count_el() {
+  FILE=${2:-$TARGET}
   awk -v needle="$1" '
     {
       rest = $0
@@ -46,17 +47,20 @@ count_el() {
       }
     }
     END { print count + 0 }
-  ' "$TARGET" 2>/dev/null
+  ' "$FILE" 2>/dev/null
 }
 
-# Validate both well-formedness and the authorised location before inspecting
-# exact bytes. There must be exactly one Icon element in the document and it
-# must be a direct child of the document element. The file is never serialized.
-check_single_top_level_icon() {
+# Validate well-formedness, the authorised location, and the parsed value of
+# the unique direct-child Icon. Binding the expected value here prevents an
+# exact OLD/NEW byte sequence in a comment or CDATA section from being treated
+# as the target. The file is never serialized.
+check_single_top_level_icon_value() {
+  EXPECTED=$1
+  FILE=${2:-$TARGET}
   if command -v xmllint >/dev/null 2>&1; then
     RESULT=$(xmllint --nonet --xpath \
-      'count(//*[name() = "Icon"]) = 1 and count(/*/*[name() = "Icon"]) = 1' \
-      "$TARGET" 2>/dev/null) || return 1
+      "count(//*[name() = 'Icon']) = 1 and count(/*/*[name() = 'Icon']) = 1 and string(/*/*[name() = 'Icon']) = '$EXPECTED'" \
+      "$FILE" 2>/dev/null) || return 1
     [ "$RESULT" = 'true' ]
   elif command -v php >/dev/null 2>&1; then
     php -r '
@@ -70,8 +74,13 @@ check_single_top_level_icon() {
         $all++;
         if ($element->parentNode->isSameNode($doc->documentElement)) $top++;
       }
-      exit($all === 1 && $top === 1 ? 0 : 1);
-    ' "$TARGET" >/dev/null 2>&1
+      $icons = $doc->documentElement->getElementsByTagName("Icon");
+      $direct = null;
+      foreach ($doc->documentElement->childNodes as $child) {
+        if ($child instanceof DOMElement && $child->tagName === "Icon") $direct = $child;
+      }
+      exit($all === 1 && $top === 1 && $direct->textContent === $argv[2] ? 0 : 1);
+    ' "$FILE" "$EXPECTED" >/dev/null 2>&1
   elif command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
     PY=$(command -v python3 || command -v python)
     "$PY" -c '
@@ -80,9 +89,10 @@ import xml.etree.ElementTree as ET
 
 root = ET.parse(sys.argv[1]).getroot()
 all_icons = sum(element.tag == "Icon" for element in root.iter())
-top_icons = sum(element.tag == "Icon" for element in root)
-sys.exit(0 if all_icons == 1 and top_icons == 1 else 1)
-' "$TARGET" >/dev/null 2>&1
+top_icons = [element for element in root if element.tag == "Icon"]
+value = "".join(top_icons[0].itertext()) if len(top_icons) == 1 else None
+sys.exit(0 if all_icons == 1 and value == sys.argv[2] else 1)
+' "$FILE" "$EXPECTED" >/dev/null 2>&1
   else
     return 1
   fi
@@ -90,23 +100,29 @@ sys.exit(0 if all_icons == 1 and top_icons == 1 else 1)
 
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 
-# 1. The target must exist, be non-empty and well-formed, with exactly one
-#    top-level Icon element, before any mutation.
+# 1. The target must exist and be non-empty. Its unique direct-child Icon must
+#    parse to exactly one of the two authorised values before any mutation.
 [ -f "$TARGET" ] || fail "target template is missing"
 [ -s "$TARGET" ] || fail "target template is empty"
-check_single_top_level_icon || fail "ambiguous icon state; no change made"
+if check_single_top_level_icon_value "$OLD_ICON_URL"; then
+  ICON_STATE=old
+elif check_single_top_level_icon_value "$NEW_ICON_URL"; then
+  ICON_STATE=new
+else
+  fail "ambiguous icon state; no change made"
+fi
 
 OLD_N=$(count_el "$OLD_EL")
 NEW_N=$(count_el "$NEW_EL")
 
 # 4. Idempotent: old absent and exactly one new element already present.
-if [ "$OLD_N" -eq 0 ] && [ "$NEW_N" -eq 1 ]; then
+if [ "$ICON_STATE" = new ] && [ "$OLD_N" -eq 0 ] && [ "$NEW_N" -eq 1 ]; then
   printf 'PASS: icon already canonical (no change made)\n'
   exit 0
 fi
 
 # 2. Exactly one old element and no new element: perform the replacement.
-if [ "$OLD_N" -eq 1 ] && [ "$NEW_N" -eq 0 ]; then
+if [ "$ICON_STATE" = old ] && [ "$OLD_N" -eq 1 ] && [ "$NEW_N" -eq 0 ]; then
   # Literal byte substitution of the exact complete element. Write to a temp
   # file in the same directory, then move it over the target (atomic, no
   # partial write).
@@ -114,6 +130,16 @@ if [ "$OLD_N" -eq 1 ] && [ "$NEW_N" -eq 0 ]; then
   if ! sed "s|${OLD_EL}|${NEW_EL}|g" "$TARGET" > "$TMP" 2>/dev/null; then
     rm -f "$TMP"
     fail "replacement write failed"
+  fi
+  # Validate the candidate before replacing the target. This catches the case
+  # where the sole raw OLD literal was a comment/CDATA decoy while the real
+  # Icon used a different lexical representation of the same parsed value.
+  V_OLD=$(count_el "$OLD_EL" "$TMP")
+  V_NEW=$(count_el "$NEW_EL" "$TMP")
+  if ! check_single_top_level_icon_value "$NEW_ICON_URL" "$TMP" || \
+      [ "$V_OLD" -ne 0 ] || [ "$V_NEW" -ne 1 ]; then
+    rm -f "$TMP"
+    fail "ambiguous icon state; no change made"
   fi
   if ! mv "$TMP" "$TARGET" 2>/dev/null; then
     rm -f "$TMP"
@@ -123,7 +149,7 @@ if [ "$OLD_N" -eq 1 ] && [ "$NEW_N" -eq 0 ]; then
   #    element is absent, and exactly one new complete element exists.
   V_OLD=$(count_el "$OLD_EL")
   V_NEW=$(count_el "$NEW_EL")
-  if check_single_top_level_icon && [ "$V_OLD" -eq 0 ] && [ "$V_NEW" -eq 1 ]; then
+  if check_single_top_level_icon_value "$NEW_ICON_URL" && [ "$V_OLD" -eq 0 ] && [ "$V_NEW" -eq 1 ]; then
     printf 'PASS: icon replaced (one exact replacement)\n'
     exit 0
   fi
