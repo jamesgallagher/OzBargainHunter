@@ -8,11 +8,17 @@
  * @param {{ params: { id: string } }} props
  */
 export async function POST(request, { params }) {
-  const { requireAuthenticated } = await import('../../../../lib/web/gate.js');
+  const { parseBodyOr400, requireAuthenticated } = await import('../../../../lib/web/gate.js');
   const { getStore } = await import('../../../../lib/web/db.js');
 
-  const gate = await requireAuthenticated(request);
+  const { body, error } = await parseBodyOr400(request);
+  if (error) return error;
+  const gate = await requireAuthenticated(request, process.env, body);
   if (!gate.ok) return gate.response;
+
+  if (body.confirm !== 'delete') {
+    return new Response('delete confirmation required', { status: 400 });
+  }
 
   const store = getStore();
   const id = Number((await params).id ?? params.id);

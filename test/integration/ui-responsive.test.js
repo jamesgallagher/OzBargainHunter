@@ -165,4 +165,29 @@ describe('integration: responsive themed UI', () => {
       await context.close();
     }
   });
+
+  it('requires a separate confirmation step before no-JavaScript deletion', async () => {
+    const context = await browser.newContext({
+      baseURL: app.origin,
+      javaScriptEnabled: false,
+      extraHTTPHeaders: { 'Cf-Access-Jwt-Assertion': token },
+    });
+    try {
+      const page = await context.newPage();
+      assert.equal((await page.goto('/rules/1')).status(), 200);
+
+      await page.locator('form.rule-delete-review button').click();
+      assert.match(page.url(), /\/rules\/1\?confirm=delete$/);
+      assert.equal(await page.getByRole('heading', { name: /Confirm deletion/ }).count(), 1);
+      assert.notEqual(temp.store.getRule(1), null, 'the first no-JS delete action only opens confirmation');
+
+      const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === '/rules/1/delete');
+      await page.getByRole('button', { name: 'Confirm delete' }).click();
+      const response = await responsePromise;
+      assert.equal(response.status(), 200);
+      assert.equal(temp.store.getRule(1), null, 'the explicitly confirmed action deletes the rule');
+    } finally {
+      await context.close();
+    }
+  });
 });

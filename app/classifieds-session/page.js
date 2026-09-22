@@ -32,7 +32,11 @@ const LAST_CONFIRMED_KEY = 'classifieds_last_confirmed_at';
 export default async function ClassifiedsSessionPage() {
   const store = getStore();
   const uid = store.getSetting(LAST_UID_KEY);
-  const valid = uid !== null && uid !== '0';
+  const sessionStatus = uid === null
+    ? { label: 'Not yet confirmed', tone: 'neutral' }
+    : uid === '0'
+      ? { label: 'Expired', tone: 'danger' }
+      : { label: 'Valid', tone: 'success' };
   const lastConfirmed = store.getSetting(LAST_CONFIRMED_KEY);
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
@@ -45,7 +49,7 @@ export default async function ClassifiedsSessionPage() {
       <Subnav label="Settings" links={settingsLinks} activeHref="/classifieds-session" />
       <dl className="classifieds-session card status-details">
         <dt>Status</dt>
-        <dd><Badge tone={valid ? 'success' : 'danger'}>{valid ? 'Valid' : 'Not yet confirmed'}</Badge></dd>
+        <dd><Badge tone={sessionStatus.tone}>{sessionStatus.label}</Badge></dd>
         <dt>UID</dt>
         <dd>{uid ?? '—'}</dd>
         <dt>Last confirmed working</dt>

@@ -201,6 +201,20 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /2026-09-19T06:00:00Z/, 'the last-confirmed instant');
     assert.match(html, /\/classifieds-session\/set/, 'the cookie form posts to its own segment');
   });
+
+  test('screen 9 distinguishes valid, expired and not-yet-confirmed session states', async () => {
+    store.setSetting('classifieds_last_uid', '0');
+    const expired = renderToStaticMarkup(await ClassifiedsSessionPage());
+    assert.match(expired, /class="badge" data-tone="danger">Expired</, 'uid 0 is explicitly expired');
+    assert.doesNotMatch(expired, />Not yet confirmed</, 'uid 0 is not an unknown session');
+
+    store.deleteSetting('classifieds_last_uid');
+    const unknown = renderToStaticMarkup(await ClassifiedsSessionPage());
+    assert.match(unknown, /class="badge" data-tone="neutral">Not yet confirmed</, 'an absent uid has no confirmed state');
+    assert.doesNotMatch(unknown, />Expired</, 'an absent uid is not known to be expired');
+
+    store.setSetting('classifieds_last_uid', '226301');
+  });
 });
 
 // M-m8: the layout's last-checked timestamp. The layout is a server component

@@ -3,7 +3,7 @@
 import { useId, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation.js';
 
-export default function ConfirmDialog({ title, body, action, csrf, destination = '/rules', triggerLabel = 'Delete' }) {
+export default function ConfirmDialog({ title, body, action, confirmationAction, csrf, destination = '/rules', triggerLabel = 'Delete' }) {
   const dialogRef = useRef(null);
   const triggerRef = useRef(null);
   const titleId = useId();
@@ -57,6 +57,7 @@ export default function ConfirmDialog({ title, body, action, csrf, destination =
         <p>{body}</p>
         <form className="rule-delete" method="POST" action={action} onSubmit={submit}>
           <input type="hidden" name="_csrf" value={csrf} />
+          <input type="hidden" name="confirm" value="delete" />
           <div className="dialog-actions">
             <button type="button" className="btn" onClick={close}>Cancel</button>
             <button type="submit" className="btn btn-danger" disabled={pending}>
@@ -67,8 +68,8 @@ export default function ConfirmDialog({ title, body, action, csrf, destination =
         </form>
       </dialog>
       <noscript>
-        <form method="POST" action={action} className="rule-delete">
-          <input type="hidden" name="_csrf" value={csrf} />
+        <form method="GET" action={confirmationAction} className="rule-delete-review">
+          <input type="hidden" name="confirm" value="delete" />
           <button type="submit" className="btn btn-danger">Delete rule</button>
         </form>
       </noscript>

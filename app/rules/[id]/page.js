@@ -43,7 +43,9 @@ export default async function EditRulePage({ params, searchParams }) {
   // the three forms (save, mute, delete).
   const secret = process.env.OZB_CSRF_SECRET ?? '';
   const token = secret ? await generateCsrfToken(secret) : '';
-  const notice = (await searchParams)?.notice;
+  const query = await searchParams;
+  const notice = query?.notice;
+  const confirmDelete = query?.confirm === 'delete';
   const label = ruleLabel(rule);
 
   return (
@@ -63,6 +65,19 @@ export default async function EditRulePage({ params, searchParams }) {
           </div>
         </Notice>
       ) : null}
+      {confirmDelete ? (
+        <Notice tone="warning" title={`Confirm deletion of ${label}`}>
+          <p>This permanently deletes the rule and cannot be undone.</p>
+          <form method="POST" action={`/rules/${rule.id}/delete`} className="rule-delete-confirmation">
+            <input type="hidden" name="_csrf" value={token} />
+            <input type="hidden" name="confirm" value="delete" />
+            <div className="notice-actions">
+              <Link className="btn" href={`/rules/${rule.id}`}>Cancel</Link>
+              <button className="btn btn-danger" type="submit">Confirm delete</button>
+            </div>
+          </form>
+        </Notice>
+      ) : null}
       <div className="card form-card">
         <RuleForm mode="edit" action={`/rules/${rule.id}/save`} csrf={token} className="rule-edit" initial={{ type: rule.type, term: rule.parameters?.term, threshold: rule.parameters?.threshold, cooldownSeconds: rule.cooldown_seconds, surfaces: rule.surfaces }} />
       </div>
@@ -71,7 +86,7 @@ export default async function EditRulePage({ params, searchParams }) {
           <input type="hidden" name="_csrf" value={token} /><input type="hidden" name="action" value="mute" /><input type="hidden" name="confirm" value="1" />
           <button className="btn" type="submit">Mute</button>
         </AsyncForm>
-        <ConfirmDialog title={`Delete ${label}?`} body="This permanently deletes the rule and cannot be undone." action={`/rules/${rule.id}/delete`} csrf={token} />
+        <ConfirmDialog title={`Delete ${label}?`} body="This permanently deletes the rule and cannot be undone." action={`/rules/${rule.id}/delete`} confirmationAction={`/rules/${rule.id}`} csrf={token} />
       </div>
     </section>
   );
