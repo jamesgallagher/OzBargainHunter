@@ -9,8 +9,8 @@
  * Clicking a tab is a Next App Router transition: it preserves browser
  * history and does not create a second document navigation (spec §3.4, AC-2).
  */
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import Link from 'next/link.js';
+import { usePathname } from 'next/navigation.js';
 
 /**
  * The four persistent primary tabs (spec §3.1).

@@ -4,7 +4,7 @@
  * semantic HTML whose classes are defined in app/globals.css.
  */
 
-import Link from 'next/link';
+import Link from 'next/link.js';
 
 /**
  * Derive an acquisition-health summary from the existing poll state

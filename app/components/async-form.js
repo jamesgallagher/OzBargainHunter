@@ -33,7 +33,7 @@
  *   [key: string]: any
  * }} props
  */
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation.js';
 import { useRef, useState, useId } from 'react';
 
 export default function AsyncForm({
@@ -65,6 +65,16 @@ export default function AsyncForm({
 
     const form = event.currentTarget;
     const formData = new FormData(form);
+    const config = formData.get('config');
+    if (typeof config === 'string' && config.trim()) {
+      try {
+        JSON.parse(config);
+      } catch {
+        setError('Error: Credentials must be valid JSON.');
+        setStatus('');
+        return;
+      }
+    }
 
     setPending(true);
     setError('');
@@ -73,7 +83,7 @@ export default function AsyncForm({
     try {
       const response = await fetch(action, {
         method,
-        body: formData,
+        body: new URLSearchParams(formData),
         // Same-origin, credentials: 'same-origin' preserves the Access
         // session cookie (spec §7.3.2).
         credentials: 'same-origin',

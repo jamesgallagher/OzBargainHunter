@@ -69,7 +69,7 @@ export default function RulesPage() {
 
       {rules.length > 0 ? (
         <div className="card">
-          <DataTable columns={columns} rows={rows} />
+          <DataTable className="rules" columns={columns} rows={rows} />
         </div>
       ) : (
         <EmptyState

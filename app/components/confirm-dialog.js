@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation.js';
 
 export default function ConfirmDialog({ title, body, action, csrf, destination = '/rules', triggerLabel = 'Delete' }) {
   const dialogRef = useRef(null);
@@ -24,7 +24,7 @@ export default function ConfirmDialog({ title, body, action, csrf, destination =
     try {
       const response = await fetch(action, {
         method: 'POST',
-        body: new FormData(event.currentTarget),
+        body: new URLSearchParams(new FormData(event.currentTarget)),
         credentials: 'same-origin',
       });
       if (!response.ok) {
@@ -55,7 +55,7 @@ export default function ConfirmDialog({ title, body, action, csrf, destination =
       <dialog ref={dialogRef} className="confirm-dialog dialog" aria-labelledby={titleId} onCancel={close}>
         <h2 id={titleId}>{title}</h2>
         <p>{body}</p>
-        <form method="POST" action={action} onSubmit={submit}>
+        <form className="rule-delete" method="POST" action={action} onSubmit={submit}>
           <input type="hidden" name="_csrf" value={csrf} />
           <div className="dialog-actions">
             <button type="button" className="btn" onClick={close}>Cancel</button>

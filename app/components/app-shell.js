@@ -48,7 +48,7 @@ export default function AppShell({
             {health.label}
           </span>
           <span className="health-detail">
-            Last checked: {lastChecked}
+            Last checked: <time dateTime={lastChecked}>{lastChecked}</time>
             {lastResponseClass !== '—' ? ` · ${lastResponseClass}` : ''}
             {backoffSeconds > 0 ? ` · backoff ${backoffSeconds}s` : ''}
           </span>

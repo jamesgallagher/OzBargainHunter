@@ -614,7 +614,7 @@ describe('engine: freebies', () => {
     // the raw alert field.
     assert.ok(freebieN.body.includes('ausdkunst'), 'the composed body names the poster');
     assert.ok(freebieN.unsubscribe, 'carries an unsubscribe control');
-    assert.ok(freebieN.unsubscribe.url.startsWith('/settings/'), 'unsubscribe points at the settings screen, not a rule');
+    assert.equal(freebieN.unsubscribe.url, '/thresholds', 'unsubscribe points at the canonical thresholds settings screen');
     assert.ok(!freebieN.unsubscribe.url.includes('/goto/'), 'no /goto/ in the unsubscribe link');
     assert.ok(!JSON.stringify(freebieN).includes('/goto/'), 'no /goto/ anywhere in the freebie notification');
   });

@@ -27,7 +27,7 @@
  *   className?: string,
  * }} props
  */
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation.js';
 import { useId, useState } from 'react';
 
 const SURFACES = [
@@ -65,7 +65,7 @@ export default function RuleForm({ mode, action, csrf, initial, className = '' }
     try {
       const response = await fetch(action, {
         method: 'POST',
-        body: formData,
+        body: new URLSearchParams(formData),
         credentials: 'same-origin',
       });
 

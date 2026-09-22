@@ -39,8 +39,8 @@ export default async function ThresholdsPage() {
       <div className="card form-card settings-card">
       <AsyncForm action="/thresholds/freebie" successMessage="Threshold preference saved.">
         <input type="hidden" name="_csrf" value={token} />
-        <label className="switch">
-          <input type="checkbox" name="freebie" defaultChecked={freebieOn} />
+        <label className="switch" htmlFor="freebie-setting" aria-label="Always notify on freebie">
+          <input id="freebie-setting" type="checkbox" name="freebie" defaultChecked={freebieOn} />
           <span><strong>Always notify on freebie</strong><small>Notify for free deals regardless of their current vote count.</small></span>
         </label>
         <button className="btn btn-primary" type="submit">Save</button>

@@ -172,20 +172,23 @@ describe('integration: browser UI and test-send shakeout', () => {
     assert.match(await editedRow.innerText(), /muted/);
 
     await expectHeading(page, `/rules/${created.id}`, `Edit rule ${created.id}`);
+    await page.locator('.confirm-dialog-trigger').click();
+    await page.locator('dialog[open]').waitFor();
     await submit(page, 'form.rule-delete', 'button[type="submit"]', `/rules/${created.id}/delete`);
     await expectHeading(page, '/rules', 'Rules');
     assert.equal(await page.getByText('oled tv', { exact: true }).count(), 0);
 
     await expectHeading(page, '/delivery', 'Delivery');
     await assert.doesNotReject(() => page.getByText('ntfy', { exact: true }).first().waitFor());
+    await page.locator('.provider-card summary').first().click();
     const providerForm = 'form.provider-config';
     const savedConfig = JSON.stringify({ url: sink.origin, topic: 'alerts', label: 'browser saved' });
-    await page.locator(`${providerForm} input[name="config"]`).fill(savedConfig);
+    await page.locator(`${providerForm} textarea[name="config"]`).fill(savedConfig);
     await page.locator(`${providerForm} input[name="selected"]`).check();
     await submit(page, providerForm, 'button[type="submit"]', '/delivery/save');
     await expectHeading(page, '/delivery', 'Delivery');
     assert.equal(temp.store.getProvider('ntfy').config, savedConfig);
-    assert.match(await page.locator('table.providers').innerText(), /ntfy\s+yes\s+yes/);
+    assert.match(await page.locator('.provider-card').innerText(), /ntfy[\s\S]*Selected[\s\S]*Enabled/);
 
     const testSendBody = await submit(
       page,
@@ -217,7 +220,7 @@ describe('integration: browser UI and test-send shakeout', () => {
       nonLoopbackRequests,
       appExitCode: app.child.exitCode,
       testSend: sink.messages[0],
-      findings: ['writes land on JSON documents', 'fresh stores have no provider seed row', 'X-Priority is hardcoded', 'screens have no document title'],
+      findings: ['writes remain in the themed shell', 'stored credentials stay server-side', 'test send completed without browser or server errors'],
     })}`);
   });
 });
