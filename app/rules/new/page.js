@@ -9,7 +9,11 @@
  */
 
 import { generateCsrfToken } from '../../../lib/csrf.js';
-import { normalizeAppSecret } from '../../../lib/env-secret.js';
+import RuleForm from '../../components/rule-form.js';
+import { PageHeader } from '../../components/ui.js';
+import Link from 'next/link.js';
+
+export const metadata = { title: 'New rule' };
 
 /**
  * The rule-create page.
@@ -17,44 +21,14 @@ import { normalizeAppSecret } from '../../../lib/env-secret.js';
  */
 export default async function NewRulePage() {
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
-  // D7: normalize the configured secret; the presented token is never trimmed.
-  const secret = normalizeAppSecret(process.env.OZB_CSRF_SECRET);
+  const secret = process.env.OZB_CSRF_SECRET ?? '';
   const token = secret ? await generateCsrfToken(secret) : '';
 
   return (
     <section>
-      <h2>New rule</h2>
-      <form method="POST" action="/rules/new/create">
-        <input type="hidden" name="_csrf" value={token} />
-        <label>
-          Type
-          <select name="type" defaultValue="match">
-            <option value="match">match</option>
-            <option value="threshold">threshold</option>
-          </select>
-        </label>
-        <label>
-          Term
-          <input type="text" name="term" />
-        </label>
-        <label>
-          Threshold
-          <input type="number" name="threshold" min="1" />
-        </label>
-        <label>
-          Cooldown (seconds)
-          <input type="number" name="cooldown_seconds" defaultValue="0" />
-        </label>
-        <label>
-          Surfaces
-          <select name="surfaces" defaultValue="deals">
-            <option value="deals">deals</option>
-            <option value="classifieds">classifieds</option>
-            <option value="both">both</option>
-          </select>
-        </label>
-        <button type="submit">Create</button>
-      </form>
+      <div className="breadcrumb"><Link href="/rules">Rules</Link><span className="sep">/</span><span>New rule</span></div>
+      <PageHeader title="New rule" description="Create a term match or upvote threshold alert." />
+      <div className="card form-card"><RuleForm mode="create" action="/rules/new/create" csrf={token} /></div>
     </section>
   );
 }

@@ -10,6 +10,7 @@ import { setStoreForTest, getStore } from '../../../lib/web/db.js';
 import { generateCsrfToken } from '../../../lib/csrf.js';
 import { startJwksServer } from '../../support/jwks.js';
 import { POST as mutePost } from '../../../app/rules/[id]/mute/route.js';
+import { POST as deletePost } from '../../../app/rules/[id]/delete/route.js';
 import { POST as savePost } from '../../../app/rules/[id]/save/route.js';
 import { POST as createPost } from '../../../app/rules/new/create/route.js';
 
@@ -127,6 +128,21 @@ describe('route: /rules/<id>/mute re-gates a directly-driven request (11.3.6)', 
     );
     assert.equal(res.status, 400, 'a mute without confirm is refused');
     assert.equal(store.getRule(1).state, 'enabled', 'the rule is not muted without confirm');
+  });
+
+  test('a delete without explicit confirmation is rejected without removing the rule', async () => {
+    const jwt = await jwks.sign({ email: 'user@example.com' }, { aud: AUD, iss: `https://${TEAM_DOMAIN}` });
+    const csrf = await generateCsrfToken(CSRF_SECRET);
+    const res = await deletePost(
+      new Request('https://app.example.com/rules/1/delete', {
+        method: 'POST',
+        headers: { 'Cf-Access-Jwt-Assertion': jwt, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ _csrf: csrf }),
+      }),
+      { params: { id: '1' } },
+    );
+    assert.equal(res.status, 400, 'a delete without confirm is refused');
+    assert.notEqual(store.getRule(1), null, 'the rule remains after an unconfirmed delete request');
   });
 
   // X8: muting suppresses that rule's already-queued rows in `pending_alerts`.

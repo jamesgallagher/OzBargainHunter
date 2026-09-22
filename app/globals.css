@@ -1,0 +1,1044 @@
+/*
+ * OzBargainHunter — global design system (spec §4, §5).
+ *
+ * One stylesheet, authored CSS, CSS custom properties. No framework, no
+ * Tailwind, no CSS-in-JS runtime, no remote font. Components consume the
+ * tokens defined here; no component hard-codes a theme colour.
+ *
+ * Theme model: the resolved theme is `light` or `dark` (spec §7.2). The
+ * preference (system/light/dark) is resolved before paint by the inline
+ * bootstrap script in the layout, which sets `data-theme` on <html> and
+ * `color-scheme` on the root. These two blocks therefore only *declare* the
+ * tokens; they never decide the theme at runtime.
+ */
+
+/* ---- Design tokens (spec §4.2) ------------------------------------------ */
+
+:root,
+[data-theme='light'] {
+  --canvas: #f7f4ed;
+  --surface: #ffffff;
+  --surface-subtle: #f0ebe1;
+  --text: #211b14;
+  --text-muted: #6b6257;
+  --border: #ded5c7;
+  --accent: #8a4b00;
+  --accent-strong: #653600;
+  --accent-soft: #fff0c7;
+  --coin: #ffc44f;
+  --success: #24734a;
+  --success-soft: #e2f4e9;
+  --warning: #9a5a00;
+  --warning-soft: #fff0d2;
+  --danger: #b42318;
+  --danger-soft: #fee9e7;
+  --focus: #7c3aed;
+  --shadow: 0 8px 28px rgb(48 35 18 / 0.09);
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --canvas: #12100d;
+  --surface: #1d1914;
+  --surface-subtle: #282119;
+  --text: #f7f1e7;
+  --text-muted: #bdb2a3;
+  --border: #463b2f;
+  --accent: #ffc44f;
+  --accent-strong: #ffda83;
+  --accent-soft: #3b2c12;
+  --coin: #ffc44f;
+  --success: #71d69d;
+  --success-soft: #173526;
+  --warning: #ffc266;
+  --warning-soft: #3c2a10;
+  --danger: #ff8f86;
+  --danger-soft: #431f1d;
+  --focus: #c4a7ff;
+  --shadow: 0 12px 36px rgb(0 0 0 / 0.32);
+  color-scheme: dark;
+}
+
+/* ---- Reset / base ------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  background: var(--canvas);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* Tabular figures for values and timestamps (spec §4.3). */
+.tnum,
+.stat-value,
+time,
+.badge,
+.metric-row dt {
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-strong);
+}
+
+/* Focus is always visible: a 3px ring with a 2px offset (spec §4.3). Never
+ * remove an outline without a replacement. */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---- Layout shell ------------------------------------------------------ */
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  background: var(--surface);
+  color: var(--accent-strong);
+  padding: 12px 16px;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.skip-link:focus {
+  left: 16px;
+  top: 16px;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.brand img {
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+
+.brand-name {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.health-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.health-pill .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: none;
+}
+.health-pill[data-health='healthy'] .dot { background: var(--success); }
+.health-pill[data-health='backing-off'] .dot { background: var(--warning); }
+.health-pill[data-health='attention'] .dot { background: var(--danger); }
+.health-pill[data-health='waiting'] .dot { background: var(--text-muted); }
+
+/* Compact health summary in the header (spec §6.1). */
+.health-summary {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 4px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+.health-summary .health-label {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+.health-summary .health-detail {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* The primary tab strip is the only sticky element (spec §5.2). */
+.primary-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  text-align: center;
+  min-width: 0;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.tab:hover {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+.tab[aria-current='page'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+/* The secondary tab strip may scroll horizontally on phone (spec §5.2). */
+.subnav {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 16px;
+  margin: 0;
+  scrollbar-width: thin;
+}
+.subnav .tab {
+  flex: none;
+  min-width: 88px;
+}
+
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.app-footer {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Page header ------------------------------------------------------- */
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.page-header .title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.page-header h1 {
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  font-weight: 750;
+  line-height: 1.15;
+  color: var(--text);
+}
+.page-header .description {
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+.breadcrumb a {
+  color: var(--text-muted);
+}
+.breadcrumb a:hover {
+  color: var(--accent);
+}
+.breadcrumb .sep {
+  color: var(--border);
+}
+
+/* ---- Health banner (spec §6.1) ---------------------------------------- */
+
+.health-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  margin-bottom: 24px;
+  background: var(--surface-subtle);
+}
+.health-banner[data-health='healthy'] { background: var(--success-soft); border-color: var(--success); }
+.health-banner[data-health='backing-off'] { background: var(--warning-soft); border-color: var(--warning); }
+.health-banner[data-health='attention'] { background: var(--danger-soft); border-color: var(--danger); }
+.health-banner .label {
+  font-weight: 700;
+  font-size: 1.0625rem;
+}
+.health-banner .detail {
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+/* ---- Cards / stat grid ------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.card h2,
+.card .card-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.stat-card .stat-label {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+.stat-card .stat-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-word;
+}
+.stat-card .stat-sub {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* ---- Badges (spec §4.4) ----------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.badge[data-tone='success'] { background: var(--success-soft); border-color: var(--success); color: var(--success); }
+.badge[data-tone='warning'] { background: var(--warning-soft); border-color: var(--warning); color: var(--warning); }
+.badge[data-tone='danger'] { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+.badge[data-tone='neutral'] { background: var(--surface-subtle); border-color: var(--border); color: var(--text-muted); }
+/* Colour is never the only cue: each badge also carries its text label. */
+
+/* ---- Notices (spec §4.4, §8) ------------------------------------------ */
+
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+  background: var(--surface-subtle);
+}
+.notice[data-tone='success'] { background: var(--success-soft); border-color: var(--success); }
+.notice[data-tone='warning'] { background: var(--warning-soft); border-color: var(--warning); }
+.notice[data-tone='danger'] { background: var(--danger-soft); border-color: var(--danger); }
+.notice[data-tone='info'] { background: var(--surface-subtle); border-color: var(--border); }
+.notice .notice-title {
+  font-weight: 700;
+}
+.notice .notice-body {
+  color: var(--text);
+  font-size: 0.9375rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.notice .notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ---- Buttons (spec §4.3: ≥44px targets) ------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+.btn:hover {
+  background: var(--surface-subtle);
+}
+.btn[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+[data-theme='light'] .btn-primary {
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--accent-strong);
+}
+.btn-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+.btn-ghost {
+  background: transparent;
+}
+
+/* ---- Forms (spec §4.3, §5.2) ------------------------------------------ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.field label {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--text);
+}
+.field .help {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+.field .error {
+  font-size: 0.8125rem;
+  color: var(--danger);
+}
+
+input[type='text'],
+input[type='number'],
+input[type='password'],
+input[type='search'],
+select,
+textarea {
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 16px; /* 16px on phone prevents browser zoom (spec §5.2). */
+  font-family: inherit;
+  width: 100%;
+}
+textarea {
+  min-height: 120px;
+  line-height: 1.5;
+  resize: vertical;
+}
+textarea.mono,
+input.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+input[type='checkbox'],
+input[type='radio'] {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  accent-color: var(--accent);
+}
+
+/* The switch-like freebie checkbox (spec §6.5). */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+.switch input {
+  width: 22px;
+  height: 22px;
+}
+
+/* Segmented type control (spec §6.3). */
+.segmented {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.segmented label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 650;
+}
+.segmented input {
+  width: 22px;
+  height: 22px;
+}
+.segmented label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+/* A show/hide control paired with a secret field. */
+.reveal-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.reveal-row input {
+  flex: 1;
+}
+.reveal-row .btn {
+  flex: none;
+  width: 44px;
+  padding: 0;
+}
+
+/* ---- Data tables (spec §4.4, §5.2) ----------------------------------- */
+
+.data-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.data-table th {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+.data-table a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.form-card,
+.settings-card {
+  width: 100%;
+  max-width: 720px;
+  margin-top: 24px;
+}
+.rule-actions,
+.notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+}
+.inline-form {
+  display: inline-flex;
+  flex-direction: column;
+}
+.status-details {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
+  gap: 12px 16px;
+  max-width: 720px;
+}
+.status-details dt {
+  color: var(--text-muted);
+  font-weight: 650;
+}
+.status-details dd {
+  min-width: 0;
+}
+.summary-count {
+  margin: 16px 0;
+  color: var(--text-muted);
+}
+.switch > span {
+  display: flex;
+  flex-direction: column;
+}
+.switch small {
+  color: var(--text-muted);
+}
+
+/* Phone: the table becomes stacked cards. The <thead> is visually hidden
+ * (not removed), each <td> carries a data-label, and each row reads without
+ * horizontal scrolling (spec §5.2, D5). */
+@media (max-width: 719px) {
+  .tab {
+    padding-inline: 4px;
+  }
+  .data-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .data-table,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    display: block;
+    width: 100%;
+  }
+  .data-table tr {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    margin-bottom: 12px;
+    padding: 8px 0;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .data-table td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: none;
+    padding: 8px 16px;
+  }
+  .data-table td::before {
+    content: attr(data-label);
+    font-weight: 650;
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    flex: none;
+  }
+  .data-table td .cell-value {
+    text-align: right;
+    word-break: break-word;
+  }
+  .form-actions .btn-primary {
+    width: 100%;
+  }
+  .reveal-row input {
+    min-width: 0;
+  }
+}
+
+/* A compact metric row inside a phone rule card (spec §6.2). */
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 8px 0;
+}
+.metric-row .metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.metric-row dt {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 650;
+}
+.metric-row dd {
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+/* ---- Empty state (spec §4.4) ----------------------------------------- */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 32px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.empty-state .empty-title {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.empty-state .empty-body {
+  max-width: 480px;
+}
+.empty-state .empty-action {
+  margin-top: 8px;
+}
+
+/* ---- Dialog (spec §4.4, §8) ------------------------------------------ */
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.45);
+}
+.dialog {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+.dialog h2 {
+  font-size: 1.25rem;
+  font-weight: 750;
+  margin-bottom: 8px;
+}
+.dialog p {
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+.dialog .dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ---- Theme control ---------------------------------------------------- */
+
+.theme-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-size: 0.875rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+/* ---- Provider cards (spec §6.6) -------------------------------------- */
+
+.provider-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.provider-card .provider-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.provider-card .provider-head h2 {
+  margin: 0;
+  flex: 1;
+}
+.provider-card details {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.provider-card summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 650;
+  color: var(--accent);
+}
+.provider-card .provider-form {
+  margin-top: 12px;
+}
+
+/* ---- Alert/suppression lists (spec §6.4) ----------------------------- */
+
+.alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.alert-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 16px;
+}
+.alert-item .alert-title {
+  flex: 1;
+  font-weight: 650;
+}
+.alert-item .alert-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* ---- Local time ------------------------------------------------------ */
+
+.local-time {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.local-time .local-time-value {
+  font-weight: 650;
+}
+.local-time .local-time-iso {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ---- Tablet (spec §5.3) --------------------------------------------- */
+
+@media (min-width: 720px) {
+  .app-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .app-main {
+    padding: 24px;
+  }
+  .stat-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .page-header h1 {
+    font-size: clamp(1.75rem, 3vw, 2.1rem);
+  }
+}
+
+/* ---- Desktop (spec §5.4) -------------------------------------------- */
+
+@media (min-width: 1080px) {
+  .app-shell {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+  .app-main {
+    padding: 32px;
+  }
+  .stat-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .app-header {
+    padding: 24px 32px;
+  }
+  .primary-tabs {
+    padding: 8px 32px;
+  }
+  .subnav {
+    padding: 8px 32px;
+  }
+}
+
+/* ---- Reduced motion (spec §4.3, §8) --------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- Forced colours: do not suppress the browser's high-contrast
+ * defaults (spec §4.2). ---------------------------------------------- */
+
+@media (forced-colors: active) {
+  .tab[aria-current='page'] {
+    border: 2px solid CanvasText;
+  }
+  .btn,
+  .theme-control,
+  .badge,
+  .health-pill {
+    border: 1px solid var(--canvas);
+  }
+}
+
+/* ---- Print ---------------------------------------------------------- */
+
+@media print {
+  .primary-tabs,
+  .subnav,
+  .theme-control,
+  .skip-link {
+    display: none;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  .card,
+  .stat-card,
+  .data-table {
+    box-shadow: none;
+  }
+}

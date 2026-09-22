@@ -16,7 +16,7 @@ import {
   closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** The repository root (this file lives in test/support/). */
@@ -53,6 +53,21 @@ export function buildIsCurrent(root = REPO_ROOT) {
     if (newestMtime(path) > builtAt) return false;
   }
   return true;
+}
+
+/**
+ * Next can infer the primary checkout as its tracing root when this suite runs
+ * from a linked worktree. In that case standalone output is nested below
+ * `.worktrees/<name>` instead of being directly executable. Mirror the traced
+ * application to the location used by the Dockerfile and test server.
+ */
+function normalizeWorktreeStandalone(root) {
+  const standalone = join(root, '.next', 'standalone');
+  const server = join(standalone, 'server.js');
+  const tracedApp = join(standalone, '.worktrees', basename(root));
+  if (!existsSync(server) && existsSync(join(tracedApp, 'server.js'))) {
+    cpSync(tracedApp, standalone, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -117,6 +132,7 @@ export async function ensureBuild(root = REPO_ROOT) {
           writeFileSync(failedPath, message);
           throw new Error(message);
         }
+        normalizeWorktreeStandalone(root);
         return { built: true, ms: Date.now() - started };
       } finally {
         dropLock();
@@ -143,6 +159,7 @@ export async function ensureBuild(root = REPO_ROOT) {
  * @param {string} root
  */
 export function prepareStandaloneRuntime(root = REPO_ROOT) {
+  normalizeWorktreeStandalone(root);
   const standalone = join(root, '.next', 'standalone');
   const staticSrc = join(root, '.next', 'static');
   if (existsSync(staticSrc)) {
