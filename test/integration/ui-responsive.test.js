@@ -1,21 +1,14 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { insertRules, openTempStore } from '../support/integration.js';
 import { startJwksServer } from '../support/jwks.js';
-import { ensureBuild, REPO_ROOT, startAppServer } from '../support/app-server.js';
+import { ensureBuild, startAppServer } from '../support/app-server.js';
 import { collectPageErrors, launchBrowser, newAuthedContext } from '../support/browser.js';
 
 const TEAM_DOMAIN = 'responsive.cloudflareaccess.com';
 const AUDIENCE = 'responsive-audience';
 const CSRF_SECRET = 'responsive-csrf-secret-with-enough-entropy';
-
-function copyWorktreeStandaloneIfNeeded() {
-  const standalone = join(REPO_ROOT, '.next', 'standalone');
-  const tracedApp = join(standalone, '.worktrees', basename(REPO_ROOT));
-  if (existsSync(join(tracedApp, 'server.js'))) cpSync(tracedApp, standalone, { recursive: true, force: true });
-}
 
 describe('integration: responsive themed UI', () => {
   let jwks;
@@ -30,7 +23,6 @@ describe('integration: responsive themed UI', () => {
     const now = new Date().toISOString();
     insertRules(temp.store, [{ id: 1, type: 'match', parameters: { term: 'responsive router' }, cooldown_seconds: 0, created_at: now, modified_at: now }]);
     await ensureBuild();
-    copyWorktreeStandaloneIfNeeded();
     app = await startAppServer({ env: {
       OZB_DB_PATH: temp.dbPath,
       OZB_SNAPSHOT_PATH: join(temp.dir, 'snapshot.db'),
