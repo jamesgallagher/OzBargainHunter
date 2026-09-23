@@ -50,8 +50,13 @@ const legacyPath = `${unraidDir}my-OzBargainHunter.xml`;
 const verifierPath = `${unraidDir}verify-ozbargain-hunter.sh`;
 const updaterPath = `${unraidDir}update-ozbargain-hunter-icon.sh`;
 
-/** The reviewed repository artifact digest (D2). */
-const EXPECTED_TEMPLATE_SHA256 = '982d6d77f2210e908c141dccbf1ca65e8828a5fe0474f1191cca8bcc606fb397';
+/**
+ * The reviewed repository artifact digest (D2). This is the SHA-256 of the
+ * committed blob, which is canonical LF (the repo normalizes CRLF->LF on
+ * commit via core.autocrlf, so the blob is always LF). Pin the LF digest,
+ * not the CRLF working-tree form on a Windows checkout.
+ */
+const EXPECTED_TEMPLATE_SHA256 = 'eea03eac7f748170b243a39548bc38311e16a781d8ee255b1a8ac2a2d6001f50';
 
 /**
  * Extract the content of every `<Config ...>content</Config>` element as
