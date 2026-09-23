@@ -157,3 +157,82 @@ test('forgetValidators on a URL with no cached state does not throw and leaves n
     cleanup();
   }
 });
+
+// A transport whose first fetch stays pending until the test releases it, so
+// the first request holds the in-flight slot while a concurrent caller must
+// queue. Records the peak number of fetches in flight.
+function makeDelayingTransport() {
+  let calls = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let releaseFirst = null;
+  function settle(value) {
+    inFlight -= 1;
+    return value;
+  }
+  return {
+    get calls() {
+      return calls;
+    },
+    get maxInFlight() {
+      return maxInFlight;
+    },
+    get releaseFirst() {
+      return releaseFirst;
+    },
+    fetch() {
+      calls += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const response = { status: 200, headers: {}, body: '<rss></rss>', bytes: 11 };
+      if (calls === 1) {
+        // Pending until the test releases it: the first request stays in
+        // flight, so a concurrent caller must queue behind it.
+        return new Promise((resolve) => {
+          releaseFirst = () => resolve(settle(response));
+        });
+      }
+      return Promise.resolve(settle(response));
+    },
+  };
+}
+
+test('a concurrent request queues behind the in-flight one instead of throwing; both resolve and the transport never sees two in flight', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-client-'));
+  const dbPath = join(dir, 'test.db');
+  const store = openStore({ path: dbPath, clock: fixedClock('2026-09-19T06:20:00Z') });
+  const transport = makeDelayingTransport();
+  const client = createOzbClient({
+    transport,
+    store,
+    clock: fixedClock('2026-09-19T06:20:00Z'),
+    random: { next: () => 0.5 },
+    config: {},
+    log: () => {},
+  });
+
+  try {
+    const urlA = 'https://www.ozbargain.com.au/deals/feed?page=0';
+    const urlB = 'https://www.ozbargain.com.au/classified';
+    const a = client.request(urlA);
+    const b = client.request(urlB);
+
+    // Let A's executeRequest start: it calls transport.fetch, which stays
+    // pending until released, so A holds the in-flight slot. setImmediate
+    // runs after the microtask queue drains, so by then A's fetch is in
+    // flight and B is still queued behind it.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(transport.calls, 1, 'the queued request must not start while the first is in flight');
+
+    transport.releaseFirst();
+    const [ra, rb] = await Promise.all([a, b]);
+
+    assert.equal(ra.class, 'ok');
+    assert.equal(rb.class, 'ok');
+    assert.equal(transport.calls, 2);
+    assert.equal(transport.maxInFlight, 1, 'the transport must never see two requests in flight');
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

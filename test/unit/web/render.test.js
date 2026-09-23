@@ -182,11 +182,11 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /\/thresholds\/freebie/, 'the freebie form posts to its own segment');
   });
 
-  test('screen 8 (delivery) renders the provider, credential input and test-send', async () => {
+  test('screen 8 (delivery) renders the mechanism cards and test-send', async () => {
     const html = renderToStaticMarkup(await DeliveryPage());
     assert.match(html, /Delivery/, 'the screen heading');
-    assert.match(html, /email/, 'the provider kind');
-    assert.match(html, /Credentials \(JSON\)/, 'the credential input');
+    assert.match(html, /Email \(SMTP\)/, 'the saved email mechanism card');
+    assert.match(html, /Add Brevo SMTP delivery/, 'the Brevo mechanism add button');
     assert.match(html, /Test send/, 'the test-send button');
     assert.match(html, /\/delivery\/save/, 'the save form posts to its own segment');
     assert.match(html, /\/delivery\/test-send/, 'the test-send form posts to its own segment');
