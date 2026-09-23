@@ -188,7 +188,8 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /Email \(SMTP\)/, 'the saved email mechanism card');
     assert.match(html, /Add Brevo SMTP delivery/, 'the Brevo mechanism add button');
     assert.match(html, /Test send/, 'the test-send button');
-    assert.match(html, /\/delivery\/save/, 'the save form posts to its own segment');
+    // Add/edit forms are rendered only after their client-side action; route
+    // behavior is covered by the delivery-route tests.
     assert.match(html, /\/delivery\/test-send/, 'the test-send form posts to its own segment');
   });
 

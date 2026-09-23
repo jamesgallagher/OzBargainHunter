@@ -186,10 +186,10 @@ describe('integration: browser UI and test-send shakeout', () => {
     // The pre-seeded ntfy provider is a saved card: open its edit form and
     // re-save the configured target through the mechanism's field inputs.
     await ntfyCard.locator('button', { hasText: 'Edit' }).click();
-    const editForm = ntfyCard.locator('form');
-    await editForm.locator('input[name="url"]').fill(sink.origin);
-    await editForm.locator('input[name="topic"]').fill('alerts');
-    await editForm.locator('input[name="selected"]').check();
+    const ntfyEditForm = ntfyCard.locator('form');
+    await ntfyEditForm.locator('input[name="url"]').fill(sink.origin);
+    await ntfyEditForm.locator('input[name="topic"]').fill('alerts');
+    await ntfyEditForm.locator('input[name="selected"]').check();
     await submit(page, 'form.provider-form', 'button[type="submit"]', '/delivery/save');
     await expectHeading(page, '/delivery', 'Delivery');
     const savedNtfy = JSON.parse(temp.store.getProvider('ntfy').config);
