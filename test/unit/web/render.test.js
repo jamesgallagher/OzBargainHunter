@@ -106,7 +106,7 @@ describe('render: one render test per screen (7.1)', () => {
     store.insertSuppression({ poll_at: now, node_id: dealsFixture.records[1].node_id, rule_id: 2, kind: 'cooldown', detail: 'within cooldown' });
 
     // Screen 8 (delivery): a selected provider.
-    store.upsertProvider('email', JSON.stringify({ to: 'a@example.com' }), true);
+    store.upsertProvider('matrix', JSON.stringify({ homeserver: 'https://matrix.example.com', room: '!r:example.com' }), true);
 
     // Screen 9 (classifieds session): a valid uid and a last-confirmed instant.
     store.setSetting('classifieds_last_uid', '226301');
@@ -185,12 +185,24 @@ describe('render: one render test per screen (7.1)', () => {
   test('screen 8 (delivery) renders the mechanism cards and test-send', async () => {
     const html = renderToStaticMarkup(await DeliveryPage());
     assert.match(html, /Delivery/, 'the screen heading');
-    assert.match(html, /Email \(SMTP\)/, 'the saved email mechanism card');
+    assert.match(html, /Matrix/, 'the Matrix mechanism card');
     assert.match(html, /Add Brevo SMTP delivery/, 'the Brevo mechanism add button');
     assert.match(html, /Test send/, 'the test-send button');
     // Add/edit forms are rendered only after their client-side action; route
     // behavior is covered by the delivery-route tests.
     assert.match(html, /\/delivery\/test-send/, 'the test-send form posts to its own segment');
+  });
+
+  test('screen 8 marks unsupported saved providers and does not offer them for test-send', async () => {
+    store.upsertProvider('email', JSON.stringify({ to: 'legacy@example.com' }), true);
+    try {
+      const html = renderToStaticMarkup(await DeliveryPage());
+      assert.match(html, /Unsupported saved delivery: email/);
+      assert.match(html, /Delete saved email configuration/);
+      assert.doesNotMatch(html, /<option[^>]*value="email"/);
+    } finally {
+      store.deleteProvider('email');
+    }
   });
 
   test('screen 9 (classifieds session) renders validity, last-confirmed and the cookie form', async () => {
@@ -277,7 +289,7 @@ describe('render: the CSRF hidden input (M-m8)', () => {
   before(() => {
     dir = mkdtempSync(join(tmpdir(), 'ozb-csrf-'));
     store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
-    store.upsertProvider('email', JSON.stringify({ to: 'a@example.com' }), true);
+    store.upsertProvider('matrix', JSON.stringify({ homeserver: 'https://matrix.example.com', room: '!r:example.com' }), true);
     setStoreForTest(store);
   });
   after(() => {

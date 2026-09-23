@@ -14,7 +14,7 @@ import {
 import { normalise, tokenise, containsTerm } from '../../../lib/rules/normalise.js';
 import { matchRule, isClassifiedsEligible } from '../../../lib/rules/match.js';
 import { validateThresholdRule, reachedThreshold, MAX_WINDOW_MS } from '../../../lib/rules/threshold.js';
-import { emailProvider } from '../../../lib/notify/email.js';
+import { brevoProvider } from '../../../lib/notify/brevo.js';
 import { matrixProvider } from '../../../lib/notify/matrix.js';
 import { ntfyProvider } from '../../../lib/notify/ntfy.js';
 import { evaluateFreebies, FREEBIE_SETTING_KEY } from '../../../lib/notify/freebie.js';
@@ -715,14 +715,14 @@ describe('notify: fan-out and per-provider failure counting', () => {
     const calls = { a: 0, b: 0, c: 0 };
     const okSender = { to: 'x@example.com' };
     const fail = () => { throw new Error('boom'); };
-    const pA = emailProvider({ sendMail: async () => { calls.a += 1; } });
+    const pA = brevoProvider({ sendMail: async () => { calls.a += 1; } });
     const pB = matrixProvider({ postMessage: async () => { calls.b += 1; } });
     const pC = ntfyProvider({ publish: async () => { calls.c += 1; } });
     return { calls, providers: [pA, pB, pC], okSender };
   }
 
   function seedProviders(store) {
-    for (const kind of ['email', 'matrix', 'ntfy']) {
+    for (const kind of ['brevo_smtp', 'matrix', 'ntfy']) {
       store.upsertProvider(kind, JSON.stringify({ to: 'x@example.com', room: 'r', topic: 't' }), true);
     }
   }
@@ -742,8 +742,8 @@ describe('notify: fan-out and per-provider failure counting', () => {
   it('a provider failing five consecutive times is disabled; the others keep delivering; a success resets the counter', async () => {
     const store = makeStore();
     seedProviders(store);
-    // Make only the email provider fail.
-    const failProvider = emailProvider({ sendMail: async () => { throw new Error('boom'); } });
+    // Make only the brevo provider fail.
+    const failProvider = brevoProvider({ sendMail: async () => { throw new Error('boom'); } });
     const okMatrix = matrixProvider({ postMessage: async () => {} });
     const okNtfy = ntfyProvider({ publish: async () => {} });
     const providers = [failProvider, okMatrix, okNtfy];
@@ -753,22 +753,22 @@ describe('notify: fan-out and per-provider failure counting', () => {
     for (let i = 0; i < 4; i += 1) {
       await fanout({ notifications: one, providers, store, clock: frozenClock(POLL_1_AT) });
     }
-    assert.equal(store.getProvider('email').enabled, 1, 'still enabled after 4 failures');
+    assert.equal(store.getProvider('brevo_smtp').enabled, 1, 'still enabled after 4 failures');
     // The fifth failure disables it.
     const r5 = await fanout({ notifications: one, providers, store, clock: frozenClock(POLL_1_AT) });
-    assert.equal(store.getProvider('email').enabled, 0, 'disabled after 5 consecutive failures');
-    assert.ok(r5.disabled.includes('email'));
-    assert.ok(r5.notices.some((n) => n.provider === 'email' && n.lastError === 'boom'), 'UI notice names provider, time, last error');
+    assert.equal(store.getProvider('brevo_smtp').enabled, 0, 'disabled after 5 consecutive failures');
+    assert.ok(r5.disabled.includes('brevo_smtp'));
+    assert.ok(r5.notices.some((n) => n.provider === 'brevo_smtp' && n.lastError === 'boom'), 'UI notice names provider, time, last error');
     // The others are unaffected: still selected and enabled.
     assert.equal(store.getProvider('matrix').enabled, 1);
     assert.equal(store.getProvider('ntfy').enabled, 1);
     // A success before the fifth failure resets the counter.
-    store.setProviderEnabled('email', 1, '2026-09-19T08:00:00Z');
-    store.recordProviderSuccess('email');
-    const goodEmail = emailProvider({ sendMail: async () => {} });
-    const mixed = [goodEmail, okMatrix, okNtfy];
+    store.setProviderEnabled('brevo_smtp', 1, '2026-09-19T08:00:00Z');
+    store.recordProviderSuccess('brevo_smtp');
+    const goodBrevo = brevoProvider({ sendMail: async () => {} });
+    const mixed = [goodBrevo, okMatrix, okNtfy];
     await fanout({ notifications: one, providers: mixed, store, clock: frozenClock(POLL_1_AT) });
-    assert.equal(store.getProvider('email').consecutive_failures, 0, 'counter reset by a success');
+    assert.equal(store.getProvider('brevo_smtp').consecutive_failures, 0, 'counter reset by a success');
   });
 });
 
@@ -852,8 +852,8 @@ describe('notify: links and the /goto/ prohibition', () => {
 describe('notify: deadman', () => {
   it('sends a high-priority alert when deadManState reports due, and nothing when not due', async () => {
     const store = makeStore();
-    store.upsertProvider('email', JSON.stringify({ to: 'x@example.com' }), true);
-    const provider = emailProvider({ sendMail: async () => {} });
+    store.upsertProvider('brevo_smtp', JSON.stringify({ to: 'x@example.com' }), true);
+    const provider = brevoProvider({ sendMail: async () => {} });
     const due = { due: true, step: '30min', elapsedMs: 30 * 60 * 1000 };
     const r = await sendDeadman({ deadmanState: due, providers: [provider], store, clock: frozenClock(POLL_1_AT) });
     assert.equal(r.sent, 1, 'sends when due');

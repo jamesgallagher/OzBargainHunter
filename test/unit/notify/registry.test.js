@@ -15,7 +15,7 @@ import { MECHANISMS, mechanismFor, mechanismView } from '../../../lib/notify/reg
 describe('registry: mechanism lookup', () => {
   test('mechanismFor returns each known kind and undefined for an unknown kind', () => {
     const kinds = MECHANISMS.map((m) => m.kind);
-    assert.deepEqual(kinds, ['email', 'matrix', 'ntfy', 'brevo_smtp']);
+    assert.deepEqual(kinds, ['matrix', 'ntfy', 'brevo_smtp']);
     for (const m of MECHANISMS) {
       assert.equal(mechanismFor(m.kind), m, `mechanismFor(${m.kind}) returns the same entry`);
     }
@@ -62,12 +62,7 @@ describe('registry: mechanismView strips build', () => {
 
 describe('registry: build returns a provider of the right kind', () => {
   test('each mechanism.build(row, config) returns a provider whose kind matches', () => {
-    // The email build reads SMTP server auth from config; a blank user means
-    // no auth, so no config values are required to construct the transport.
     const config = {};
-    const email = mechanismFor('email').build({ config: JSON.stringify({ to: 'a@example.com' }), selected: 1 }, config);
-    assert.equal(email.kind, 'email');
-    assert.ok(typeof email.send === 'function');
 
     const matrix = mechanismFor('matrix').build(
       { config: JSON.stringify({ homeserver: 'https://matrix.example.com', room: '!r:example.com' }), selected: 1 },

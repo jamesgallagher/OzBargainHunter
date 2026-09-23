@@ -50,8 +50,13 @@ const legacyPath = `${unraidDir}my-OzBargainHunter.xml`;
 const verifierPath = `${unraidDir}verify-ozbargain-hunter.sh`;
 const updaterPath = `${unraidDir}update-ozbargain-hunter-icon.sh`;
 
-/** The reviewed repository artifact digest (D2). */
-const EXPECTED_TEMPLATE_SHA256 = 'e1d266fe152a7ad3b803e7bba1ff26f2a116baf1127b9f0bf2cb3bde9767a57e';
+/**
+ * The reviewed repository artifact digest (D2). This is the SHA-256 of the
+ * committed blob, which is canonical LF (the repo normalizes CRLF->LF on
+ * commit via core.autocrlf, so the blob is always LF). Pin the LF digest,
+ * not the CRLF working-tree form on a Windows checkout.
+ */
+const EXPECTED_TEMPLATE_SHA256 = 'eea03eac7f748170b243a39548bc38311e16a781d8ee255b1a8ac2a2d6001f50';
 
 /**
  * Extract the content of every `<Config ...>content</Config>` element as
@@ -138,9 +143,9 @@ test('the template uses the canonical public icon URL', () => {
 test('every Mask=true Config element is empty in the repository template (message never echoes content)', () => {
   const masked = configElements(xml).filter((c) => c.attrs.Mask === 'true');
   // The template ships with its masked fields intentionally empty: health check
-  // secret, CSRF secret, the account cookie, SMTP password, the matrix token
-  // and the ntfy token.
-  assert.ok(masked.length >= 6, `expected at least 6 masked Config elements, got ${masked.length}`);
+  // secret, CSRF secret, the account cookie, the matrix token and the ntfy
+  // token.
+  assert.ok(masked.length >= 5, `expected at least 5 masked Config elements, got ${masked.length}`);
   const nonEmpty = masked.filter((c) => c.content !== '');
   // The failure message reports only the field name and the count — never the
   // (empty) content — so a regression can never leak a value.
@@ -198,7 +203,7 @@ test('the icon updater source is bounded (no docker, no masked-field target, no 
   assert.ok(!/\brebuild\b/.test(updater), 'the updater must not rebuild');
   assert.ok(!/\brestart\b/.test(updater), 'the updater must not restart the container');
   // No deployed masked-field target names.
-  for (const name of ['OZB_HEALTHCHECK_SECRET', 'OZB_CSRF_SECRET', 'EMAIL_SMTP_PASS', 'MATRIX_ACCESS_TOKEN', 'NTfy_TOKEN', 'OZB_ACCOUNT_COOKIE']) {
+  for (const name of ['OZB_HEALTHCHECK_SECRET', 'OZB_CSRF_SECRET', 'MATRIX_ACCESS_TOKEN', 'NTfy_TOKEN', 'OZB_ACCOUNT_COOKIE']) {
     assert.ok(!updater.includes(name), `the updater must not target masked field ${name}`);
   }
   // No generic Mask="true" processing.

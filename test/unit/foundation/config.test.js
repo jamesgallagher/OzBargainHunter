@@ -92,17 +92,15 @@ test('loadConfig normalizes whitespace-only secrets to empty (fail closed, D7)',
 });
 
 test('loadConfig does not trim the provider-owned opaque credentials (D7)', () => {
-  // OZB_ACCOUNT_COOKIE may contain cookie syntax; EMAIL_SMTP_PASS is a
-  // provider-defined password; MATRIX_ACCESS_TOKEN / NTfy_TOKEN are opaque.
-  // Their contract is byte-exact: the application must not strip their bytes.
+  // OZB_ACCOUNT_COOKIE may contain cookie syntax; MATRIX_ACCESS_TOKEN /
+  // NTfy_TOKEN are opaque. Their contract is byte-exact: the application
+  // must not strip their bytes.
   const config = loadConfig({
     OZB_ACCOUNT_COOKIE: '  leading-space-cookie',
-    EMAIL_SMTP_PASS: '  provider-password',
     MATRIX_ACCESS_TOKEN: '  opaque-token',
     NTfy_TOKEN: '  ntfy-token',
   });
   assert.equal(config.OZB_ACCOUNT_COOKIE, '  leading-space-cookie');
-  assert.equal(config.EMAIL_SMTP_PASS, '  provider-password');
   assert.equal(config.MATRIX_ACCESS_TOKEN, '  opaque-token');
   assert.equal(config.NTfy_TOKEN, '  ntfy-token');
 });

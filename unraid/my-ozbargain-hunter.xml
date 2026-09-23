@@ -37,7 +37,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/jamesgallagher/OzBargainHunter/issues</Support>
   <Project>https://github.com/jamesgallagher/OzBargainHunter</Project>
-  <Overview>Personal deal and classifieds watcher for OzBargain: a Next.js web UI and a five-minute poll loop in one container, with alerts delivered by email, Matrix or ntfy.</Overview>
+  <Overview>Personal deal and classifieds watcher for OzBargain: a Next.js web UI and a five-minute poll loop in one container, with alerts delivered by Brevo email, Matrix or ntfy.</Overview>
   <Category>Tools: Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8000]/</WebUI>
   <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png</Icon>
@@ -72,13 +72,6 @@
   <Config Name="Cloudflare Access audience" Target="CF_ACCESS_AUD" Default="" Mode="" Description="The Access application's AUD tag. Tokens are verified against it on every request." Type="Variable" Display="always" Required="true" Mask="false"></Config>
   <Config Name="Icon route public" Target="OZB_ICON_ROUTE_PUBLIC" Default="false" Mode="" Description="Exempt the icon route from the Access check, so a notification client can render the logo without a session (O15). true or false." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="OzBargain account cookie" Target="OZB_ACCOUNT_COOKIE" Default="" Mode="" Description="The session cookie for the classifieds section, pasted from the UI's session screen (screen 9). Until O21 is resolved this is how the classifieds session is supplied; the application never requests /user/login. Intentionally empty until the Sponsor sets it in the GUI." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
-
-  <Config Name="SMTP host" Target="EMAIL_SMTP_HOST" Default="" Mode="" Description="SMTP host for the email provider." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="SMTP port" Target="EMAIL_SMTP_PORT" Default="587" Mode="" Description="SMTP port. 0 means unset." Type="Variable" Display="advanced" Required="false" Mask="false">587</Config>
-  <Config Name="SMTP user" Target="EMAIL_SMTP_USER" Default="" Mode="" Description="SMTP username." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="SMTP password" Target="EMAIL_SMTP_PASS" Default="" Mode="" Description="SMTP password. Intentionally empty until the Sponsor sets it in the GUI." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
-  <Config Name="Email from" Target="EMAIL_FROM" Default="" Mode="" Description="The From address on alert emails." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="Email to" Target="EMAIL_TO" Default="" Mode="" Description="The To address on alert emails." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Matrix homeserver URL" Target="MATRIX_HOMESERVER_URL" Default="" Mode="" Description="The Matrix homeserver the matrix provider posts to." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Matrix access token" Target="MATRIX_ACCESS_TOKEN" Default="" Mode="" Description="The access token for the matrix provider (O11). Intentionally empty until the Sponsor sets it in the GUI." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
