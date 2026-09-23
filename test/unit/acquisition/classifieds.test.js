@@ -111,7 +111,7 @@ test('Minor 1: an expired 200 (uid 0) invalidates the persisted uid, so a later 
   const r3 = await runClassifiedsPoll({ client: c3, store, clock, log: () => {} });
   try {
     assert.equal(r3.state, 'expired');
-    assert.equal(r3.latched, false);
+    assert.equal(r3.latched, true);
   } finally {
     close();
   }
@@ -156,6 +156,7 @@ test('M1: the stored account cookie (screen 9) is sent on the classifieds reques
   // as a `Cookie` header, so a fresh cookie actually carries the session.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
+  store.deleteSetting('ozb_account_cookie');
   store.setSetting('ozb_account_cookie', 'session=abc123; uid=226301');
   const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
   try {
@@ -174,6 +175,7 @@ test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallb
   // M1: when the screen-9 setting is absent, the env value is the fallback.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
+  store.deleteSetting('ozb_account_cookie');
   const result = await runClassifiedsPoll({
     client,
     store,
@@ -191,17 +193,29 @@ test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallb
   }
 });
 
-test('M1: with neither a stored cookie nor the env value, no Cookie header is sent', async () => {
-  // M1: with no cookie anywhere, the request is sent with no `Cookie` header
-  // (the anonymous path, as before the consumer existed).
+test('with neither a stored cookie nor the env value, classifieds is skipped without a request', async () => {
+  // With no session configured, do not make an anonymous request to the site.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
-  const { client, store, clock, close } = makeAcquisition({ transport });
+  const { client, store, clock, close } = makeAcquisition({ transport, config: { OZB_ACCOUNT_COOKIE: '' } });
+  store.deleteSetting('ozb_account_cookie');
   const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
   try {
-    assert.equal(result.state, 'valid');
-    assert.equal(transport.requestLog.length, 1);
-    const headers = transport.requestLog[0].options.headers ?? {};
-    assert.equal(headers.cookie, undefined);
+    assert.equal(result.state, 'not_configured');
+    assert.equal(transport.requestLog.length, 0);
+  } finally {
+    close();
+  }
+});
+
+test('an expired session is not retried until a fresh cookie is set', async () => {
+  const transport = createFixtureTransport({ [URL]: { status: 403, fixture: 'http/cls403.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  try {
+    const first = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    const second = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    assert.equal(first.state, 'expired');
+    assert.equal(second.state, 'expired');
+    assert.equal(transport.requestLog.length, 1, 'the expired session is only checked once');
   } finally {
     close();
   }

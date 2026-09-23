@@ -29,6 +29,11 @@ export async function POST(request) {
   // the instant it was set.
   store.setSetting('ozb_account_cookie', cookie);
   store.setSetting('ozb_account_cookie_set_at', new Date().toISOString());
+  // A new credential explicitly re-arms classifieds polling. Clear the old
+  // expiry and validators so a stale 304 cannot conceal whether it works.
+  store.deleteSetting('classifieds_last_uid');
+  const classifiedsUrl = process.env.OZB_CLASSIFIEDS_URL ?? 'https://www.ozbargain.com.au/classified';
+  store.setFeedState(classifiedsUrl, null, null);
 
   return Response.json({ set: true });
 }
