@@ -51,7 +51,7 @@ const verifierPath = `${unraidDir}verify-ozbargain-hunter.sh`;
 const updaterPath = `${unraidDir}update-ozbargain-hunter-icon.sh`;
 
 /** The reviewed repository artifact digest (D2). */
-const EXPECTED_TEMPLATE_SHA256 = '5cf4bc5e88c68f945210b1129a945bddbbe4d86525b064ba3929df3fb602da52';
+const EXPECTED_TEMPLATE_SHA256 = 'e1d266fe152a7ad3b803e7bba1ff26f2a116baf1127b9f0bf2cb3bde9767a57e';
 
 /**
  * Extract the content of every `<Config ...>content</Config>` element as
