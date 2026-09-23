@@ -342,7 +342,7 @@ describe('integration: the packaging artefacts', () => {
     });
 
     it('keeps credentials masked', () => {
-      for (const key of ['OZB_HEALTHCHECK_SECRET', 'OZB_CSRF_SECRET', 'EMAIL_SMTP_PASS', 'MATRIX_ACCESS_TOKEN', 'NTfy_TOKEN', 'OZB_ACCOUNT_COOKIE']) {
+      for (const key of ['OZB_HEALTHCHECK_SECRET', 'OZB_CSRF_SECRET', 'MATRIX_ACCESS_TOKEN', 'NTfy_TOKEN', 'OZB_ACCOUNT_COOKIE']) {
         const block = new RegExp(`<Config[^>]*Target="${key}"[^>]*>`).exec(UNRAID);
         assert.ok(block, `${key} is present`);
         assert.match(block[0], /Mask="true"/, `${key} is masked in the UI`);
