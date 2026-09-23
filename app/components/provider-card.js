@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import AsyncForm from './async-form.js';
-import RevealableValue from './revealable-value.js';
 import { Badge } from './ui.js';
 
 /**
@@ -11,16 +10,16 @@ import { Badge } from './ui.js';
  * lifecycle:
  *
  * - **Not added** → an "Add {label} delivery" button reveals the add form.
- * - **Added** → View (read-only; sensitive fields masked, revealable), Edit
+ * - **Added** → View (read-only; sensitive values stay server-side), Edit
  *   (pre-filled form), and Delete (confirm-gated POST to `/delivery/delete`).
  *
  * Add and Edit both POST to `/delivery/save`; the fields are driven by the
- * mechanism's `fields` definition. Sensitive fields render as password inputs in
- * the form and as a masked, revealable value in the view.
+ * mechanism's `fields` definition. Sensitive fields render as empty password
+ * inputs in edit mode; stored values are never passed to this client component.
  *
  * @param {{
  *   mechanism: { kind: string, label: string, addLabel: string, fields: object[] },
- *   existing: { config: object, selected: boolean, enabled: boolean, consecutive_failures: number } | null,
+ *   existing: { config: object, sensitiveConfigured: object, selected: boolean, enabled: boolean, consecutive_failures: number } | null,
  *   token: string
  * }} props
  */
@@ -43,7 +42,9 @@ export default function ProviderCard({ mechanism, existing, token }) {
           name={field.name}
           type={type}
           defaultValue={value}
-          placeholder={field.placeholder}
+          placeholder={field.sensitive && isSaved && existing.sensitiveConfigured[field.name]
+            ? 'Leave blank to keep the saved value'
+            : field.placeholder}
           autoComplete="off"
         />
         {field.help ? <span className="help">{field.help}</span> : null}
@@ -128,7 +129,9 @@ export default function ProviderCard({ mechanism, existing, token }) {
                 <div className="field" key={f.name}>
                   <span className="field-label">{f.label}</span>
                   {f.sensitive ? (
-                    <RevealableValue value={existing.config[f.name] ?? ''} label={f.label} />
+                    <span className="mono">
+                      {existing.sensitiveConfigured[f.name] ? 'Configured' : '(not set)'}
+                    </span>
                   ) : (
                     <span className="mono">
                       {existing.config[f.name] ? existing.config[f.name] : '(not set)'}
@@ -143,7 +146,7 @@ export default function ProviderCard({ mechanism, existing, token }) {
             <AsyncForm action="/delivery/save" formClassName="provider-form" successMessage={`${label} saved.`}>
               <input type="hidden" name="_csrf" value={token} />
               <input type="hidden" name="kind" value={kind} />
-              {fields.map((f) => fieldInput(f, existing.config[f.name] ?? ''))}
+              {fields.map((f) => fieldInput(f, f.sensitive ? '' : existing.config[f.name] ?? ''))}
               <label className="switch">
                 <input type="checkbox" name="selected" defaultChecked={existing.selected} /> Select {label}
               </label>

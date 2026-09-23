@@ -54,6 +54,14 @@ export default async function DeliveryPage() {
       <div className="provider-cards">
         {MECHANISMS.map((m) => {
           const row = byKind.get(m.kind);
+          const config = row ? safeParse(row.config) : {};
+          const sensitiveFields = new Set(m.fields.filter((field) => field.sensitive).map((field) => field.name));
+          const clientConfig = Object.fromEntries(
+            Object.entries(config).filter(([name]) => !sensitiveFields.has(name)),
+          );
+          const sensitiveConfigured = Object.fromEntries(
+            [...sensitiveFields].map((name) => [name, Boolean(config[name])]),
+          );
           return (
             <ProviderCard
               key={m.kind}
@@ -61,7 +69,8 @@ export default async function DeliveryPage() {
               existing={
                 row
                   ? {
-                    config: safeParse(row.config),
+                    config: clientConfig,
+                    sensitiveConfigured,
                     selected: !!row.selected,
                     enabled: !!row.enabled,
                     consecutive_failures: row.consecutive_failures ?? 0,

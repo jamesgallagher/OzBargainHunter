@@ -31,11 +31,27 @@ export async function POST(request) {
   const mechanism = mechanismFor(kind);
   let config;
   if (mechanism) {
+    // Blank sensitive fields during edits preserve the server-side value. The
+    // client never receives stored secrets, so it cannot prefill them.
+    const currentRow = store.getProvider(kind);
+    let currentConfig = {};
+    try {
+      const parsed = JSON.parse(currentRow?.config ?? '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        currentConfig = parsed;
+      }
+    } catch {
+      currentConfig = {};
+    }
+
     // Assemble the config from the mechanism's field definitions. A required
-    // field that is blank is rejected before anything is written.
+    // field that is blank and has no existing value is rejected.
     config = {};
     for (const field of mechanism.fields) {
-      const value = (typeof body[field.name] === 'string' ? body[field.name] : '').trim();
+      const submitted = (typeof body[field.name] === 'string' ? body[field.name] : '').trim();
+      const value = field.sensitive && !submitted
+        ? (typeof currentConfig[field.name] === 'string' ? currentConfig[field.name] : '')
+        : submitted;
       if (field.required && !value) {
         return new Response(`${field.label} is required`, { status: 400 });
       }
