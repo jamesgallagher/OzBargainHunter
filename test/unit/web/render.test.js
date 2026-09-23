@@ -120,8 +120,8 @@ describe('render: one render test per screen (7.1)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('screen 1 (status) renders the seeded poll state and counts', () => {
-    const html = renderToStaticMarkup(StatusPage());
+  test('screen 1 (status) renders the seeded poll state and counts', async () => {
+    const html = renderToStaticMarkup(await StatusPage());
     assert.match(html, /Status/, 'the screen heading');
     assert.match(html, /2026-09-19T07:30:00Z/, 'the last successful poll timestamp');
     assert.match(html, /ok/, 'the last response class');
@@ -130,10 +130,37 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /Observations/, 'the observations label');
   });
 
-  test('the status screen counts the fixture deals (M-m8)', () => {
-    const html = renderToStaticMarkup(StatusPage());
+  test('the status screen counts the fixture deals (M-m8)', async () => {
+    const html = renderToStaticMarkup(await StatusPage());
     const dealsFixture = JSON.parse(readFileSync(join(FIXTURES, 'deals-page0.json'), 'utf8'));
     assert.match(html, new RegExp(`<span class="stat-value">${dealsFixture.records.length}</span>`), 'the fixture deal count is shown');
+  });
+
+  test('the status screen lists failures newest-first, capped at ten, with show-more and clear controls', async () => {
+    // Seed 15 failures in order; the last inserted (fail-15) is the newest and
+    // gets the highest id, so getFailures() (ORDER BY id DESC) puts it first.
+    for (let i = 1; i <= 15; i += 1) {
+      const n = String(i).padStart(2, '0');
+      store.insertFailure({
+        failed_at: `2026-09-19T08:${n}:00Z`,
+        response_class: `fail-${n}`,
+        body: `failure body ${n}`,
+      });
+    }
+    const html = renderToStaticMarkup(await StatusPage());
+    assert.match(html, /fail-15/, 'the newest failure is shown');
+    assert.match(html, /fail-06/, 'the tenth-newest failure is the last of the default ten');
+    assert.doesNotMatch(html, /fail-05/, 'the eleventh-newest failure is hidden by default');
+    assert.match(html, /Show more/, 'the show-more control is offered while rows remain');
+    assert.match(html, /Clear failures/, 'the clear-failures control is offered');
+    assert.match(html, /\/failures\/clear/, 'the clear control posts to its own segment');
+  });
+
+  test('the status screen shows the empty state when there are no failures', async () => {
+    store.clearFailures();
+    const html = renderToStaticMarkup(await StatusPage());
+    assert.match(html, /No recent failures\./, 'the empty state is shown');
+    assert.doesNotMatch(html, /Show more/, 'no show-more control when there is nothing to reveal');
   });
 
   test('screen 2 (rules list) renders both rules with their state', () => {
@@ -253,15 +280,15 @@ describe('render: the layout last-checked timestamp (M-m8)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('a page rendered inside the layout shows the last-checked instant', () => {
-    const html = renderToStaticMarkup(createElement(Layout, null, renderToStaticMarkup(StatusPage())));
+  test('a page rendered inside the layout shows the last-checked instant', async () => {
+    const html = renderToStaticMarkup(createElement(Layout, null, renderToStaticMarkup(await StatusPage())));
     assert.match(html, /Last checked:/, 'the last-checked label');
     assert.match(html, /2026-09-19T07:30:00Z/, 'the last-checked instant (poll_state.last_success_at)');
     assert.match(html, /ok/, 'the last response class');
     assert.match(html, /backoff 30s/, 'the backoff in the header');
   });
 
-  test('the layout shows "never" when no poll has succeeded', () => {
+  test('the layout shows "never" when no poll has succeeded', async () => {
     // A fresh store with no poll_state row: the layout's `?? 'never'` fallback
     // applies. (setPollState preserves a stored last_success_at when passed
     // null, so a fresh store is the honest "no poll yet" state.)
@@ -269,7 +296,7 @@ describe('render: the layout last-checked timestamp (M-m8)', () => {
     const freshStore = openStore({ path: join(freshDir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
     setStoreForTest(freshStore);
     try {
-      const html = renderToStaticMarkup(createElement(Layout, null, renderToStaticMarkup(StatusPage())));
+      const html = renderToStaticMarkup(createElement(Layout, null, renderToStaticMarkup(await StatusPage())));
       assert.match(html, /Last checked: <time dateTime="never">never<\/time>/, 'no last success renders "never"');
     } finally {
       setStoreForTest(store);

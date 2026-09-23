@@ -424,3 +424,35 @@ test('deleteProvider removes a provider row and leaves other providers intact', 
     assert.equal(store.deleteProvider('matrix'), 0, 'a second delete of the same kind removes nothing');
   });
 });
+
+// clearFailures is the "clear failures" half of the Status screen: it removes
+// every row from the failures table and reports how many were removed, so a
+// second clear of an empty table reports zero.
+test('clearFailures removes every failure row and reports the count', () => {
+  withStore((store) => {
+    for (let i = 1; i <= 3; i += 1) {
+      store.insertFailure({ failed_at: `2026-09-19T06:${String(i).padStart(2, '0')}:00Z`, response_class: `class-${i}`, body: `body ${i}` });
+    }
+    assert.equal(store.getFailures().length, 3, 'three failures are present before the clear');
+
+    assert.equal(store.clearFailures(), 3, 'the clear removes exactly three rows');
+    assert.equal(store.getFailures().length, 0, 'no failures remain after the clear');
+    assert.equal(store.clearFailures(), 0, 'a second clear of an empty table removes nothing');
+  });
+});
+
+// getFailures returns the most recent failure first (ORDER BY id DESC), so the
+// Status screen can show the newest rows at the top.
+test('getFailures returns failures newest-first', () => {
+  withStore((store) => {
+    store.insertFailure({ failed_at: '2026-09-19T06:01:00Z', response_class: 'oldest', body: 'a' });
+    store.insertFailure({ failed_at: '2026-09-19T06:02:00Z', response_class: 'middle', body: 'b' });
+    store.insertFailure({ failed_at: '2026-09-19T06:03:00Z', response_class: 'newest', body: 'c' });
+
+    assert.deepEqual(
+      store.getFailures().map((f) => f.response_class),
+      ['newest', 'middle', 'oldest'],
+      'the newest failure is first',
+    );
+  });
+});

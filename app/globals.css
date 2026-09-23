@@ -693,6 +693,13 @@ input[type='radio'] {
   display: inline-flex;
   flex-direction: column;
 }
+.failure-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+}
 .status-details {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
