@@ -1,12 +1,13 @@
 /**
- * Screen 8 — Delivery: save provider selection + credentials (design 7.1, 9.2).
- * A state-changing route: gated on the access check and the CSRF check
- * (independent, 11.3.6).
+ * Screen 8 — Delivery: save a provider (delivery mechanisms). A state-changing
+ * route: gated on the access check and the CSRF check (independent, 11.3.6).
  *
- * X7: the delivery page rendered a read-only table with no credential input
- * and no writer — `upsertProvider` was never called from `app/`. This route
- * is the writer: it persists the provider's selection and credentials
- * (`config` JSON) via `store.upsertProvider`.
+ * The credentials are assembled from the mechanism's `fields` definition: each
+ * field's value is read from the form, a required field that is blank is
+ * rejected, and the assembled object is persisted via `store.upsertProvider`.
+ * A kind that is not in the registry falls back to the raw `config` JSON
+ * (blank = {}), so the route still works for a kind added to the store by
+ * another path.
  *
  * X1: lives in its own segment (`/delivery/save`) so it does not collide
  * with the `/delivery` page in the build.
@@ -14,6 +15,7 @@
 export async function POST(request) {
   const { requireAuthenticated, parseBodyOr400 } = await import('../../../lib/web/gate.js');
   const { getStore } = await import('../../../lib/web/db.js');
+  const { mechanismFor } = await import('../../../lib/notify/registry.js');
 
   const { body, error } = await parseBodyOr400(request);
   if (error) return error;
@@ -26,15 +28,45 @@ export async function POST(request) {
     return new Response('kind required', { status: 400 });
   }
 
-  // The credentials are a JSON object (the provider's config). Parse it; a
-  // blank field means "no credentials" ({}).
-  let config = {};
-  const rawConfig = typeof body.config === 'string' ? body.config.trim() : '';
-  if (rawConfig) {
+  const mechanism = mechanismFor(kind);
+  let config;
+  if (mechanism) {
+    // Blank sensitive fields during edits preserve the server-side value. The
+    // client never receives stored secrets, so it cannot prefill them.
+    const currentRow = store.getProvider(kind);
+    let currentConfig = {};
     try {
-      config = JSON.parse(rawConfig);
+      const parsed = JSON.parse(currentRow?.config ?? '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        currentConfig = parsed;
+      }
     } catch {
-      return new Response('config must be valid JSON', { status: 400 });
+      currentConfig = {};
+    }
+
+    // Assemble the config from the mechanism's field definitions. A required
+    // field that is blank and has no existing value is rejected.
+    config = {};
+    for (const field of mechanism.fields) {
+      const submitted = (typeof body[field.name] === 'string' ? body[field.name] : '').trim();
+      const value = field.sensitive && !submitted
+        ? (typeof currentConfig[field.name] === 'string' ? currentConfig[field.name] : '')
+        : submitted;
+      if (field.required && !value) {
+        return new Response(`${field.label} is required`, { status: 400 });
+      }
+      config[field.name] = value;
+    }
+  } else {
+    // Unknown kind: fall back to the raw config JSON (blank = {}).
+    config = {};
+    const rawConfig = typeof body.config === 'string' ? body.config.trim() : '';
+    if (rawConfig) {
+      try {
+        config = JSON.parse(rawConfig);
+      } catch {
+        return new Response('config must be valid JSON', { status: 400 });
+      }
     }
   }
   const selected = body.selected !== undefined && body.selected !== '' && body.selected !== '0';

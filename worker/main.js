@@ -27,6 +27,7 @@
 import { loadConfig } from '../lib/config.js';
 import { openStore } from '../lib/store/index.js';
 import { createHttpTransport } from '../lib/http/transport.js';
+import { createDevMockTransport, isDevMockTransport } from '../lib/http/mock-transport.js';
 import { createOzbClient } from '../lib/http/client.js';
 import { systemRandom } from '../lib/random.js';
 import { systemClock } from '../lib/clock.js';
@@ -38,7 +39,6 @@ import { sendDeadman } from '../lib/notify/deadman.js';
 import { evaluatePoll } from '../lib/rules/engine.js';
 import { groupAndCompose } from '../lib/notify/compose.js';
 import { fanout } from '../lib/notify/fanout.js';
-import nodemailer from 'nodemailer';
 
 /**
  * The dead-man's-switch state, persisted in `settings` so the worker's
@@ -288,18 +288,25 @@ async function main() {
   const clock = systemClock();
   const random = systemRandom();
   const store = openStore({ path: config.OZB_DB_PATH, clock });
-  const transport = createHttpTransport({ userAgent: config.OZB_USER_AGENT });
+  // DEV-ONLY: when OZB_DEV_MOCK_TRANSPORT is active (inert in production),
+  // serve the four poll URLs from the committed fixtures so a local dev
+  // worker never queries the live OzBargain site.
+  const useMock = isDevMockTransport();
+  const transport = useMock
+    ? createDevMockTransport(config)
+    : createHttpTransport({ userAgent: config.OZB_USER_AGENT });
+  console.log(
+    `${new Date().toISOString()} transport: ${useMock ? 'dev mock (fixtures, no network)' : 'live HTTP'}`,
+  );
 
-  // The real provider factories. Each builds a provider from its store row
-  // (the configured target) and config.
-  const { emailProvider } = await import('../lib/notify/email.js');
-  const { matrixProvider } = await import('../lib/notify/matrix.js');
-  const { ntfyProvider } = await import('../lib/notify/ntfy.js');
-  const providerFactories = {
-    email: (row) => emailProvider(buildEmailTransport(row, config)),
-    matrix: (row) => matrixProvider(buildMatrixClient(row)),
-    ntfy: (row) => ntfyProvider(buildNtfyClient(row)),
-  };
+  // The real provider factories, built from the delivery-mechanism registry.
+  // Each mechanism's `build` is the single construction point shared with the
+  // test-send route.
+  const { MECHANISMS } = await import('../lib/notify/registry.js');
+  const providerFactories = {};
+  for (const m of MECHANISMS) {
+    providerFactories[m.kind] = (row, cfg) => m.build(row, cfg);
+  }
 
   const worker = await startWorker({ store, transport, clock, random, config, providerFactories });
 
@@ -331,57 +338,6 @@ async function main() {
     console.error(`unhandled rejection: ${err?.message ?? err}`);
     process.exit(1);
   });
-}
-
-/**
- * Build a nodemailer transport for the email provider from its store row and
- * config. The transport is injected into the provider (the provider never
- * constructs one).
- */
-function buildEmailTransport(row, config) {
-  const cfg = JSON.parse(row.config ?? '{}');
-  return nodemailer.createTransport({
-    host: cfg.host ?? config.EMAIL_SMTP_HOST,
-    port: cfg.port ?? config.EMAIL_SMTP_PORT,
-    auth: config.EMAIL_SMTP_USER ? { user: config.EMAIL_SMTP_USER, pass: config.EMAIL_SMTP_PASS } : false,
-  });
-}
-
-/**
- * Build a Matrix client for the matrix provider from its store row. The
- * client is injected into the provider.
- */
-function buildMatrixClient(row) {
-  const cfg = JSON.parse(row.config ?? '{}');
-  return {
-    postMessage({ room, text }) {
-      return fetch(`${cfg.homeserver ?? ''}/_matrix/client/v3/rooms/${encodeURIComponent(room)}/send/m.room.message`, {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${cfg.accessToken ?? ''}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ msgtype: 'm.text', body: text }),
-      });
-    },
-  };
-}
-
-/**
- * Build an ntfy client for the ntfy provider from its store row.
- */
-function buildNtfyClient(row) {
-  const cfg = JSON.parse(row.config ?? '{}');
-  return {
-    publish({ topic, title, message, tags }) {
-      return fetch(`${cfg.url ?? ''}/${topic}`, {
-        method: 'POST',
-        headers: {
-          ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}),
-          'X-Title': title ?? '',
-          'X-Priority': 'high',
-        },
-        body: message,
-      });
-    },
-  };
 }
 
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'));

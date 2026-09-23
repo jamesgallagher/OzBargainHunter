@@ -8,8 +8,10 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "next dev",
+    "worker": "node scripts/run-worker.mjs",
     "lint": "eslint .",
-    "test": "node --test --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/foundation/*.test.js test/unit/acquisition/*.test.js test/unit/rules/*.test.js test/unit/web/*.test.js test/guards/*.test.js && node --test --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/*.test.js",
+    "test": "node --test --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/foundation/*.test.js test/unit/acquisition/*.test.js test/unit/rules/*.test.js test/unit/notify/*.test.js test/unit/web/*.test.js test/guards/*.test.js && node --test --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/*.test.js",
     "test:foundation": "node --test --import ./test/support/no-network.js test/unit/foundation/*.test.js test/guards/*.test.js",
     "test:rules": "node --test --import ./test/support/no-network.js test/unit/rules/*.test.js",
     "test:web": "node --test --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/web/*.test.js",

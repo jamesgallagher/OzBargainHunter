@@ -407,3 +407,20 @@ test('openStore migrates a v1 database with a duplicate observation pair to v2 w
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+// Delivery mechanisms: full CRUD on the providers table. `deleteProvider` is
+// the delete half — it removes a provider row so it disappears from the list
+// and the worker no longer builds or fans out through it.
+test('deleteProvider removes a provider row and leaves other providers intact', () => {
+  withStore((store) => {
+    store.upsertProvider('email', JSON.stringify({ to: 'a@example.com' }), true);
+    store.upsertProvider('ntfy', JSON.stringify({ url: 'http://127.0.0.1:8080', topic: 'alerts' }), true);
+    assert.ok(store.getProvider('email'), 'email is present before the delete');
+    assert.ok(store.getProvider('ntfy'), 'ntfy is present before the delete');
+
+    assert.equal(store.deleteProvider('email'), 1, 'the delete removes exactly one row');
+    assert.equal(store.getProvider('email'), null, 'the deleted provider is gone');
+    assert.ok(store.getProvider('ntfy'), 'the other provider is left intact');
+    assert.equal(store.deleteProvider('email'), 0, 'a second delete of the same kind removes nothing');
+  });
+});

@@ -570,6 +570,10 @@ textarea.mono,
 input.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
 input[type='checkbox'],
 input[type='radio'] {
   width: 22px;
@@ -631,6 +635,9 @@ input[type='radio'] {
   flex: none;
   width: 44px;
   padding: 0;
+}
+.reveal-row .mono {
+  flex: 1;
 }
 
 /* ---- Data tables (spec §4.4, §5.2) ----------------------------------- */
@@ -910,6 +917,32 @@ dialog::backdrop {
 }
 .provider-card .provider-form {
   margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.provider-card .provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.provider-card .provider-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.provider-card .provider-view .field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.provider-card .provider-view .field-label {
+  flex: 1;
+  font-weight: 650;
 }
 
 /* ---- Alert/suppression lists (spec §6.4) ----------------------------- */
