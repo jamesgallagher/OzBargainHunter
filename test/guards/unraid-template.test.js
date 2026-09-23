@@ -203,7 +203,8 @@ test('the icon updater source is bounded (no docker, no masked-field target, no 
   }
   // No generic Mask="true" processing.
   assert.ok(!/Mask="true"/.test(updater), 'the updater must not process Mask="true" fields');
-  // The two exact URL constants are present.
+  // Both supported old URLs and the new canonical URL are present.
+  assert.ok(updater.includes('https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png'), 'the legacy placeholder icon URL is supported');
   assert.ok(updater.includes('https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'), 'the old icon URL constant is present');
   assert.ok(updater.includes('https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png'), 'the new icon URL constant is present');
 });
