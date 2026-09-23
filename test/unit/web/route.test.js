@@ -499,3 +499,90 @@ describe('route: /healthz reports acquisition health (3.7)', () => {
     assert.equal(body.status, 'unhealthy');
   });
 });
+
+// X1 / 11.3.6: /failures/clear is a state-changing route in its own segment.
+// It re-applies the access and CSRF gates itself, so a directly-driven request
+// must be rejected without clearing anything, and only a request that passes
+// both gates AND carries the `confirm: 'delete'` field deletes the stored
+// failures.
+describe('route: /failures/clear re-gates and clears the stored failures (11.3.6)', () => {
+  let jwks;
+  let store;
+  let dir;
+  before(async () => {
+    jwks = await startJwksServer();
+    process.env.CF_JWKS_URL = jwks.url;
+    dir = mkdtempSync(join(tmpdir(), 'ozb-clear-failures-'));
+    store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    // Three stored failures to clear.
+    for (let i = 1; i <= 3; i += 1) {
+      store.insertFailure({
+        failed_at: `2026-09-19T08:${String(i).padStart(2, '0')}:00Z`,
+        response_class: `fail-${i}`,
+        body: `failure body ${i}`,
+      });
+    }
+    assert.equal(store.getFailures().length, 3, 'three failures are stored before any request');
+    setStoreForTest(store);
+  });
+  after(async () => {
+    setStoreForTest(null);
+    delete process.env.CF_JWKS_URL;
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+    await jwks.close();
+  });
+
+  test('an unauthenticated mutation is rejected with 401 (the route re-gates)', async () => {
+    const { POST } = await import('../../../app/failures/clear/route.js');
+    const res = await POST(new Request('https://app.example.com/failures/clear', { method: 'POST' }));
+    assert.equal(res.status, 401, 'no token -> access check fails');
+    assert.equal(store.getFailures().length, 3, 'the failures are not cleared on a failed gate');
+  });
+
+  test('a valid JWT but no CSRF token is rejected with 403 (independent checks)', async () => {
+    const { POST } = await import('../../../app/failures/clear/route.js');
+    const jwt = await jwks.sign({ email: 'user@example.com' }, { aud: AUD, iss: `https://${TEAM_DOMAIN}` });
+    const res = await POST(
+      new Request('https://app.example.com/failures/clear', {
+        method: 'POST',
+        headers: { 'Cf-Access-Jwt-Assertion': jwt },
+      }),
+    );
+    assert.equal(res.status, 403, 'passes access, fails CSRF');
+    assert.equal(store.getFailures().length, 3, 'the failures are not cleared on a failed gate');
+  });
+
+  test('a valid JWT + a valid CSRF token without the confirmation is rejected with 400 (X4)', async () => {
+    const { POST } = await import('../../../app/failures/clear/route.js');
+    const jwt = await jwks.sign({ email: 'user@example.com' }, { aud: AUD, iss: `https://${TEAM_DOMAIN}` });
+    const csrf = await generateCsrfToken(CSRF_SECRET);
+    const res = await POST(
+      new Request('https://app.example.com/failures/clear', {
+        method: 'POST',
+        headers: { 'Cf-Access-Jwt-Assertion': jwt, 'x-csrf-token': csrf, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+    assert.equal(res.status, 400, 'a clear without confirm is refused');
+    assert.equal(store.getFailures().length, 3, 'the failures are not cleared without confirm');
+  });
+
+  test('a valid JWT + a valid CSRF token + the confirmation clears the failures', async () => {
+    const { POST } = await import('../../../app/failures/clear/route.js');
+    const jwt = await jwks.sign({ email: 'user@example.com' }, { aud: AUD, iss: `https://${TEAM_DOMAIN}` });
+    const csrf = await generateCsrfToken(CSRF_SECRET);
+    const res = await POST(
+      new Request('https://app.example.com/failures/clear', {
+        method: 'POST',
+        headers: { 'Cf-Access-Jwt-Assertion': jwt, 'x-csrf-token': csrf, 'content-type': 'application/json' },
+        body: JSON.stringify({ confirm: 'delete' }),
+      }),
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.cleared, true);
+    assert.equal(body.deleted, 3, 'all three stored failures are deleted');
+    assert.equal(store.getFailures().length, 0, 'the failures are cleared');
+  });
+});

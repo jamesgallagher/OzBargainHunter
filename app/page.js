@@ -6,29 +6,36 @@
  * Server component: it reads the live store state. Times are rendered with
  * LocalTime (server fallback is the ISO value; the locale is a client
  * enhancement after hydration) with the exact ISO instant preserved in
- * `dateTime`/`title`.
+ * `dateTime`/`title`. It is async to mint an unbound CSRF token (production
+ * relies on the token TTL, m3) for the "Clear failures" control.
  */
 
 import { getStore } from '../lib/web/db.js';
 import {
   PageHeader,
   StatCard,
-  EmptyState,
   healthFromPollState,
 } from './components/ui.js';
 import LocalTime from './components/local-time.js';
+import FailureList from './components/failure-list.js';
 
 export const metadata = { title: 'Status' };
 
 /**
  * The status page.
- * @returns {React.ReactElement}
+ * @returns {Promise<React.ReactElement>}
  */
-export default function StatusPage() {
+export default async function StatusPage() {
+  const { generateCsrfToken } = await import('../lib/csrf.js');
   const store = getStore();
   const pollState = store.getPollState() ?? {};
   const failures = store.getFailures();
   const health = healthFromPollState(pollState);
+
+  // Mint an unbound CSRF token (production relies on the token TTL, m3) for
+  // the "Clear failures" control.
+  const secret = process.env.OZB_CSRF_SECRET ?? '';
+  const token = secret ? await generateCsrfToken(secret) : '';
 
   return (
     <section>
@@ -65,28 +72,7 @@ export default function StatusPage() {
 
       <div className="card">
         <h2 className="card-title">Recent failures</h2>
-        {failures.length > 0 ? (
-          <ul className="failure-list">
-            {failures.map((f) => (
-              <li key={f.id} className="failure-row">
-                <span className="failure-class">{f.response_class}</span>
-                {f.failed_at ? (
-                  <span className="failure-time">
-                    <LocalTime iso={f.failed_at} />
-                  </span>
-                ) : null}
-                {f.body ? (
-                  <span className="failure-body">{String(f.body).slice(0, 200)}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState
-            title="No recent failures."
-            body="Acquisition is not currently reporting errors."
-          />
-        )}
+        <FailureList failures={failures} csrf={token} />
       </div>
     </section>
   );
