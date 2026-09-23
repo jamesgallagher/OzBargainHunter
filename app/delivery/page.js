@@ -40,7 +40,10 @@ function safeParse(raw) {
  */
 export default async function DeliveryPage() {
   const store = getStore();
-  const providers = store.getProviders();
+  const savedProviders = store.getProviders();
+  const supportedKinds = new Set(MECHANISMS.map((mechanism) => mechanism.kind));
+  const providers = savedProviders.filter((provider) => supportedKinds.has(provider.kind));
+  const unsupportedProviders = savedProviders.filter((provider) => !supportedKinds.has(provider.kind));
   const byKind = new Map(providers.map((p) => [p.kind, p]));
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
@@ -82,6 +85,31 @@ export default async function DeliveryPage() {
           );
         })}
       </div>
+      {unsupportedProviders.length ? (
+        <div className="provider-cards" aria-label="Unsupported saved delivery mechanisms">
+          {unsupportedProviders.map((provider) => (
+            <article className="card provider-card" key={`unsupported-${provider.kind}`}>
+              <div className="provider-head">
+                <h2>Unsupported saved delivery: {provider.kind}</h2>
+                <p className="help">This provider type is no longer supported and is ignored. Its saved configuration is not displayed.</p>
+              </div>
+              <AsyncForm
+                action="/delivery/delete"
+                formClassName="provider-delete"
+                pendingLabel="Deleting…"
+                successMessage={`Saved ${provider.kind} configuration deleted.`}
+              >
+                <input type="hidden" name="_csrf" value={token} />
+                <input type="hidden" name="kind" value={provider.kind} />
+                <input type="hidden" name="confirm" value="delete" />
+                <button className="btn btn-danger" type="submit">
+                  Delete saved {provider.kind} configuration
+                </button>
+              </AsyncForm>
+            </article>
+          ))}
+        </div>
+      ) : null}
       <div className="card form-card settings-card">
         <h2>Test delivery</h2>
         {providers.length ? (

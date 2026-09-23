@@ -193,6 +193,18 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /\/delivery\/test-send/, 'the test-send form posts to its own segment');
   });
 
+  test('screen 8 marks unsupported saved providers and does not offer them for test-send', async () => {
+    store.upsertProvider('email', JSON.stringify({ to: 'legacy@example.com' }), true);
+    try {
+      const html = renderToStaticMarkup(await DeliveryPage());
+      assert.match(html, /Unsupported saved delivery: email/);
+      assert.match(html, /Delete saved email configuration/);
+      assert.doesNotMatch(html, /<option[^>]*value="email"/);
+    } finally {
+      store.deleteProvider('email');
+    }
+  });
+
   test('screen 9 (classifieds session) renders validity, last-confirmed and the cookie form', async () => {
     const html = renderToStaticMarkup(await ClassifiedsSessionPage());
     assert.match(html, /Classifieds session/, 'the screen heading');
