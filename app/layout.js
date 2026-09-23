@@ -34,6 +34,9 @@ export const metadata = {
     template: '%s · OzBargainHunter',
   },
   description: 'Personal OzBargain deal and classifieds watcher',
+  icons: {
+    icon: '/favicon.ico',
+  },
   viewport: {
     width: 'device-width',
     initialScale: 1,

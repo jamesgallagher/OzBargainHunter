@@ -51,7 +51,7 @@ const verifierPath = `${unraidDir}verify-ozbargain-hunter.sh`;
 const updaterPath = `${unraidDir}update-ozbargain-hunter-icon.sh`;
 
 /** The reviewed repository artifact digest (D2). */
-const EXPECTED_TEMPLATE_SHA256 = '5cf4bc5e88c68f945210b1129a945bddbbe4d86525b064ba3929df3fb602da52';
+const EXPECTED_TEMPLATE_SHA256 = 'e1d266fe152a7ad3b803e7bba1ff26f2a116baf1127b9f0bf2cb3bde9767a57e';
 
 /**
  * Extract the content of every `<Config ...>content</Config>` element as
@@ -130,7 +130,7 @@ test('the template uses the measured Cloudflare Access team domain', () => {
 test('the template uses the canonical public icon URL', () => {
   assert.equal(
     topLevel(xml, 'Icon'),
-    'https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png',
+    'https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png',
   );
   assert.ok(!xml.includes('ozb-icon-hosting.invalid'));
 });
@@ -203,9 +203,10 @@ test('the icon updater source is bounded (no docker, no masked-field target, no 
   }
   // No generic Mask="true" processing.
   assert.ok(!/Mask="true"/.test(updater), 'the updater must not process Mask="true" fields');
-  // The two exact URL constants are present.
-  assert.ok(updater.includes('https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png'), 'the old icon URL constant is present');
-  assert.ok(updater.includes('https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'), 'the new icon URL constant is present');
+  // Both supported old URLs and the new canonical URL are present.
+  assert.ok(updater.includes('https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png'), 'the legacy placeholder icon URL is supported');
+  assert.ok(updater.includes('https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'), 'the old icon URL constant is present');
+  assert.ok(updater.includes('https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png'), 'the new icon URL constant is present');
 });
 
 /**
@@ -231,14 +232,14 @@ test('the icon updater: old->new changes exactly the intended Icon bytes and pre
     const fix = join(dir, 'my-ozbargain-hunter.xml');
     const before =
       '<?xml version="1.0"?>\n<Container version="2">\n  <Name>ozbargain-hunter</Name>\n' +
-      '  <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>\n' +
+      '  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>\n' +
       '  <Repository>ghcr.io/jamesgallagher/ozbargainhunter:latest</Repository>\n</Container>\n';
     writeFileSync(fix, before);
     const res = runUpdater(fix);
     assert.equal(res.code, 0, `updater must succeed (stdout: ${res.stdout} stderr: ${res.stderr})`);
     const after = readFileSync(fix, 'utf8');
     // Only the complete Icon element changed; all surrounding bytes preserved.
-    assert.ok(after.includes('<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>'), 'the new Icon element is present');
+    assert.ok(after.includes('<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png</Icon>'), 'the new Icon element is present');
     assert.ok(!after.includes('ozb-icon-hosting.invalid'), 'the old Icon element is gone');
     assert.ok(after.includes('<Name>ozbargain-hunter</Name>'), 'surrounding Name preserved');
     assert.ok(after.includes('<Repository>ghcr.io/jamesgallagher/ozbargainhunter:latest</Repository>'), 'surrounding Repository preserved');
@@ -255,7 +256,7 @@ test('the icon updater: a second run is a no-op and succeeds (idempotent)', () =
     const fix = join(dir, 'my-ozbargain-hunter.xml');
     writeFileSync(
       fix,
-      '<?xml version="1.0"?>\n<Container version="2">\n  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>\n</Container>\n',
+      '<?xml version="1.0"?>\n<Container version="2">\n  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png</Icon>\n</Container>\n',
     );
     const res = runUpdater(fix);
     assert.equal(res.code, 0, `idempotent run must succeed (stdout: ${res.stdout} stderr: ${res.stderr})`);
@@ -280,8 +281,8 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     const both = join(dir, 'both.xml');
     const bothBefore =
       '<?xml version="1.0"?>\n<Container version="2">\n' +
-      '  <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>\n' +
       '  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>\n' +
+      '  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png</Icon>\n' +
       '</Container>\n';
     writeFileSync(both, bothBefore);
     const resBoth = runUpdater(both);
@@ -292,8 +293,8 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     const dup = join(dir, 'dup.xml');
     const dupBefore =
       '<?xml version="1.0"?>\n<Container version="2">\n' +
-      '  <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>\n' +
-      '  <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>\n' +
+      '  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>\n' +
+      '  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>\n' +
       '</Container>\n';
     writeFileSync(dup, dupBefore);
     const resDup = runUpdater(dup);
@@ -305,8 +306,8 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     const dupSameLine = join(dir, 'dup-same-line.xml');
     const dupSameLineBefore =
       '<?xml version="1.0"?>\n<Container version="2">' +
-      '<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>' +
-      '<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>' +
+      '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>' +
+      '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>' +
       '</Container>\n';
     writeFileSync(dupSameLine, dupSameLineBefore);
     const resDupSameLine = runUpdater(dupSameLine);
@@ -320,7 +321,7 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     const nestedOnly = join(dir, 'nested-only.xml');
     const nestedOnlyBefore =
       '<?xml version="1.0"?>\n<Container version="2">\n  <Nested>' +
-      '<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>' +
+      '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>' +
       '</Nested>\n</Container>\n';
     writeFileSync(nestedOnly, nestedOnlyBefore);
     const resNestedOnly = runUpdater(nestedOnly);
@@ -332,8 +333,8 @@ test('the icon updater: ambiguous/missing Icon states fail without changing the 
     // Exact old-element bytes in comments or CDATA are decoys, not authorised
     // targets. An unexpected direct-child Icon must still fail closed.
     for (const [kind, decoy] of [
-      ['comment', '<!-- <Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon> -->'],
-      ['cdata', '<Decoy><![CDATA[<Icon>https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png</Icon>]]></Decoy>'],
+      ['comment', '<!-- <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon> -->'],
+      ['cdata', '<Decoy><![CDATA[<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>]]></Decoy>'],
     ]) {
       const decoyPath = join(dir, `${kind}-decoy.xml`);
       const decoyBefore =

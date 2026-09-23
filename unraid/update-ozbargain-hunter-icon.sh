@@ -12,7 +12,7 @@
 #
 # Behaviour:
 #   - fails without mutation unless the target exists and is non-empty;
-#   - if exactly one <Icon>OLD</Icon> exists and no <Icon>NEW</Icon> exists,
+#   - if exactly one authorised old <Icon> exists and no <Icon>NEW</Icon> exists,
 #     replaces that exact complete element with <Icon>NEW</Icon>;
 #   - verifies after the write that the old complete element is absent and
 #     exactly one new complete element exists;
@@ -25,8 +25,10 @@
 #   - supports a test-only target override via OZB_UNRAID_TEMPLATE_PATH.
 set -u
 
-OLD_ICON_URL='https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png'
-NEW_ICON_URL='https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'
+LEGACY_ICON_URL='https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png'
+OLD_ICON_URL='https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'
+NEW_ICON_URL='https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png'
+LEGACY_EL="<Icon>${LEGACY_ICON_URL}</Icon>"
 OLD_EL="<Icon>${OLD_ICON_URL}</Icon>"
 NEW_EL="<Icon>${NEW_ICON_URL}</Icon>"
 
@@ -101,10 +103,13 @@ sys.exit(0 if all_icons == 1 and value == sys.argv[2] else 1)
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 
 # 1. The target must exist and be non-empty. Its unique direct-child Icon must
-#    parse to exactly one of the two authorised values before any mutation.
+#    parse to exactly one of the three authorised values before any mutation.
 [ -f "$TARGET" ] || fail "target template is missing"
 [ -s "$TARGET" ] || fail "target template is empty"
-if check_single_top_level_icon_value "$OLD_ICON_URL"; then
+if check_single_top_level_icon_value "$LEGACY_ICON_URL"; then
+  ICON_STATE=old
+  OLD_EL=$LEGACY_EL
+elif check_single_top_level_icon_value "$OLD_ICON_URL"; then
   ICON_STATE=old
 elif check_single_top_level_icon_value "$NEW_ICON_URL"; then
   ICON_STATE=new

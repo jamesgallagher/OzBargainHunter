@@ -75,7 +75,7 @@ if [ -f "$T" ]; then
   grep -q '<ExtraParams>--restart unless-stopped</ExtraParams>' "$T" && ok "template ExtraParams carries --restart unless-stopped" || bad "template ExtraParams carries --restart unless-stopped"
   cfg 'TZ' 'Australia/Sydney' && ok "template sets TZ=Australia/Sydney" || bad "template sets TZ=Australia/Sydney"
   cfg 'CF_ACCESS_TEAM_DOMAIN' 'tailormade.cloudflareaccess.com' && ok "template CF_ACCESS_TEAM_DOMAIN is tailormade.cloudflareaccess.com" || bad "template CF_ACCESS_TEAM_DOMAIN is tailormade.cloudflareaccess.com"
-  grep -q '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>' "$T" && ok "template uses the canonical public icon URL" || bad "template uses the canonical public icon URL"
+  grep -q '<Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png</Icon>' "$T" && ok "template uses the canonical public icon URL" || bad "template uses the canonical public icon URL"
 else
   bad "template present at $T"
 fi

@@ -354,7 +354,7 @@ describe('integration: the packaging artefacts', () => {
       assert.ok(icon, 'an Icon element is present');
       assert.equal(
         icon[1],
-        'https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png',
+        'https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png',
       );
       assert.doesNotMatch(UNRAID, /ozb-icon-hosting\.invalid/);
     });
