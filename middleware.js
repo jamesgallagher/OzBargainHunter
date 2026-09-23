@@ -45,6 +45,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { NextResponse } from 'next/server.js';
 import { normalizeAppSecret } from './lib/env-secret.js';
+import { isDevAccessBypass } from './lib/web/dev-bypass.js';
 
 /** The header the container health check sends the shared secret in. */
 export const HEALTHCHECK_HEADER = 'x-healthcheck-secret';
@@ -159,6 +160,15 @@ export async function middleware(request, event) {
       return NextResponse.next();
     }
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  // DEV-ONLY: when the dev bypass is active (OZB_DEV_BYPASS_ACCESS set, and
+  // NODE_ENV is not production), skip the Access JWT check. This is inert in
+  // production. It does not touch the /healthz exemption above (which still
+  // authenticates with the container-local secret) — it only lets a local
+  // dev request through the Access gate.
+  if (isDevAccessBypass(process.env)) {
+    return NextResponse.next();
   }
 
   // Every other path requires a verified Access JWT.

@@ -179,16 +179,23 @@ describe('integration: browser UI and test-send shakeout', () => {
     assert.equal(await page.getByText('oled tv', { exact: true }).count(), 0);
 
     await expectHeading(page, '/delivery', 'Delivery');
-    await assert.doesNotReject(() => page.getByText('ntfy', { exact: true }).first().waitFor());
-    await page.locator('.provider-card summary').first().click();
-    const providerForm = 'form.provider-config';
-    const savedConfig = JSON.stringify({ url: sink.origin, topic: 'alerts', label: 'browser saved' });
-    await page.locator(`${providerForm} textarea[name="config"]`).fill(savedConfig);
-    await page.locator(`${providerForm} input[name="selected"]`).check();
-    await submit(page, providerForm, 'button[type="submit"]', '/delivery/save');
+    const ntfyCard = page.locator('.provider-card', {
+      has: page.getByRole('heading', { name: 'ntfy', exact: true }),
+    });
+    await assert.doesNotReject(() => ntfyCard.waitFor());
+    // The pre-seeded ntfy provider is a saved card: open its edit form and
+    // re-save the configured target through the mechanism's field inputs.
+    await ntfyCard.locator('button', { hasText: 'Edit' }).click();
+    const ntfyEditForm = ntfyCard.locator('form');
+    await ntfyEditForm.locator('input[name="url"]').fill(sink.origin);
+    await ntfyEditForm.locator('input[name="topic"]').fill('alerts');
+    await ntfyEditForm.locator('input[name="selected"]').check();
+    await submit(page, 'form.provider-form', 'button[type="submit"]', '/delivery/save');
     await expectHeading(page, '/delivery', 'Delivery');
-    assert.equal(temp.store.getProvider('ntfy').config, savedConfig);
-    assert.match(await page.locator('.provider-card').innerText(), /ntfy[\s\S]*Selected[\s\S]*Enabled/);
+    const savedNtfy = JSON.parse(temp.store.getProvider('ntfy').config);
+    assert.equal(savedNtfy.url, sink.origin);
+    assert.equal(savedNtfy.topic, 'alerts');
+    assert.match(await ntfyCard.innerText(), /Selected[\s\S]*Enabled/);
 
     const testSendBody = await submit(
       page,
