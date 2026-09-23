@@ -33,6 +33,7 @@ fill rather than a knockout, so it stays a hole on light backgrounds too.
 ## Regenerating the PNGs
 
 ```sh
+ffmpeg -y -width 1024 -height 1024 -i logo.svg -frames:v 1 -pix_fmt rgba icon-1024.png
 ffmpeg -y -width 512 -height 512 -i logo.svg -frames:v 1 -pix_fmt rgba icon-512.png
 ffmpeg -y -width 256 -height 256 -i logo.svg -frames:v 1 -pix_fmt rgba icon-256.png
 ```
@@ -41,7 +42,8 @@ Any librsvg-backed rasteriser works; `rsvg-convert -w 512 -h 512` is the
 direct equivalent. Keep `-pix_fmt rgba` — without it the alpha is flattened
 and the icon ships with a black square behind it.
 
-`icon-256.png` is the file the Unraid template's `<Icon>` field points at, so
+`icon-1024.png` is the file the Unraid template's `<Icon>` field points at, so
 it needs hosting somewhere reachable (Open Item O15).
 
-The favicon derivatives named in §10.7 are not built yet.
+The favicon (`public/favicon.ico`) is built and referenced from `app/layout.js`;
+no additional favicon variants are built yet.

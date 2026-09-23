@@ -42,7 +42,7 @@ export default function AppShell({
       <header className="app-header">
         <div className="brand-row">
           <div className="brand">
-            <img src="/logo.svg" alt="" width="32" height="32" aria-hidden="true" />
+            <img src="/banner-raw.png" alt="" width="25" height="32" aria-hidden="true" />
             <span className="brand-name">OzBargainHunter</span>
           </div>
           <ThemeControl />

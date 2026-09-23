@@ -25,8 +25,8 @@
 #   - supports a test-only target override via OZB_UNRAID_TEMPLATE_PATH.
 set -u
 
-OLD_ICON_URL='https://ozb-icon-hosting.invalid/ozbargainhunter-icon-256.png'
-NEW_ICON_URL='https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'
+OLD_ICON_URL='https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png'
+NEW_ICON_URL='https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png'
 OLD_EL="<Icon>${OLD_ICON_URL}</Icon>"
 NEW_EL="<Icon>${NEW_ICON_URL}</Icon>"
 

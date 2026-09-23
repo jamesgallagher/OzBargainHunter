@@ -40,7 +40,7 @@
   <Overview>Personal deal and classifieds watcher for OzBargain: a Next.js web UI and a five-minute poll loop in one container, with alerts delivered by email, Matrix or ntfy.</Overview>
   <Category>Tools: Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8000]/</WebUI>
-  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-256.png</Icon>
+  <Icon>https://raw.githubusercontent.com/jamesgallagher/OzBargainHunter/main/assets/logo/icon-1024.png</Icon>
   <ExtraParams>--restart unless-stopped</ExtraParams>
   <PostArgs/>
   <CPUset/>
