@@ -16,6 +16,7 @@
 
 import AppNav from './app-nav.js';
 import ThemeControl from './theme-control.js';
+import { formatMelbourne } from '../../lib/time.js';
 
 /**
  * The application shell.
@@ -52,7 +53,7 @@ export default function AppShell({
             {health.label}
           </span>
           <span className="health-detail">
-            Last checked: <time dateTime={lastChecked}>{lastChecked}</time>
+            Last checked: <time dateTime={lastChecked}>{formatMelbourne(lastChecked)}</time>
             {lastResponseClass !== '—' ? ` · ${lastResponseClass}` : ''}
             {backoffSeconds > 0 ? ` · backoff ${backoffSeconds}s` : ''}
           </span>

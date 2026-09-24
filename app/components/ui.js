@@ -5,6 +5,7 @@
  */
 
 import Link from 'next/link.js';
+import { formatMelbourne } from '../../lib/time.js';
 
 /**
  * Derive an acquisition-health summary from the existing poll state
@@ -12,6 +13,10 @@ import Link from 'next/link.js';
  *
  * The store's poll_state is snake_case:
  *   last_success_at, last_response_class, backoff_seconds, consecutive_failures
+ *
+ * Timestamps are shown in Australia/Melbourne time (spec §4.3 keeps storage
+ * UTC; the zone is a display concern). `formatMelbourne` is a pure,
+ * server-safe helper, so the banner renders Melbourne on the server too.
  */
 export function healthFromPollState(poll) {
   if (!poll) {
@@ -44,7 +49,7 @@ export function healthFromPollState(poll) {
     return {
       tone: 'healthy',
       label: 'Healthy',
-      detail: `Last success ${last_success_at}`,
+      detail: `Last success ${formatMelbourne(last_success_at)}`,
     };
   }
 
