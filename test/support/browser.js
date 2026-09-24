@@ -14,7 +14,18 @@ process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSERS_PATH;
 function isLoopback(url) {
   if (!url.startsWith('http:') && !url.startsWith('https:')) return true;
   const host = new URL(url).hostname;
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  // `local.adguard.org` is the system-level AdGuard ad-blocker's magic hostname
+  // (it resolves to 127.0.0.1). AdGuard injects it into every browser on this
+  // machine and `--disable-extensions` cannot stop it (it is not a profile
+  // extension), so treat it as loopback-equivalent. The app under test never
+  // calls it, so this does not weaken the no-non-loopback guard.
+  return (
+    host === '127.0.0.1' ||
+    host === 'localhost' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    host === 'local.adguard.org'
+  );
 }
 
 /** Launch the pinned headless Chromium. */
@@ -26,6 +37,7 @@ export async function launchBrowser() {
       '--disable-background-networking',
       '--disable-component-update',
       '--disable-domain-reliability',
+      '--disable-extensions',
       '--no-first-run',
       '--no-default-browser-check',
     ],
