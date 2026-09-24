@@ -24,6 +24,9 @@ const settingsLinks = [{ label: 'Thresholds', href: '/thresholds' }, { label: 'D
 
 const LAST_UID_KEY = 'classifieds_last_uid';
 const LAST_CONFIRMED_KEY = 'classifieds_last_confirmed_at';
+// The global enable/disable gate key (worker-owned module owns the same
+// string; the server tree must not import from lib/acquire/).
+const CLASSIFIEDS_ENABLED_KEY = 'classifieds_enabled';
 
 /**
  * The classifieds session page.
@@ -38,6 +41,9 @@ export default async function ClassifiedsSessionPage() {
       ? { label: 'Expired', tone: 'danger' }
       : { label: 'Valid', tone: 'success' };
   const lastConfirmed = store.getSetting(LAST_CONFIRMED_KEY);
+  // The global enable/disable gate: absent (null) means disabled.
+  const enabledRaw = store.getSetting(CLASSIFIEDS_ENABLED_KEY);
+  const enabledOn = enabledRaw === null ? false : enabledRaw === '1';
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
   const secret = process.env.OZB_CSRF_SECRET ?? '';
@@ -55,6 +61,16 @@ export default async function ClassifiedsSessionPage() {
         <dt>Last confirmed working</dt>
         <dd>{lastConfirmed ? <LocalTime iso={lastConfirmed} /> : '—'}</dd>
       </dl>
+      <div className="card form-card settings-card">
+      <AsyncForm action="/classifieds-session/toggle" successMessage="Classifieds polling preference saved.">
+        <input type="hidden" name="_csrf" value={token} />
+        <label className="switch" htmlFor="classifieds-enabled" aria-label="Enable classifieds polling">
+          <input id="classifieds-enabled" type="checkbox" name="enabled" defaultChecked={enabledOn} />
+          <span><strong>Enable classifieds polling</strong><small>Poll the classifieds page with the stored session cookie. Disabled by default.</small></span>
+        </label>
+        <button className="btn btn-primary" type="submit">Save</button>
+      </AsyncForm>
+      </div>
       <div className="card form-card settings-card">
       <AsyncForm action="/classifieds-session/set" resetOnSuccess successMessage="Session cookie updated; validity is confirmed on the next classifieds poll.">
         <input type="hidden" name="_csrf" value={token} />

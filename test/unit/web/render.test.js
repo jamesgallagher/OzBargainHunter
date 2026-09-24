@@ -242,6 +242,8 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /Last confirmed working/, 'the last-confirmed label');
     assert.match(html, /2026-09-19T06:00:00Z/, 'the last-confirmed instant');
     assert.match(html, /\/classifieds-session\/set/, 'the cookie form posts to its own segment');
+    assert.match(html, /Enable classifieds polling/, 'the enabled checkbox label');
+    assert.match(html, /\/classifieds-session\/toggle/, 'the toggle form posts to its own segment');
   });
 
   test('screen 9 distinguishes valid, expired and not-yet-confirmed session states', async () => {

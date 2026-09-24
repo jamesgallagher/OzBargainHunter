@@ -60,13 +60,29 @@ async function cycle(server, store) {
   return { result, logLines };
 }
 
+/**
+ * A temp store with classifieds polling enabled and a fake session cookie set.
+ * The production default is disabled + unconfigured (the gate makes zero
+ * requests); these loopback scenarios exist to exercise a *real* classifieds
+ * fetch, so the intended state is set explicitly here rather than in the
+ * shared `openTempStore` helper (which would also flip the default-exercising
+ * tests). The default-disabled and enabled-without-credentials contracts are
+ * covered separately by the unit tests, which assert zero requests.
+ */
+function classifiedsTempStore() {
+  const temp = openTempStore();
+  temp.store.setSetting('classifieds_enabled', '1');
+  temp.store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  return temp;
+}
+
 test('loopback: a truncated 200 resolves unknown (never expired), writes one unparseable failures row, and logs the URL, class and reason', async () => {
   const full = readCompletePage();
   // Cut the complete page mid-stream: the head (with OzB_vars) is kept, the
   // closing </html> is not — the shape of a stream that died mid-body.
   const truncated = full.slice(0, 4000);
   const server = await startClassifiedsServer([{ body: truncated }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result, logLines } = await cycle(server, temp.store);
     assert.equal(result.state, 'unknown');
@@ -95,7 +111,7 @@ test('loopback: a truncated 200 resolves unknown (never expired), writes one unp
 
 test('loopback: an empty 200 and a whitespace-only 200 resolve unknown, not expired', async () => {
   const server = await startClassifiedsServer([{ body: '' }, { body: '   \n\t  ' }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result: empty } = await cycle(server, temp.store);
     assert.equal(empty.state, 'unknown');
@@ -118,7 +134,7 @@ test('loopback: an empty 200 and a whitespace-only 200 resolve unknown, not expi
 test('loopback: a JSON (non-HTML) 200 resolves unknown, not expired', async () => {
   const json = JSON.stringify({ error: 'rate limited', retry: 60 });
   const server = await startClassifiedsServer([{ body: json }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result } = await cycle(server, temp.store);
     assert.equal(result.state, 'unknown');
@@ -146,7 +162,7 @@ test('loopback: a non-HTML 200 that merely quotes the OzB_vars and </html> token
     upstream: 'OzB_vars = {"site_name":"OzBargain","adstype":"FUSE"}; </html>',
   });
   const server = await startClassifiedsServer([{ body: quoted }, { body: quoted }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result, logLines } = await cycle(server, temp.store);
     assert.equal(result.state, 'unknown');
@@ -190,7 +206,7 @@ test('loopback: a complete page whose OzB_vars carries no readable uid resolves 
   assert.notEqual(withoutUid, full, 'the derived body must differ from the fixture');
 
   const server = await startClassifiedsServer([{ body: withoutUid }, { body: withoutUid }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result, logLines } = await cycle(server, temp.store);
     assert.equal(result.state, 'unknown');
@@ -230,7 +246,7 @@ test('loopback: a repeated malformed 200 is fetched as 200, not hidden behind a 
   // 200 rather than a 304.
   const bad = 'not html at all';
   const server = await startClassifiedsServer([{ body: bad }, { body: bad }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const first = await cycle(server, temp.store);
     assert.equal(first.result.state, 'unknown');
@@ -256,7 +272,7 @@ test('loopback: a repeated malformed 200 is fetched as 200, not hidden behind a 
 
 test('loopback: a valid 200 parses 25 listings, reports uid 226301, and retains its validators', async () => {
   const server = await startClassifiedsServer(['http/classifieds-page.html']);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result } = await cycle(server, temp.store);
     assert.equal(result.state, 'valid');
@@ -278,7 +294,7 @@ test('loopback: a 304 after a valid 200 resolves from the persisted uid and neve
   // validator; the second request carries the real ETag, so the real server
   // answers 304, and the client resolves the session from the last known uid.
   const server = await startClassifiedsServer(['http/classifieds-page.html', 'http/classifieds-page.html']);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const first = await cycle(server, temp.store);
     assert.equal(first.result.state, 'valid');
@@ -303,7 +319,7 @@ test('loopback: a 304 after a valid 200 resolves from the persisted uid and neve
 
 test('loopback: a genuine uid-0 (anonymous) page still expires (the fail-closed behaviour is preserved)', async () => {
   const server = await startClassifiedsServer(['http/derived/classifieds-page-anon.html']);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result } = await cycle(server, temp.store);
     assert.equal(result.state, 'expired');
@@ -320,7 +336,7 @@ test('loopback: a genuine uid-0 (anonymous) page still expires (the fail-closed 
 
 test('loopback: the existing non-OK controls (500, 429) resolve unknown, never latch, never alert', async () => {
   const server = await startClassifiedsServer([{ body: 'server error', status: 500 }, { body: 'slow down', status: 429 }]);
-  const temp = openTempStore();
+  const temp = classifiedsTempStore();
   try {
     const { result: err500 } = await cycle(server, temp.store);
     assert.equal(err500.state, 'unknown');
