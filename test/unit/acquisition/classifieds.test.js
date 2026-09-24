@@ -11,6 +11,11 @@ async function run(routes) {
   const transport = createFixtureTransport(routes);
   const { client, store, clock, close } = makeAcquisition({ transport });
   try {
+    // Exercise authenticated classifieds behavior: enable polling and set a
+    // cookie (the clean default store is disabled + unconfigured, so the
+    // authenticated fixtures must set both explicitly).
+    store.setSetting('classifieds_enabled', '1');
+    store.setSetting('ozb_account_cookie', 'test-session=authenticated');
     const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
     return { transport, result };
   } finally {
@@ -55,6 +60,8 @@ test('cloudflare_block: the 17-byte body at 403 stops all requests', async () =>
 test('304 after a valid 200: the session is resolved from the persisted uid and never latches', async () => {
   const transport1 = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client: c1, store, clock, close } = makeAcquisition({ transport: transport1 });
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
   const r1 = await runClassifiedsPoll({ client: c1, store, clock, log: () => {} });
   assert.equal(r1.state, 'valid');
   assert.equal(r1.uid, 226301);
@@ -93,6 +100,8 @@ test('429 (rate_limited): the session is unknown, never latches, never alerts', 
 test('Minor 1: an expired 200 (uid 0) invalidates the persisted uid, so a later 304 resolves to expired, not valid', async () => {
   const transport1 = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client: c1, store, clock, close } = makeAcquisition({ transport: transport1 });
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
   const r1 = await runClassifiedsPoll({ client: c1, store, clock, log: () => {} });
   assert.equal(r1.state, 'valid');
   assert.equal(r1.uid, 226301);
@@ -136,6 +145,8 @@ test('a corrupt (non-numeric) classifieds_last_uid setting on a 304 resolves to 
   // 304 resolves to `unchanged` (the caller keeps its previous state).
   const transport = createFixtureTransport({ [URL]: { status: 304, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
   store.setSetting('classifieds_last_uid', 'corrupt-not-a-number');
   const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
   try {
@@ -156,6 +167,7 @@ test('M1: the stored account cookie (screen 9) is sent on the classifieds reques
   // as a `Cookie` header, so a fresh cookie actually carries the session.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '1');
   store.deleteSetting('ozb_account_cookie');
   store.setSetting('ozb_account_cookie', 'session=abc123; uid=226301');
   const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
@@ -175,6 +187,7 @@ test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallb
   // M1: when the screen-9 setting is absent, the env value is the fallback.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '1');
   store.deleteSetting('ozb_account_cookie');
   const result = await runClassifiedsPoll({
     client,
@@ -193,10 +206,12 @@ test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallb
   }
 });
 
-test('with neither a stored cookie nor the env value, classifieds is skipped without a request', async () => {
-  // With no session configured, do not make an anonymous request to the site.
+test('enabled with no credentials: classifieds is skipped without a request (never anonymous)', async () => {
+  // Enabled but no session configured (no stored cookie, empty env value):
+  // do not make an anonymous request to the site.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport, config: { OZB_ACCOUNT_COOKIE: '' } });
+  store.setSetting('classifieds_enabled', '1');
   store.deleteSetting('ozb_account_cookie');
   const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
   try {
@@ -210,12 +225,101 @@ test('with neither a stored cookie nor the env value, classifieds is skipped wit
 test('an expired session is not retried until a fresh cookie is set', async () => {
   const transport = createFixtureTransport({ [URL]: { status: 403, fixture: 'http/cls403.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
   try {
     const first = await runClassifiedsPoll({ client, store, clock, log: () => {} });
     const second = await runClassifiedsPoll({ client, store, clock, log: () => {} });
     assert.equal(first.state, 'expired');
     assert.equal(second.state, 'expired');
     assert.equal(transport.requestLog.length, 1, 'the expired session is only checked once');
+  } finally {
+    close();
+  }
+});
+
+// --- The persistent global enable/disable gate (default disabled) ---
+// These prove the gate's contract: disabled and unconfigured modes make ZERO
+// classifieds requests, and a change to the setting takes effect on the next
+// tick (the poll re-reads the persisted setting each time).
+
+test('a missing classifieds_enabled setting defaults to disabled: zero classifieds requests even with a cookie', async () => {
+  // The clean default store has no `classifieds_enabled` (→ disabled). Even
+  // with a stored cookie, a disabled poll must not touch the classifieds URL.
+  const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+  try {
+    assert.equal(result.state, 'disabled');
+    assert.equal(transport.requestLog.length, 0, 'a disabled poll makes zero classifieds requests');
+    assert.equal(store.getFailures().length, 0, 'a disabled poll skips cleanly, writing no failure row');
+  } finally {
+    close();
+  }
+});
+
+test('disabled with credentials: zero classifieds requests and no failure rows (a clean skip)', async () => {
+  // Explicitly off ('0') with a cookie present: the gate short-circuits before
+  // any request, so no transport-error or session-expired row is created.
+  const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '0');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+  try {
+    assert.equal(result.state, 'disabled');
+    assert.equal(transport.requestLog.length, 0, 'a disabled poll makes zero classifieds requests');
+    assert.equal(store.getFailures().length, 0, 'a disabled poll skips cleanly, writing no failure row');
+  } finally {
+    close();
+  }
+});
+
+test('disabling after enablement stops subsequent requests', async () => {
+  // The poll re-reads the persisted setting on every tick, so a change takes
+  // effect without a restart: the first poll (on) requests, the second (off)
+  // does not.
+  const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  try {
+    const first = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    assert.equal(first.state, 'valid');
+    assert.equal(transport.requestLog.length, 1, 'the enabled poll makes a request');
+    store.setSetting('classifieds_enabled', '0');
+    const second = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    assert.equal(second.state, 'disabled');
+    assert.equal(transport.requestLog.length, 1, 'disabling makes zero new requests');
+  } finally {
+    close();
+  }
+});
+
+test('clearing the stale expiry (set-cookie / toggle-on re-arm) permits a fresh check', async () => {
+  // A latched-off expired session is not retried. Re-arming (clearing the
+  // `classifieds_last_uid` latch and the cached validators — what the set-cookie
+  // and toggle-on routes do) makes the next poll run a fresh check. If the
+  // session is still bad, it re-latches; the point is the fresh check ran.
+  const transport = createFixtureTransport({ [URL]: { status: 403, fixture: 'http/cls403.html' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  try {
+    const first = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    assert.equal(first.state, 'expired');
+    assert.equal(store.getSetting('classifieds_last_uid'), '0', 'the expiry latches the last uid to 0');
+    assert.equal(transport.requestLog.length, 1);
+    const second = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    assert.equal(second.state, 'expired');
+    assert.equal(transport.requestLog.length, 1, 'latched: not retried until re-armed');
+    // Re-arm: clear the stale latch and validators (what the routes do).
+    store.deleteSetting('classifieds_last_uid');
+    store.setFeedState(URL, null, null);
+    const third = await runClassifiedsPoll({ client, store, clock, log: () => {} });
+    assert.equal(transport.requestLog.length, 2, 'a fresh request is made after re-arm');
+    assert.equal(third.state, 'expired', 'still a bad session: re-latches');
   } finally {
     close();
   }
@@ -228,6 +332,10 @@ test('an expired session is not retried until a fresh cookie is set', async () =
 function runCapturing(routes, config = {}) {
   const transport = createFixtureTransport(routes);
   const { client, store, clock, close } = makeAcquisition({ transport, config });
+  // Exercise authenticated classifieds behavior: enable polling and set a
+  // cookie (the clean default store is disabled + unconfigured).
+  store.setSetting('classifieds_enabled', '1');
+  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
   const logLines = [];
   return {
     transport,

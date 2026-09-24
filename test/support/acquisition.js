@@ -15,9 +15,10 @@ export function makeAcquisition({ clockIso = '2026-09-19T07:30:00Z', transport, 
   const clock = fixedClock(clockIso);
   const dir = mkdtempSync(join(tmpdir(), 'ozb-acq-'));
   const store = openStore({ path: join(dir, 'test.db'), clock });
-  // Most acquisition tests exercise authenticated classifieds behavior; tests
-  // for an absent cookie explicitly remove this fixture credential.
-  store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  // A clean store: no `classifieds_enabled` (defaults to disabled) and no
+  // `ozb_account_cookie`. Tests that exercise authenticated classifieds
+  // behavior set both explicitly (the `run`/`runCapturing` helpers do this);
+  // the disabled and unconfigured tests rely on the clean default.
   const client = createOzbClient({
     transport,
     store,
