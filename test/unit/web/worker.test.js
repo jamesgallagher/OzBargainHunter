@@ -186,6 +186,30 @@ describe('worker: composition root', () => {
     }
   });
 
+  // The global enable/disable gate: turning classifieds off must make ZERO
+  // classifieds requests (even with a cookie stored) while leaving the deals
+  // poll — and the shared one-request-at-a-time safeguard — untouched.
+  test('turning classifieds off makes zero classifieds requests but does not affect deals polling', async () => {
+    const { worker, store, transport, close } = await makeWorker({});
+    try {
+      store.setSetting('classifieds_enabled', '0');
+      store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+      await worker.tasks.classifiedsPoll();
+      assert.equal(
+        transport.requestLog.filter((r) => r.url === 'https://www.ozbargain.com.au/classified').length,
+        0,
+        'disabled classifieds makes zero classifieds requests',
+      );
+      await worker.tasks.dealPoll();
+      assert.ok(
+        transport.requestLog.filter((r) => r.url.includes('/deals/feed')).length > 0,
+        'deals polling still makes requests when classifieds is disabled',
+      );
+    } finally {
+      await close();
+    }
+  });
+
   // X8: the AC "on SIGTERM exits 0 with the database closed cleanly" is
   // verified by spawning the real `node worker/main.js` as a child process
   // and sending it SIGTERM — not by driving `startWorker` in-process.

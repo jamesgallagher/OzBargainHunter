@@ -1,42 +1,25 @@
 'use client';
 
 /**
- * LocalTime (spec §4.4, §6.1). The server fallback is the ISO value; after
- * hydration it renders the user's locale while preserving the absolute ISO
- * instant in `dateTime` and the accessible title (AC-7).
+ * LocalTime (spec §4.4, §6.1). Renders the instant in Melbourne time
+ * (Australia/Melbourne) on both the server and after hydration, preserving the
+ * absolute ISO instant in `dateTime` and the accessible title (AC-7).
  *
- * The ISO instant is always present in the markup (the server render), so the
- * component is safe to render on the server and in `renderToStaticMarkup` —
- * the locale formatting is a client enhancement that only runs after
- * hydration.
+ * `formatMelbourne` runs identically on the server (Node, full ICU) and in the
+ * browser, so the server render already shows Melbourne time — there is no
+ * raw-ISO fallback and no post-hydration flash. The component is therefore safe
+ * to render on the server and in `renderToStaticMarkup`.
  *
  * @param {{ iso: string, label?: string }} props
  */
 import { useEffect, useState } from 'react';
+import { formatMelbourne } from '../../lib/time.js';
 
 export default function LocalTime({ iso, label }) {
-  const [formatted, setFormatted] = useState('');
+  const [formatted, setFormatted] = useState(() => formatMelbourne(iso));
 
   useEffect(() => {
-    if (!iso) return;
-    function format() {
-      try {
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) {
-          setFormatted(iso);
-          return;
-        }
-        setFormatted(
-          new Intl.DateTimeFormat(undefined, {
-            dateStyle: 'medium',
-            timeStyle: 'medium',
-          }).format(d),
-        );
-      } catch {
-        setFormatted(iso);
-      }
-    }
-    format();
+    setFormatted(formatMelbourne(iso));
   }, [iso]);
 
   const display = formatted || iso;

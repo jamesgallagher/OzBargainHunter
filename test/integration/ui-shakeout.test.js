@@ -150,12 +150,18 @@ describe('integration: browser UI and test-send shakeout', () => {
     assert.equal(await page.locator(`${thresholdForm} input[name="freebie"]`).isChecked(), false);
 
     await expectHeading(page, '/classifieds-session', 'Classifieds session');
+    // The pre-seeded last-uid (24680) is shown before any save.
+    assert.match(await page.locator('dl.classifieds-session').innerText(), /UID\s+24680/);
     const sessionForm = 'form[action="/classifieds-session/set"]';
     const sessionCookie = 'uid=24680; session=loopback-only';
     await page.locator(`${sessionForm} input[name="cookie"]`).fill(sessionCookie);
     await submit(page, sessionForm, 'button[type="submit"]', '/classifieds-session/set');
     await expectHeading(page, '/classifieds-session', 'Classifieds session');
-    assert.match(await page.locator('dl.classifieds-session').innerText(), /UID\s+24680/);
+    // Saving a fresh cookie re-arms the session: the old uid is cleared, so
+    // the page reads "Not yet confirmed" until a subsequent poll verifies the
+    // new session (the old UID must NOT persist after a save).
+    assert.match(await page.locator('dl.classifieds-session').innerText(), /Not yet confirmed/);
+    assert.equal(temp.store.getSetting('classifieds_last_uid'), null);
     assert.equal(temp.store.getSetting('ozb_account_cookie'), sessionCookie);
 
     await expectHeading(page, '/rules/1', 'Edit rule 1');

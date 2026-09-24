@@ -47,6 +47,22 @@ function dealTimeline(response) {
   };
 }
 
+/**
+ * Enable classifieds polling on a temp store and set a fake session cookie.
+ * The production default is disabled + unconfigured (the gate makes zero
+ * classifieds requests); the classifieds-fetching scenarios below exist to
+ * exercise a *real* fetch, so the intended state is set explicitly here
+ * rather than in the shared `openTempStore` helper (which would also flip
+ * the default-exercising deals tests). The default-disabled and
+ * enabled-without-credentials contracts are covered separately by the unit
+ * tests, which assert zero requests.
+ */
+function enableClassifieds(temp) {
+  temp.store.setSetting('classifieds_enabled', '1');
+  temp.store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+  return temp;
+}
+
 describe('integration: full mock shakeout', () => {
   it('classifieds Selling-only filtering excludes pinned/free/wanted/swap and emits the expected freebie', async () => {
     await withHarness({
@@ -62,6 +78,7 @@ describe('integration: full mock shakeout', () => {
         surfaces: 'classifieds',
       }]);
       temp.store.setSetting('always_notify_freebie', '1');
+      enableClassifieds(temp);
 
       const selling = await runClassifiedsCycle({
         store: temp.store,
@@ -219,6 +236,7 @@ describe('integration: full mock shakeout', () => {
       { [CLASSIFIEDS_PATH]: [{ body: truncated, contentType: 'text/html; charset=utf-8' }] },
       async ({ fx, temp, capture }) => {
         insertRules(temp.store, [classifiedsRule]);
+        enableClassifieds(temp);
 
         // The accepted fix (33b3255) resolves an unparseable 200 as `unknown`,
         // never as a session expiry: the page is fetched, the parse failure is
@@ -261,6 +279,7 @@ describe('integration: full mock shakeout', () => {
       { [CLASSIFIEDS_PATH]: [{ body: '', contentType: 'text/html; charset=utf-8' }] },
       async ({ fx, temp, capture }) => {
         insertRules(temp.store, [classifiedsRule]);
+        enableClassifieds(temp);
 
         const cycle = await runClassifiedsCycle({
           store: temp.store,
@@ -307,6 +326,7 @@ describe('integration: full mock shakeout', () => {
           { [CLASSIFIEDS_PATH]: ['http/classifieds-page.html'] },
           async (control) => {
             insertRules(control.temp.store, [classifiedsRule]);
+            enableClassifieds(control.temp);
             const real = await runClassifiedsCycle({
               store: control.temp.store,
               config: control.fx.appConfig(),
@@ -329,6 +349,7 @@ describe('integration: full mock shakeout', () => {
         { [CLASSIFIEDS_PATH]: [{ status, body: 'fixture failure' }] },
         async ({ fx, temp, capture }) => {
           insertRules(temp.store, [classifiedsRule]);
+          enableClassifieds(temp);
 
           const cycle = await runClassifiedsCycle({
             store: temp.store,
