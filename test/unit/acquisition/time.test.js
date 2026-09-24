@@ -26,19 +26,21 @@ test('melbourneToUtc: a summer midnight edge (1 Jan 2023 00:30 AEDT -> 13:30Z 31
 });
 
 // `formatMelbourne` is the display-side counterpart: it shifts a stored UTC
-// instant to the Melbourne wall clock. The exact date/time layout is
-// locale-dependent, so the assertions check the wall-clock hour/minute (in
-// either 12- or 24-hour form) rather than the full string.
-test('formatMelbourne: shifts a UTC instant to the Melbourne wall time (AEST)', () => {
-  // 2026-09-19T06:20:00Z is 16:20 AEST (+10:00) — 4:20 pm. The displayed
-  // hour must be the Melbourne wall clock, not the UTC 06:20.
-  assert.match(formatMelbourne('2026-09-19T06:20:00Z'), /4:20|16:20/);
+// instant to the Melbourne wall clock. The locale is pinned to `en-AU` (the
+// app is Australian-localised), so the full layout is deterministic across
+// environments; the assertions pin the exact string, which also carries the
+// wall-clock hour/minute (12-hour, en-AU).
+test('formatMelbourne: renders a fixed en-AU layout (deterministic, AEST)', () => {
+  // 2026-09-19T06:20:00Z is 16:20 AEST (+10:00) — 4:20 pm. The exact string
+  // pins the en-AU date/time layout so a host-locale drift would fail here.
+  assert.equal(formatMelbourne('2026-09-19T06:20:00Z'), '19 Sept 2026, 4:20:00 pm');
 });
 
 test('formatMelbourne: is daylight-saving aware (AEDT)', () => {
   // 2023-01-17T22:33:00Z is 9:33 am AEDT (+11:00) on 18 Jan 2023. A fixed
-  // +10:00 offset would render 8:33; the AEDT wall clock is 9:33.
-  assert.match(formatMelbourne('2023-01-17T22:33:00Z'), /9:33/);
+  // +10:00 offset would render 8:33; the AEDT wall clock is 9:33. The exact
+  // string pins the layout and the DST-corrected hour together.
+  assert.equal(formatMelbourne('2023-01-17T22:33:00Z'), '18 Jan 2023, 9:33:00 am');
 });
 
 test('formatMelbourne: passes through the "never" sentinel verbatim', () => {

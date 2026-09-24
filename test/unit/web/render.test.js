@@ -19,6 +19,8 @@ import SuppressionsPage from '../../../app/suppressions/page.js';
 import ThresholdsPage from '../../../app/thresholds/page.js';
 import DeliveryPage from '../../../app/delivery/page.js';
 import ClassifiedsSessionPage from '../../../app/classifieds-session/page.js';
+import LocalTime from '../../../app/components/local-time.js';
+import { formatMelbourne } from '../../../lib/time.js';
 
 /**
  * One render test per screen (the nine screens of design 7.1, plus the status
@@ -342,5 +344,31 @@ describe('render: the CSRF hidden input (M-m8)', () => {
     delete process.env.OZB_CSRF_SECRET;
     const html = renderToStaticMarkup(await DeliveryPage());
     assert.match(html, /<input type="hidden" name="_csrf" value=""/, 'the _csrf field is empty when the secret is unset');
+  });
+});
+
+// M-m8: LocalTime hydration parity. `LocalTime` is a 'use client' component
+// whose `useState` initializer runs on the first client render and calls
+// `formatMelbourne(iso)`. Because `formatMelbourne` is pure and its locale is
+// pinned to `en-AU`, the server render (the same initializer, computed during
+// `renderToStaticMarkup`) produces byte-identical text to the first client
+// render — so there is no post-hydration flash. Rendering it server-side and
+// asserting the `<time>` text equals `formatMelbourne(iso)` proves the two
+// renders use the same formatter, and the `dateTime`/`title` attributes keep
+// the absolute ISO instant (AC-7).
+describe('render: LocalTime server render matches the first client render', () => {
+  test('the <time> text equals formatMelbourne(iso) and preserves the ISO instant', () => {
+    const iso = '2026-09-19T06:20:00Z';
+    const html = renderToStaticMarkup(createElement(LocalTime, { iso }));
+    // The <time> element is present and preserves the absolute ISO instant in
+    // both dateTime and title (AC-7).
+    assert.match(html, /<time class="local-time-value" dateTime="2026-09-19T06:20:00Z" title="2026-09-19T06:20:00Z">/);
+    // The server-rendered text content equals formatMelbourne(iso) — the exact
+    // value the useState initializer computes on the first client render.
+    const m = html.match(/<time[^>]*>(.*?)<\/time>/);
+    assert.ok(m, 'the <time> element has text content');
+    assert.equal(m[1], formatMelbourne(iso), 'server render text === formatMelbourne(iso)');
+    // And it is the en-AU Melbourne wall clock, not the raw ISO instant.
+    assert.equal(m[1], '19 Sept 2026, 4:20:00 pm');
   });
 });
