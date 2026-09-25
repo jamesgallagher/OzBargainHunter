@@ -278,6 +278,55 @@ export async function startWorker({
 }
 
 /**
+ * Install the SIGTERM/SIGINT handlers: stop the schedulers, close the store
+ * and exit 0 (exit 1 if shutdown itself fails). A second signal while
+ * shutting down is ignored. `proc`, `exit` and the log sinks are injectable so
+ * the handler is tested in-process with a fake process object — a real OS
+ * signal cannot be delivered gracefully on every platform (Windows has no
+ * SIGTERM), and spawning a real worker to signal it would need the network
+ * guard and fixtures just to exercise these few lines.
+ * @param {{
+ *   worker: { stop(): Promise<void> },
+ *   store: { close(): void },
+ *   proc?: { on(event: string, fn: () => void): void },
+ *   exit?: (code: number) => void,
+ *   log?: (line: string) => void,
+ *   logError?: (line: string) => void,
+ * }} deps
+ * @returns {(signal: string) => Promise<void>} the shutdown function
+ */
+export function installShutdown({
+  worker,
+  store,
+  proc = process,
+  exit = (code) => process.exit(code),
+  log = console.log,
+  logError = console.error,
+}) {
+  // A repeated signal returns the shutdown already in flight.
+  let inFlight = null;
+  const shutdown = (signal) => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      log(`${signal}: stopping worker`);
+      try {
+        await worker.stop();
+        store.close();
+        log('worker stopped cleanly, database closed');
+        exit(0);
+      } catch (err) {
+        logError(`shutdown error: ${err?.message ?? err}`);
+        exit(1);
+      }
+    })();
+    return inFlight;
+  };
+  proc.on('SIGTERM', () => shutdown('SIGTERM'));
+  proc.on('SIGINT', () => shutdown('SIGINT'));
+  return shutdown;
+}
+
+/**
  * The module entry: build the real transport, providers and config from the
  * environment, open the store, and run the worker. Handles SIGTERM/SIGINT by
  * stopping the schedulers, closing the store and exiting 0. Exits non-zero on
@@ -310,23 +359,7 @@ async function main() {
 
   const worker = await startWorker({ store, transport, clock, random, config, providerFactories });
 
-  let shuttingDown = false;
-  const shutdown = async (signal) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log(`${signal}: stopping worker`);
-    try {
-      await worker.stop();
-      store.close();
-      console.log('worker stopped cleanly, database closed');
-      process.exit(0);
-    } catch (err) {
-      console.error(`shutdown error: ${err?.message ?? err}`);
-      process.exit(1);
-    }
-  };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  installShutdown({ worker, store });
 
   // An unhandled error is unrecoverable: exit non-zero so the container is
   // restarted (a dead poller with a live UI is the failure to prevent).
