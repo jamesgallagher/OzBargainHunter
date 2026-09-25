@@ -1,7 +1,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { apply, defaultGate, GATE_DEFAULTS, b1LookbackMs, PROBE_TIMEOUT_MS } from '../../../lib/gate/rules.js';
+import {
+  apply,
+  defaultGate,
+  effectiveGate,
+  GATE_DEFAULTS,
+  b1LookbackMs,
+  PROBE_TIMEOUT_MS,
+} from '../../../lib/gate/rules.js';
 
 // A fixed instant so the pure machine is deterministic (design 3.7: no
 // Date.now() in lib/; the clock is injected by the caller).
@@ -535,6 +542,62 @@ describe('gate rules: the pure state machine (3.7)', () => {
         assert.equal(changed, false, `probe_expired while ${label} is a no-op`);
         assert.equal(events.length, 0, `probe_expired while ${label} writes nothing`);
       }
+    });
+  });
+
+  describe('effectiveGate: the lazy transitions, in memory, without writing', () => {
+    test('a cooling gate whose until_at has passed is reported as probing', () => {
+      const row = {
+        ...defaultGate(),
+        state: 'cooling',
+        rule: 'B5',
+        tier: 1,
+        until_at: '2026-09-25T03:59:00.000Z',
+      };
+      const g = effectiveGate(row, NOW);
+      assert.equal(g.state, 'probing');
+      assert.equal(row.state, 'cooling', 'the input row is left untouched');
+    });
+
+    test('a cooling gate whose until_at is in the future stays cooling', () => {
+      const row = {
+        ...defaultGate(),
+        state: 'cooling',
+        rule: 'B2',
+        tier: 1,
+        until_at: '2026-09-25T04:15:00.000Z',
+      };
+      assert.equal(effectiveGate(row, NOW).state, 'cooling');
+    });
+
+    test('a granted probe past the 10-minute window is reported as cooling', () => {
+      const row = {
+        ...defaultGate(),
+        state: 'probing',
+        rule: 'B5',
+        tier: 1,
+        probe_used: 1,
+        probe_granted_at: '2026-09-25T03:49:00.000Z',
+      };
+      assert.equal(effectiveGate(row, NOW).state, 'cooling');
+    });
+
+    test('a granted probe inside the 10-minute window stays probing', () => {
+      const row = {
+        ...defaultGate(),
+        state: 'probing',
+        rule: 'B5',
+        tier: 1,
+        probe_used: 1,
+        probe_granted_at: '2026-09-25T03:55:00.000Z',
+      };
+      assert.equal(effectiveGate(row, NOW).state, 'probing');
+    });
+
+    test('an open or stopped gate is unchanged', () => {
+      assert.equal(effectiveGate(defaultGate(), NOW).state, 'open');
+      const stopped = { ...defaultGate(), state: 'stopped', rule: 'B1' };
+      assert.equal(effectiveGate(stopped, NOW).state, 'stopped');
     });
   });
 

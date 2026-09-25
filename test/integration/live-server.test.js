@@ -212,6 +212,60 @@ describe('integration: the live server and its middleware', () => {
       assert.equal(healthz.body.status, 'healthy');
       assert.ok(healthz.body.last_success_at, 'the poll the worker made is what it reports on');
     });
+
+    it('reports a cooling gate whose cool-off has passed as probing, and writes nothing (F3)', async () => {
+      const past = new Date(Date.now() - 60 * 1000).toISOString();
+      temp.store.applyGateTransition(
+        {
+          state: 'cooling',
+          rule: 'B5',
+          tier: 1,
+          reason: 'failing deals cycles',
+          since: past,
+          until_at: past,
+          min_resume_at: null,
+          consecutive_b2: 0,
+          failing_cycles: 3,
+          b5_tier: 1,
+          probe_used: 0,
+          probe_granted_at: null,
+        },
+        [],
+      );
+      const rowBefore = temp.store.getGate();
+      const eventsBefore = temp.store.getGateEvents({ limit: 1000 }).length;
+      const res = await fetch(`${app.origin}/healthz`, {
+        headers: { 'x-healthcheck-secret': HEALTHCHECK_SECRET },
+      });
+      const body = await res.json();
+      assert.equal(res.status, 503, 'a non-open gate is backing off');
+      assert.equal(body.status, 'backing_off');
+      assert.equal(body.gate.state, 'probing', 'the expired cool-off is reported as probing');
+      assert.deepEqual(temp.store.getGate(), rowBefore, 'the access_gate row is byte-for-byte unchanged');
+      assert.equal(
+        temp.store.getGateEvents({ limit: 1000 }).length,
+        eventsBefore,
+        'no gate event was recorded by the health check',
+      );
+      // Restore the open gate so the worker's next cycle behaves as before.
+      temp.store.applyGateTransition(
+        {
+          state: 'open',
+          rule: null,
+          tier: 0,
+          reason: null,
+          since: new Date().toISOString(),
+          until_at: null,
+          min_resume_at: null,
+          consecutive_b2: 0,
+          failing_cycles: 0,
+          b5_tier: 0,
+          probe_used: 0,
+          probe_granted_at: null,
+        },
+        [],
+      );
+    });
   });
 
   describe('CSRF on a state-changing route (8.6, 11.3.6)', () => {

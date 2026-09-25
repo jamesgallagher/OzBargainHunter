@@ -13,7 +13,7 @@
  */
 
 import { getStore } from '../../lib/web/db.js';
-import { createGate } from '../../lib/gate/index.js';
+import { effectiveGate, defaultGate } from '../../lib/gate/rules.js';
 import { systemClock } from '../../lib/clock.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { normalizeAppSecret } from '../../lib/env-secret.js';
@@ -60,17 +60,15 @@ export async function GET(request) {
 
   // The access gate (design 3.7): while it is not open (cooling / stopped
   // / probing) the app is backing off, and that is the health status —
-  // ahead of the last-success age check. The gate is built over the shared
-  // store with the system clock (web code; the injected-clock rule applies
-  // to lib/ and worker/), and its lazy cooling→probing transition in
-  // read() uses the same clock.
-  const gate = createGate({
-    store,
-    clock: systemClock(),
-    config: { OZB_DEALS_FEED_URL: process.env.OZB_DEALS_FEED_URL },
-    log: () => {},
-  });
-  const gateRow = gate.read();
+  // ahead of the last-success age check. The read is pure (review F3):
+  // `effectiveGate` applies the lazy transitions (cooling→probing at
+  // `until_at`, the granted probe expiring after the 10-minute window) in
+  // memory, so a health check never writes to the gate row or the event
+  // table.
+  const gateRow = effectiveGate(
+    store.getGate() ?? defaultGate(),
+    systemClock().now().getTime(),
+  );
   if (gateRow.state !== 'open') {
     return Response.json(
       {
