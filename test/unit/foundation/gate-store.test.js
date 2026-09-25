@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../../../lib/store/index.js';
+import { createGate } from '../../../lib/gate/index.js';
 import { fixedClock } from '../../../lib/clock.js';
 
 // The gate tables are added by migration v3 (the prompt said v2, but the
@@ -476,5 +477,45 @@ describe('store: the persisted access gate (3.7)', () => {
       assert.deepEqual(store.getGate(), before, 'the previous state stands after the rollback');
       assert.equal(store.getGateEvents().length, eventsBefore, 'the rolled-back event was not written');
     });
+  });
+
+  test('check() grants the probe in one transaction: a concurrent check is refused (R2-1)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-store-'));
+    const dbPath = join(dir, 'test.db');
+    const clock = fixedClock('2026-09-19T06:20:00Z');
+    const storeA = openStore({ path: dbPath, clock });
+    const storeB = openStore({ path: dbPath, clock });
+    let bVerdict;
+    try {
+      // The gate stands probing with the probe unused, so a check for the
+      // probe URL is grantable — but only once.
+      storeA.mutateGate((row) => ({
+        gate: { ...row, state: 'probing', probe_used: 0, probe_granted_at: null },
+        events: [],
+      }));
+      const gateA = createGate({ store: storeA, clock, log: () => {} });
+      const gateB = createGate({ store: storeB, clock, log: () => {} });
+      // On A's first mutateGate call (the check's transaction), run B's
+      // check in between: with the fix, A's single transaction completes
+      // before B's check starts, so B is refused.
+      const innerMutateGate = storeA.mutateGate.bind(storeA);
+      let firstCall = true;
+      storeA.mutateGate = (fn) => {
+        const result = innerMutateGate(fn);
+        if (firstCall) {
+          firstCall = false;
+          bVerdict = gateB.check(gateB.probeUrl);
+        }
+        return result;
+      };
+      const aVerdict = gateA.check(gateA.probeUrl);
+      const granted = [aVerdict.allowed, bVerdict.allowed].filter(Boolean).length;
+      assert.equal(granted, 1, 'exactly one of the two checks is granted the probe');
+      assert.equal(storeA.getGate().probe_used, 1, 'the probe was consumed exactly once');
+    } finally {
+      if (storeB.getDb().isOpen) storeB.close();
+      if (storeA.getDb().isOpen) storeA.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
