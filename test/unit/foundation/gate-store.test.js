@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../../../lib/store/index.js';
 import { fixedClock } from '../../../lib/clock.js';
 
@@ -386,6 +387,93 @@ describe('store: the persisted access gate (3.7)', () => {
       assert.equal(store.countGateEvents({ rule: 'B1', toState: 'stopped', sinceIso: '2026-09-09T06:20:00Z' }), 1);
       // A different rule counts nothing.
       assert.equal(store.countGateEvents({ rule: 'B3', toState: 'stopped', sinceIso: '2026-08-19T06:20:00Z' }), 1);
+    });
+  });
+
+  test('mutateGate holds the write lock across the read and the write (spec 4.1)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-store-'));
+    const dbPath = join(dir, 'test.db');
+    const clock = fixedClock('2026-09-19T06:20:00Z');
+    const storeA = openStore({ path: dbPath, clock });
+    const storeB = openStore({ path: dbPath, clock });
+    try {
+      storeA.mutateGate((row) => {
+        // From inside the transaction, a second connection with
+        // busy_timeout = 0 must fail to acquire the write lock.
+        const raw = new DatabaseSync(dbPath);
+        try {
+          raw.exec('PRAGMA busy_timeout = 0');
+          assert.throws(() => raw.exec('BEGIN IMMEDIATE'), /database is locked/);
+        } finally {
+          raw.close();
+        }
+        return null;
+      });
+    } finally {
+      if (storeB.getDb().isOpen) storeB.close();
+      if (storeA.getDb().isOpen) storeA.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('mutateGate: fn returning null writes nothing', () => {
+    withStore((store) => {
+      // A valid transition first, so there is a previous state to compare.
+      store.mutateGate((row) => ({
+        gate: { ...row, state: 'cooling', rule: 'B2', tier: 1, reason: 'rate_limited on deals feed', since: '2026-09-19T06:20:00Z', until_at: '2026-09-19T06:35:00Z' },
+        events: [
+          {
+            at: '2026-09-19T06:20:00Z',
+            from_state: 'open',
+            to_state: 'cooling',
+            rule: 'B2',
+            tier: 1,
+            reason: 'rate_limited on deals feed',
+            until_at: '2026-09-19T06:35:00Z',
+            min_resume_at: null,
+          },
+        ],
+      }));
+      const before = store.getGate();
+      const eventsBefore = store.getGateEvents().length;
+      // fn returns null: the row must be unchanged.
+      const result = store.mutateGate(() => null);
+      assert.deepEqual(result, before, 'the returned row is the input row');
+      assert.deepEqual(store.getGate(), before, 'the stored row is unchanged');
+      assert.equal(store.getGateEvents().length, eventsBefore, 'no new events were written');
+    });
+  });
+
+  test('mutateGate: a throwing fn rolls back the row and the events', () => {
+    withStore((store) => {
+      // A valid transition first, so there is a previous state to stand.
+      store.mutateGate((row) => ({
+        gate: { ...row, state: 'cooling', rule: 'B2', tier: 1, reason: 'rate_limited on deals feed', since: '2026-09-19T06:20:00Z', until_at: '2026-09-19T06:35:00Z' },
+        events: [
+          {
+            at: '2026-09-19T06:20:00Z',
+            from_state: 'open',
+            to_state: 'cooling',
+            rule: 'B2',
+            tier: 1,
+            reason: 'rate_limited on deals feed',
+            until_at: '2026-09-19T06:35:00Z',
+            min_resume_at: null,
+          },
+        ],
+      }));
+      const before = store.getGate();
+      const eventsBefore = store.getGateEvents().length;
+      // A throwing fn: the row and events must roll back.
+      assert.throws(() => {
+        store.mutateGate((row) => {
+          // Mutate the row, then throw before returning.
+          const gate = { ...row, state: 'cooling', rule: 'B2', tier: 2, reason: 'rate_limited on deals feed 2', since: '2026-09-19T06:21:00Z', until_at: '2026-09-19T06:51:00Z' };
+          throw new Error('boom');
+        });
+      }, /boom/);
+      assert.deepEqual(store.getGate(), before, 'the previous state stands after the rollback');
+      assert.equal(store.getGateEvents().length, eventsBefore, 'the rolled-back event was not written');
     });
   });
 });
