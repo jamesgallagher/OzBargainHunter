@@ -57,7 +57,7 @@ describe('gate rules: the pure state machine (3.7)', () => {
   });
 
   test('b1LookbackMs is the 30-day window', () => {
-    assert.equal(b1LookbackMs(SETTINGS), 30 * DAY);
+    assert.equal(b1LookbackMs(), 30 * DAY);
   });
 
   describe('B1: a Cloudflare block stops the gate', () => {
