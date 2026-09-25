@@ -320,6 +320,81 @@ describe('worker: composition root', () => {
     }
   });
 
+  // F1: a stuck probe is a liveness bug. The probe is granted (probe_used =
+  // 1, probe_granted_at stamped) but never answered — the process died
+  // mid-probe. The 10-minute liveness window must expire the probe: on the
+  // next read the gate re-cools (the B5 tier climbs), and once that cool-off
+  // runs out the poll resumes and a 200 probe reopens the gate. Without the
+  // window the gate would sit in `probing` forever with the probe consumed,
+  // and no request would ever go out again.
+  test('a stuck probe expires after 10 minutes, re-cools, and the poll resumes (F1 liveness)', async () => {
+    const routes = {
+      'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+      'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+      'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+      'https://www.ozbargain.com.au/classified': { status: 200, fixture: 'http/classifieds-page.html' },
+    };
+    const first = await makeGateWorker({ routes });
+    let second;
+    try {
+      // Cool the gate at B5 tier 1 until 07:45, then let it expire so the
+      // gate is probing when the probe is granted.
+      setGateState(first.store, 'cooling', {
+        rule: 'B5',
+        tier: 1,
+        reason: 'failing deals cycles',
+        until_at: '2026-09-19T07:45:00Z',
+        failing_cycles: 3,
+        b5_tier: 1,
+      });
+      await first.clock.advance(15 * 60 * 1000); // -> 07:45
+      // Grant the probe without making the request: check() consumes the
+      // probe (probe_used = 1) and stamps probe_granted_at in the same
+      // transaction. This is the "stuck" probe — the process dies here.
+      const verdict = first.worker.gate.check('https://www.ozbargain.com.au/deals/feed?page=0');
+      assert.equal(verdict.allowed, true, 'the probe is granted');
+      const granted = first.store.getGate();
+      assert.equal(granted.state, 'probing', 'the gate is probing');
+      assert.equal(granted.probe_used, 1, 'the probe is consumed');
+      assert.equal(granted.probe_granted_at, '2026-09-19T07:45:00.000Z', 'the grant instant is stamped');
+      first.store.close();
+
+      // Restart on the same database file; the clock starts at the grant
+      // instant (07:45) so a 10-minute advance reaches the expiry (07:55).
+      second = await makeGateWorker({ routes, dir: first.dir, dbPath: first.dbPath, clockIso: '2026-09-19T07:45:00Z' });
+      assert.equal(second.store.getGate().state, 'probing', 'the restarted store reads the persisted probing state');
+      assert.equal(second.store.getGate().probe_used, 1, 'the consumed probe is persisted across the restart');
+
+      // 07:54 is within the 10-minute window: a read must NOT expire the
+      // probe, so the poll stays a no-op and the probe stays consumed.
+      await second.clock.advance(9 * 60 * 1000); // -> 07:54
+      await second.worker.tasks.dealPoll();
+      assert.equal(second.store.getGate().state, 'probing', 'the probe is not expired before 10 minutes');
+
+      // At 07:55 the probe has been unanswered for 10 minutes: the next
+      // read expires it and the gate re-cools at the next B5 tier.
+      await second.clock.advance(60 * 1000); // -> 07:55
+      await second.worker.tasks.dealPoll();
+      const g = second.store.getGate();
+      assert.equal(g.state, 'cooling', 'an expired probe re-cools the gate');
+      assert.equal(g.rule, 'B5', 'the re-cool is a B5 cool-off');
+      assert.equal(g.b5_tier, 2, 'the B5 tier climbs to 2');
+      assert.equal(g.until_at, '2026-09-19T07:55:04.000Z', 'the cool-off is 4x the poll interval (4 s)');
+
+      // Once the cool-off runs out the poll resumes: a 200 probe reopens
+      // the gate and exactly one request goes out.
+      await second.clock.advance(4 * 1000); // -> 07:55:04
+      const callsBefore = second.transport.calls;
+      await second.worker.tasks.dealPoll();
+      assert.equal(second.store.getGate().state, 'open', 'a 200 probe reopens the gate');
+      assert.equal(second.transport.calls, callsBefore + 1, 'the resumed poll made exactly one (probe) request');
+    } finally {
+      try { first.store.close(); } catch {}
+      if (second) { try { second.store.close(); } catch {} }
+      rmSync(first.dir, { recursive: true, force: true });
+    }
+  });
+
   // G8: the dead-man's switch is suppressed while the gate is closed —
   // even when the last success was days ago — and resumes once the gate
   // opens. Nothing is sent and deadman_state is not written while closed.

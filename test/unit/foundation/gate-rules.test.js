@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { apply, defaultGate, GATE_DEFAULTS, b1LookbackMs } from '../../../lib/gate/rules.js';
+import { apply, defaultGate, GATE_DEFAULTS, b1LookbackMs, PROBE_TIMEOUT_MS } from '../../../lib/gate/rules.js';
 
 // A fixed instant so the pure machine is deterministic (design 3.7: no
 // Date.now() in lib/; the clock is injected by the caller).
@@ -41,6 +41,7 @@ describe('gate rules: the pure state machine (3.7)', () => {
       failing_cycles: 0,
       b5_tier: 0,
       probe_used: 0,
+      probe_granted_at: null,
     });
   });
 
@@ -392,6 +393,7 @@ describe('gate rules: the pure state machine (3.7)', () => {
       const { gate, events } = step(cooling, { kind: 'cooling_expired' });
       assert.equal(gate.state, 'probing');
       assert.equal(gate.probe_used, 0);
+      assert.equal(gate.probe_granted_at, null);
       assert.equal(gate.until_at, null);
       assert.equal(gate.min_resume_at, null);
       assert.equal(events.length, 1);
@@ -420,6 +422,122 @@ describe('gate rules: the pure state machine (3.7)', () => {
     });
   });
 
+  describe('the 10-minute probe liveness window (probe_expired)', () => {
+    test('PROBE_TIMEOUT_MS is 10 minutes', () => {
+      assert.equal(PROBE_TIMEOUT_MS, 10 * MIN);
+    });
+
+    test('an unanswered probe after a B2 cool-off re-cools at the next tier (1 h at tier 3)', () => {
+      // Build up to two consecutive 429s (tier 2).
+      let { gate } = step(defaultGate(), { kind: 'rate_limited', surface: 'deals' });
+      ({ gate } = step(gate, { kind: 'cooling_expired' }));
+      ({ gate } = step(gate, { kind: 'rate_limited', surface: 'deals' }));
+      assert.equal(gate.state, 'cooling');
+      assert.equal(gate.tier, 2);
+      assert.equal(gate.consecutive_b2, 2);
+
+      // The cool-off expires: probing, and the probe is granted (used, stamped).
+      ({ gate } = step(gate, { kind: 'cooling_expired' }));
+      assert.equal(gate.state, 'probing');
+      const granted = { ...gate, probe_used: 1, probe_granted_at: NOW_ISO };
+
+      // The probe is never answered: the third consecutive, re-cools at 1 h.
+      const { gate: next, events, changed } = step(granted, { kind: 'probe_expired' });
+      assert.equal(changed, true);
+      assert.equal(next.state, 'cooling');
+      assert.equal(next.rule, 'B2');
+      assert.equal(next.tier, 3);
+      assert.equal(next.consecutive_b2, 3);
+      assert.equal(next.until_at, new Date(NOW + HOUR).toISOString());
+      assert.equal(next.min_resume_at, null);
+      assert.equal(events.length, 1);
+      assert.deepEqual(events[0], {
+        at: NOW_ISO,
+        from_state: 'probing',
+        to_state: 'cooling',
+        rule: 'B2',
+        tier: 3,
+        reason: 'probe expired',
+        until_at: new Date(NOW + HOUR).toISOString(),
+        min_resume_at: null,
+      });
+    });
+
+    test('an unanswered fifth probe stops the gate (B3)', () => {
+      // Build up to four consecutive 429s.
+      let { gate } = step(defaultGate(), { kind: 'rate_limited', surface: 'deals' });
+      for (let i = 0; i < 3; i += 1) {
+        ({ gate } = step(gate, { kind: 'cooling_expired' }));
+        ({ gate } = step(gate, { kind: 'rate_limited', surface: 'deals' }));
+      }
+      assert.equal(gate.consecutive_b2, 4);
+
+      ({ gate } = step(gate, { kind: 'cooling_expired' }));
+      const granted = { ...gate, probe_used: 1, probe_granted_at: NOW_ISO };
+      const { gate: next, events } = step(granted, { kind: 'probe_expired' });
+      assert.equal(next.state, 'stopped');
+      assert.equal(next.rule, 'B3');
+      assert.equal(next.consecutive_b2, 5);
+      assert.equal(next.min_resume_at, new Date(NOW + DAY).toISOString());
+      assert.equal(events.length, 1);
+      assert.equal(events[0].from_state, 'probing');
+      assert.equal(events[0].to_state, 'stopped');
+      assert.equal(events[0].rule, 'B3');
+      assert.equal(events[0].reason, 'probe expired');
+    });
+
+    test('an unanswered probe after a B5 cool-off re-cools at the next tier (4×)', () => {
+      // Build up to the B5 cool-off (tier 1).
+      let { gate } = step(defaultGate(), { kind: 'deals_cycle', reachedDealsFeed: false, transientFailures: 1 });
+      ({ gate } = step(gate, { kind: 'deals_cycle', reachedDealsFeed: false, transientFailures: 1 }));
+      ({ gate } = step(gate, { kind: 'deals_cycle', reachedDealsFeed: false, transientFailures: 1 }));
+      assert.equal(gate.state, 'cooling');
+      assert.equal(gate.b5_tier, 1);
+
+      ({ gate } = step(gate, { kind: 'cooling_expired' }));
+      const granted = { ...gate, probe_used: 1, probe_granted_at: NOW_ISO };
+      const { gate: next, events } = step(granted, { kind: 'probe_expired' });
+      assert.equal(next.state, 'cooling');
+      assert.equal(next.rule, 'B5');
+      assert.equal(next.b5_tier, 2);
+      assert.equal(next.until_at, new Date(NOW + 4 * 300000).toISOString());
+      assert.equal(events.length, 1);
+      assert.equal(events[0].reason, 'probe expired');
+    });
+
+    test('an unanswered probe after a manual resume lands on B5 tier 1', () => {
+      const { gate: stopped } = step(defaultGate(), { kind: 'cloudflare_block', surface: 'deals' });
+      const { gate: probing } = step(stopped, { kind: 'resume' });
+      const granted = { ...probing, probe_used: 1, probe_granted_at: NOW_ISO };
+      const { gate: next } = step(granted, { kind: 'probe_expired' });
+      assert.equal(next.state, 'cooling');
+      assert.equal(next.rule, 'B5');
+      assert.equal(next.b5_tier, 1);
+      assert.equal(next.until_at, new Date(NOW + 2 * 300000).toISOString());
+    });
+
+    test('probe_expired is a no-op when the probe was not granted (probe_used 0)', () => {
+      const { gate: cooling } = step(defaultGate(), { kind: 'rate_limited', surface: 'deals' });
+      const { gate: probing } = step(cooling, { kind: 'cooling_expired' });
+      assert.equal(probing.probe_used, 0);
+      const { gate, events, changed } = step(probing, { kind: 'probe_expired' });
+      assert.equal(changed, false);
+      assert.equal(events.length, 0);
+      assert.deepEqual(gate, probing);
+    });
+
+    test('probe_expired is a no-op when the gate is not probing', () => {
+      const { gate: cooling } = step(defaultGate(), { kind: 'rate_limited', surface: 'deals' });
+      const { gate: stopped } = step(defaultGate(), { kind: 'cloudflare_block', surface: 'deals' });
+      for (const [label, g] of [['open', defaultGate()], ['cooling', cooling], ['stopped', stopped]]) {
+        const granted = { ...g, probe_used: 1, probe_granted_at: NOW_ISO };
+        const { events, changed } = step(granted, { kind: 'probe_expired' });
+        assert.equal(changed, false, `probe_expired while ${label} is a no-op`);
+        assert.equal(events.length, 0, `probe_expired while ${label} writes nothing`);
+      }
+    });
+  });
+
   describe('the manual resume', () => {
     test('resume moves a stopped gate to probing with zeroed counters', () => {
       const { gate: stopped } = step(defaultGate(), { kind: 'cloudflare_block', surface: 'deals' });
@@ -432,6 +550,7 @@ describe('gate rules: the pure state machine (3.7)', () => {
       assert.equal(gate.failing_cycles, 0);
       assert.equal(gate.b5_tier, 0);
       assert.equal(gate.probe_used, 0);
+      assert.equal(gate.probe_granted_at, null);
       assert.equal(gate.until_at, null);
       assert.equal(gate.min_resume_at, null);
       assert.equal(events.length, 1);

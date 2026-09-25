@@ -483,6 +483,36 @@ describe('gate: end-to-end (design 3.7)', () => {
         },
       );
       assert.equal(env.transport.calls, callsBefore, 'the replayed probe never reaches the transport');
+
+      // The probe was granted but never answered (the process died).
+      // Ten minutes after the grant, the next read expires it and the
+      // gate re-cools at the next B5 tier (2: 4x the interval).
+      await env.clock.advance(10 * MIN);
+      const eventsBeforeExpiry = store2.getGateEvents().length;
+      gate2.read();
+      const g2 = store2.getGate();
+      assert.equal(g2.state, 'cooling');
+      assert.equal(g2.rule, 'B5');
+      assert.equal(g2.b5_tier, 2);
+      assert.equal(g2.until_at, new Date(env.clock.now().getTime() + 4 * 300000).toISOString());
+      assert.equal(store2.getGateEvents().length, eventsBeforeExpiry + 1);
+      const expiryEvent = store2.getGateEvents()[0];
+      assert.equal(expiryEvent.from_state, 'probing');
+      assert.equal(expiryEvent.to_state, 'cooling');
+      assert.equal(expiryEvent.rule, 'B5');
+      assert.equal(expiryEvent.tier, 2);
+      assert.equal(expiryEvent.reason, 'probe expired');
+      // A second read after the expiry writes nothing (idempotent).
+      gate2.read();
+      assert.equal(store2.getGateEvents().length, eventsBeforeExpiry + 1, 'the second read after the expiry writes nothing');
+
+      // After the re-cool, the first tick makes exactly one new probe.
+      env.routes[P0] = { status: 200, fixture: 'http/r0.xml' };
+      await env.clock.advance(Date.parse(g2.until_at) - env.clock.now().getTime());
+      const callsBeforeProbe = env.transport.calls;
+      await runDealPoll({ client: client2, store: store2, clock: env.clock, config: env.config, log: env.log, gate: gate2 });
+      assert.equal(env.transport.calls, callsBeforeProbe + 1, 'the first tick after the re-cool is exactly the probe');
+      assert.equal(store2.getGate().state, 'open');
     } finally {
       if (store2) store2.close();
       try {

@@ -75,6 +75,7 @@ describe('store: the persisted access gate (3.7)', () => {
       assert.equal(gate.failing_cycles, 0);
       assert.equal(gate.b5_tier, 0);
       assert.equal(gate.probe_used, 0);
+      assert.equal(gate.probe_granted_at, null);
     });
   });
 
