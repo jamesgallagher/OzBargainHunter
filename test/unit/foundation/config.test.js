@@ -104,3 +104,9 @@ test('loadConfig does not trim the provider-owned opaque credentials (D7)', () =
   assert.equal(config.MATRIX_ACCESS_TOKEN, '  opaque-token');
   assert.equal(config.NTfy_TOKEN, '  ntfy-token');
 });
+
+test('the request-pause test override is honoured only when NODE_ENV is test', () => {
+  assert.equal(loadConfig({ NODE_ENV: 'test', OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE: '0' }).OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE, 0);
+  assert.equal(loadConfig({ NODE_ENV: 'production', OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE: '0' }).OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE, undefined);
+  assert.throws(() => loadConfig({ NODE_ENV: 'test', OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE: '-1' }), /zero or positive/);
+});

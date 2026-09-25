@@ -14,6 +14,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { openStore } from '../../lib/store/index.js';
 import { createOzbClient } from '../../lib/http/client.js';
 import { createHttpTransport } from '../../lib/http/transport.js';
@@ -354,4 +356,36 @@ export async function stopChild(child) {
   if (first) return;
   child.kill('SIGKILL');
   await waitForExit(child, 5000).catch(() => null);
+}
+
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * Spawn the real `worker/main.js` for a two-process test. Every spawned worker
+ * gets the in-process network guard (it is not inherited from the test
+ * process's own --import), NODE_ENV=test, and no pause between requests, so a
+ * test never reaches a real host and never waits the production pacing.
+ * Callers must point the feed URLs at a loopback fixture server.
+ * @param {Record<string, string>} env the worker's environment additions
+ * @returns {{ child: import('node:child_process').ChildProcess, log(): string }}
+ */
+export function spawnWorker(env) {
+  let log = '';
+  const child = spawn(process.execPath, [join(REPO_ROOT, 'worker/main.js')], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      OZB_POLL_INTERVAL_SECONDS: '300',
+      OZB_POLL_INTERVAL_SECONDS_TEST_OVERRIDE: '1',
+      OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE: '0',
+      OZB_CLASSIFIEDS_INTERVAL_SECONDS: '3600',
+      ...env,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import ./test/support/no-network.js'].filter(Boolean).join(' '),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.on('data', (d) => { log += d; });
+  child.stderr.on('data', (d) => { log += d; });
+  return { child, log: () => log };
 }

@@ -19,6 +19,7 @@
     "test:web": "node --test --test-timeout=20000 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/unit/web/*.test.js",
     "test:integration": "node --test --test-timeout=180000 --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/*.test.js",
     "test:shakeout": "node --test --test-timeout=180000 --test-concurrency=1 --import ./test/support/no-network.js --import ./test/support/jsx-loader.mjs test/integration/mock-alert-delivery.test.js test/integration/ui-shakeout.test.js",
+    "test:container": "node --test --test-timeout=60000 --test-concurrency=1 --import ./test/support/no-network.js test/container/*.test.js",
     "test:guards": "node --test --test-timeout=20000 --import ./test/support/no-network.js test/guards/*.test.js",
     "smoke:image": "node scripts/smoke-image.mjs"
   },

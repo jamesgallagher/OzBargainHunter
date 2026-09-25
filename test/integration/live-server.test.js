@@ -14,7 +14,10 @@
  *     the application actually acts on;
  *   * a static asset with no session is not a 200;
  *   * `/healthz` is authenticated with the container-local secret, is 401
- *     without it, and reports healthy once the fixture-fed poll has succeeded.
+ *     without it, and reports healthy once the fixture-fed poll has succeeded;
+ *   * polling is not request-driven (design 2.2): the worker fills the shared
+ *     database while the application receives no request at all. That proof is
+ *     captured in `before`, before this file sends the server anything.
  *
  * Point 2 is the important one for the LAN path (11.2.3): the application
  * verifies the JWT itself rather than trusting that a request came through
@@ -25,13 +28,12 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { startFixtureServer } from '../../scripts/fixture-server.mjs';
 import { startJwksServer } from '../support/jwks.js';
 import { generateCsrfToken } from '../../lib/csrf.js';
-import { openTempStore, waitFor } from '../support/integration.js';
-import { REPO_ROOT, startAppServer } from '../support/app-server.js';
+import { openTempStore, spawnWorker, stopChild, waitFor } from '../support/integration.js';
+import { ensureBuild, startAppServer } from '../support/app-server.js';
 
 const TEAM_DOMAIN = 'live.cloudflareaccess.com';
 const AUD = 'live-aud';
@@ -46,7 +48,7 @@ describe('integration: the live server and its middleware', () => {
   let temp;
   let app;
   let worker;
-  let workerLog = '';
+  let unwatched;
   let token;
   let foreignToken;
   let healthz;
@@ -70,53 +72,68 @@ describe('integration: the live server and its middleware', () => {
       OZB_POLL_INTERVAL_SECONDS: '300',
     };
 
+    await ensureBuild();
     app = await startAppServer({ env });
-
-    // The worker, so the health check has something real to report on: /healthz
-    // is acquisition health, not process liveness (3.7).
-    worker = spawn(process.execPath, [join(REPO_ROOT, 'worker/main.js')], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        ...env,
-        NODE_ENV: 'test',
-        OZB_DEALS_FEED_URL: `${fx.origin}/deals/feed`,
-        OZB_FRONT_FEED_URL: `${fx.origin}/feed`,
-        OZB_CLASSIFIEDS_URL: `${fx.origin}/classified`,
-        OZB_CLASSIFIEDS_INTERVAL_SECONDS: '3600',
-        OZB_POLL_INTERVAL_SECONDS_TEST_OVERRIDE: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+    worker = spawnWorker({
+      ...env,
+      OZB_DEALS_FEED_URL: `${fx.origin}/deals/feed`,
+      OZB_FRONT_FEED_URL: `${fx.origin}/feed`,
+      OZB_CLASSIFIEDS_URL: `${fx.origin}/classified`,
     });
-    worker.stdout.on('data', (d) => { workerLog += d; });
-    worker.stderr.on('data', (d) => { workerLog += d; });
+
+    // Polling with nobody watching (2.2): two full cycles reach the fixture
+    // server (three URLs each, 3.2) before this file has sent the application
+    // a single request. Capture the evidence now, before any request below.
+    await waitFor(() => fx.requests.length >= 6, {
+      timeoutMs: 60_000,
+      intervalMs: 100,
+      what: 'two deal-poll cycles to reach the fixture server',
+    }).catch((err) => {
+      throw new Error(`${err.message}\nworker log:\n${worker.log()}`);
+    });
+    unwatched = {
+      urls: fx.requests.map((r) => r.url),
+      observations: temp.store.countAllObservations(),
+      deals: temp.store.countDeals(),
+      has975704: Boolean(temp.store.getDeal(975704)),
+      lastSuccessAt: temp.store.getPollState()?.last_success_at,
+    };
 
     token = await jwks.sign({ email: EMAIL }, { aud: AUD, iss: `https://${TEAM_DOMAIN}`, exp: '2h' });
     foreignToken = await foreign.sign({ email: EMAIL }, { aud: AUD, iss: `https://${TEAM_DOMAIN}`, exp: '2h' });
 
-    // Wait for the fixture-fed poll to have succeeded: /healthz stays 503 until
-    // then, so a 200 here proves the whole acquisition path worked in-process.
     healthz = await waitFor(async () => {
       const res = await fetch(`${app.origin}/healthz`, {
         headers: { 'x-healthcheck-secret': HEALTHCHECK_SECRET },
       });
       if (res.status !== 200) return null;
       return { status: res.status, body: await res.json() };
-    }, { timeoutMs: 150_000, intervalMs: 500, what: '/healthz to report healthy after a fixture-fed poll' });
+    }, { timeoutMs: 30_000, intervalMs: 200, what: '/healthz to report healthy after a fixture-fed poll' });
   });
 
   after(async () => {
-    if (worker && worker.exitCode === null) {
-      const exited = new Promise((resolve) => worker.once('exit', resolve));
-      worker.kill('SIGTERM');
-      await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
-      if (worker.exitCode === null) worker.kill('SIGKILL');
-    }
+    await stopChild(worker?.child);
     await app?.stop();
     temp?.close();
     await jwks.close();
     await foreignJwks.close();
     await fx.close();
+  });
+
+  describe('polling with nobody watching (2.2)', () => {
+    it('gained observations from the worker alone, before any request to the application', () => {
+      assert.ok(unwatched.observations >= 60, `every poll-1 deal was observed (got ${unwatched.observations})`);
+      assert.ok(unwatched.deals >= 60, `the corpus deals are stored (got ${unwatched.deals})`);
+      assert.ok(unwatched.has975704, '975704 is stored');
+      assert.ok(unwatched.lastSuccessAt, 'the worker recorded a successful poll');
+    });
+
+    it('served the fixture server three URLs per cycle, in order, and never page 2', () => {
+      assert.ok(!unwatched.urls.some((u) => u.includes('page=2')), 'the two-page cap holds');
+      assert.match(unwatched.urls[0], /\/deals\/feed\?page=0$/);
+      assert.match(unwatched.urls[1], /\/deals\/feed\?page=1$/);
+      assert.match(unwatched.urls[2], /\/feed$/);
+    });
   });
 
   describe('deny by default (11.2.1, 11.2.3)', () => {
@@ -268,7 +285,7 @@ describe('integration: the live server and its middleware', () => {
       // A worker that had died would leave /healthz 503 within three intervals;
       // the child is asserted alive here so the healthy reading above cannot be
       // explained by a stale poll_state.
-      assert.equal(worker.exitCode, null, `the worker is alive; log:\n${workerLog}`);
+      assert.equal(worker.child.exitCode, null, `the worker is alive; log:\n${worker.log()}`);
     });
   });
 });

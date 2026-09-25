@@ -16,7 +16,7 @@ import {
   closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** The repository root (this file lives in test/support/). */
@@ -46,28 +46,30 @@ export function buildIsCurrent(root = REPO_ROOT) {
   const buildId = join(root, '.next', 'BUILD_ID');
   const server = join(root, '.next', 'standalone', 'server.js');
   if (!existsSync(buildId) || !existsSync(server)) return false;
-  const builtAt = statSync(buildId).mtimeMs;
+  return newestInputMtime(root) <= statSync(buildId).mtimeMs;
+}
+
+/** The newest mtime across every build input. */
+function newestInputMtime(root) {
+  let newest = 0;
   for (const input of BUILD_INPUTS) {
     const path = join(root, input);
-    if (!existsSync(path)) continue;
-    if (newestMtime(path) > builtAt) return false;
+    if (existsSync(path)) newest = Math.max(newest, newestMtime(path));
   }
-  return true;
+  return newest;
 }
 
 /**
- * Next can infer the primary checkout as its tracing root when this suite runs
- * from a linked worktree. In that case standalone output is nested below
- * `.worktrees/<name>` instead of being directly executable. Mirror the traced
- * application to the location used by the Dockerfile and test server.
+ * A recorded build failure that no input has changed since. Retrying it would
+ * spend the whole build time again only to fail the same way, once per suite
+ * that needs the server, so it is reported immediately instead.
  */
-function normalizeWorktreeStandalone(root) {
-  const standalone = join(root, '.next', 'standalone');
-  const server = join(standalone, 'server.js');
-  const tracedApp = join(standalone, '.worktrees', basename(root));
-  if (!existsSync(server) && existsSync(join(tracedApp, 'server.js'))) {
-    cpSync(tracedApp, standalone, { recursive: true, force: true });
-  }
+function stickyBuildFailure(root, failedPath) {
+  if (!existsSync(failedPath)) return null;
+  if (statSync(failedPath).mtimeMs < newestInputMtime(root)) return null;
+  return new Error(
+    `next build failed and no build input has changed since, so it was not retried:\n${readFileSync(failedPath, 'utf8')}`,
+  );
 }
 
 /**
@@ -92,6 +94,8 @@ export async function ensureBuild(root = REPO_ROOT) {
   const failedPath = join(nextDir, '.build.failed');
   const started = Date.now();
   mkdirSync(nextDir, { recursive: true });
+  const sticky = stickyBuildFailure(root, failedPath);
+  if (sticky) throw sticky;
 
   /** Take the lock exclusively, or report that another process holds it. */
   const takeLock = () => {
@@ -132,7 +136,6 @@ export async function ensureBuild(root = REPO_ROOT) {
           writeFileSync(failedPath, message);
           throw new Error(message);
         }
-        normalizeWorktreeStandalone(root);
         return { built: true, ms: Date.now() - started };
       } finally {
         dropLock();
@@ -159,7 +162,6 @@ export async function ensureBuild(root = REPO_ROOT) {
  * @param {string} root
  */
 export function prepareStandaloneRuntime(root = REPO_ROOT) {
-  normalizeWorktreeStandalone(root);
   const standalone = join(root, '.next', 'standalone');
   const staticSrc = join(root, '.next', 'static');
   if (existsSync(staticSrc)) {
