@@ -89,11 +89,14 @@ function stickyBuildFailure(root, failedPath) {
 export async function ensureBuild(root = REPO_ROOT) {
   if (buildIsCurrent(root)) return { built: false, ms: 0 };
 
-  const nextDir = join(root, '.next');
-  const lockPath = join(nextDir, '.build.lock');
-  const failedPath = join(nextDir, '.build.failed');
+  // The lock and the failure record live outside .next: next build empties
+  // .next when it starts, which deleted a lock kept there and let a waiting
+  // process start a second, concurrent build.
+  const stateDir = join(root, 'node_modules', '.cache', 'ozbh-next-build');
+  const lockPath = join(stateDir, 'build.lock');
+  const failedPath = join(stateDir, 'build.failed');
   const started = Date.now();
-  mkdirSync(nextDir, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
   const sticky = stickyBuildFailure(root, failedPath);
   if (sticky) throw sticky;
 
@@ -111,6 +114,19 @@ export async function ensureBuild(root = REPO_ROOT) {
 
   while (true) {
     if (takeLock()) {
+      // Another process may have finished the build (or recorded a failure)
+      // while this one waited for the lock. Re-check before building, or a
+      // second build rewrites .next underneath the server a suite that
+      // accepted the first build is already running.
+      if (buildIsCurrent(root)) {
+        dropLock();
+        return { built: false, ms: Date.now() - started };
+      }
+      const failedMeanwhile = stickyBuildFailure(root, failedPath);
+      if (failedMeanwhile) {
+        dropLock();
+        throw failedMeanwhile;
+      }
       rmSync(failedPath, { force: true });
       try {
         const result = spawnSync(process.execPath, ['./node_modules/next/dist/bin/next', 'build'], {
@@ -145,9 +161,8 @@ export async function ensureBuild(root = REPO_ROOT) {
     // Somebody else is building: wait for their result rather than racing them.
     await new Promise((resolve) => setTimeout(resolve, 500));
     if (buildIsCurrent(root)) return { built: false, ms: Date.now() - started };
-    if (existsSync(failedPath)) {
-      throw new Error(`another process's next build failed:\n${readFileSync(failedPath, 'utf8')}`);
-    }
+    const failedElsewhere = stickyBuildFailure(root, failedPath);
+    if (failedElsewhere) throw failedElsewhere;
     if (existsSync(lockPath) && Date.now() - statSync(lockPath).mtimeMs > 15 * 60 * 1000) {
       dropLock(); // a killed process must not wedge every later run
     }
@@ -193,9 +208,8 @@ export function freePort() {
  * Start the production Next.js server as a child process.
  *
  * Readiness is taken from the server's own stdout (`Ready in …`), **not** from
- * an HTTP request: the unwatched-poll test must be able to run this process to
- * completion without ever touching the application, and a liveness probe would
- * break that.
+ * an HTTP request: the live-server suite proves polling happens with no request
+ * to the application, and a liveness probe would break that.
  *
  * @param {object} args
  * @param {Record<string, string>} args.env the environment for the child
