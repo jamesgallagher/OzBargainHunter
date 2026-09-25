@@ -578,8 +578,11 @@ describe('gate rules: the pure state machine (3.7)', () => {
         tier: 1,
         probe_used: 1,
         probe_granted_at: '2026-09-25T03:49:00.000Z',
+        until_at: '2026-09-25T03:48:00.000Z',
       };
-      assert.equal(effectiveGate(row, NOW).state, 'cooling');
+      const g = effectiveGate(row, NOW);
+      assert.equal(g.state, 'cooling');
+      assert.equal(g.until_at, null, 'the stale until_at is cleared (N4)');
     });
 
     test('a granted probe inside the 10-minute window stays probing', () => {
