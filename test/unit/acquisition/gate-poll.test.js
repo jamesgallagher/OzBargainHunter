@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { openStore } from '../../../lib/store/index.js';
 import { createGate } from '../../../lib/gate/index.js';
 import { createOzbClient } from '../../../lib/http/client.js';
-import { runDealPoll } from '../../../lib/acquire/poll.js';
+import { runDealPoll, buildDealPollUrls } from '../../../lib/acquire/poll.js';
 import { runClassifiedsPoll } from '../../../lib/acquire/classifieds.js';
 import { fixedClock } from '../../../lib/clock.js';
 import { seededRandom } from '../../../lib/random.js';
@@ -613,6 +613,31 @@ describe('gate: end-to-end (design 3.7)', () => {
       assert.equal(env.transport.calls, 1, 'the queued request never reaches the transport');
     } finally {
       env.close();
+    }
+  });
+
+  test('F8: the gate probeUrl is pinned to buildDealPollUrls(config)[0]', async () => {
+    // Default config: the probe is the deals feed page 0, exactly as the
+    // poller builds it.
+    {
+      const env = makeEnv({});
+      try {
+        assert.equal(env.gate.probeUrl, buildDealPollUrls(env.config)[0]);
+      } finally {
+        env.close();
+      }
+    }
+    // A feed URL that already has a query: the page param is appended (not
+    // dropped), and the gate's probeUrl must still match the poller's
+    // first URL.
+    {
+      const config = { OZB_DEALS_FEED_URL: 'http://127.0.0.1:1/deals/feed?x=1' };
+      const env = makeEnv({ config });
+      try {
+        assert.equal(env.gate.probeUrl, buildDealPollUrls(config)[0]);
+      } finally {
+        env.close();
+      }
     }
   });
 });
