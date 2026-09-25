@@ -139,8 +139,8 @@ Every response is classified before any action is taken. The following classes a
 - **Cloudflare block** — identified by a `403` with a ~17-byte body reading `error code: 1010`, or a body containing `"Just a moment..."`, or a challenge page. **Action: stop all OzBargain requests, enter long backoff, raise a prominent alert.** Never treated as transient. *Gate: `cloudflare_block` — rule B1: the gate stops, manual resume only.*
 - **Application permission denial** — a `403` carrying roughly 1 KB of OzBargain's own styled HTML. On `/classified` this means the session is invalid or not entitled. On a feed it is unexpected and alerts. *Gate: `permission_denied` — rule B4 on the deals surface (the gate stops); on classifieds it is a session problem, not a gate problem, and the gate is untouched.*
 - **`404`** — the path has moved or been withdrawn. Alert. Do not retry on a timer. *Gate: `not_found` — no gate action while open; a probe that 404s still ends the probe cycle and reopens the gate.*
-- **`429` / `503`** — back off, honour `Retry-After`, retry with jitter. *Gate: `rate_limited` — rule B2: the gate cools for `min(max(Retry-After, 15 min × 2^(tier−1)), 24 h)`; the fifth consecutive one escalates to rule B3 and the gate stops.*
-- **Timeout / connection error** — exponential backoff; alert after three consecutive failures. *Gate: `transient` / transport error — rule B5: the third failing deals cycle cools the gate; a failed B5 probe re-cools with a longer cap. A transient error during a probe changes nothing else.*
+- **`429` / `503`** — no in-request wait and no retry; `Retry-After` feeds the gate (B2). *Gate: `rate_limited` — rule B2: the gate cools for `min(max(Retry-After, 15 min × 2^(tier−1)), 24 h)`; the fifth consecutive one escalates to rule B3 and the gate stops.*
+- **Timeout / connection error** — in-request backoff capped at 60 s; three failing deals cycles cool the gate (B5). *Gate: `transient` / transport error — rule B5: the third failing deals cycle cools the gate; a failed B5 probe re-cools with a longer cool-off. A transient error during a probe changes nothing else.*
 - **`200` with unparseable XML** — treated as a failure. The raw body is retained for diagnosis. *Gate: `unparseable` — no gate action while open; a probe that cannot parse still ends the probe cycle and reopens the gate.*
 
 ### 3.6 Classifieds acquisition
@@ -174,6 +174,7 @@ Acquisition is expected to break without warning, because the site owner tunes h
 
 - **All back-off is one persisted access gate.** A single row in the database (`access_gate`) is the only place back-off state lives. Every OzBargain request — deals, classifieds, probes — passes through it before it reaches the transport, and the state survives restarts: a gate that is cooling or stopped in the database makes the next process start closed. In-request waits are capped at **60 seconds**; anything longer is a gate state, not a sleep.
 - **The gate has four states.** `open` (requests flow), `cooling` (zero requests until `until_at`), `probing` (exactly one request — the deals feed page 0 — then the cycle ends whatever the result), and `stopped` (zero requests until a manual resume). `cooling` moves to `probing` lazily on the first read at or after `until_at`; the transition is idempotent.
+- **A granted probe expires after 10 minutes.** If a probe is granted but never reports back (the process died, or the request never reached the transport), the gate would otherwise sit in `probing` forever. After 10 minutes — deliberately longer than any in-request wait — the gate lazily expires it on the next read (`probe_expired`) and re-cools at the next tier, exactly as a failed probe would, so the app resumes polling instead of staying stuck. The expiry is idempotent and writes one `gate_events` row with the fixed reason `probe expired`.
 - **The rules are a fixed table; the numbers have hard floors** (the four `OZB_GATE_*` keys, enforced at config load):
 
   | Rule | Signal | Action |
@@ -182,7 +183,7 @@ Acquisition is expected to break without warning, because the site owner tunes h
   | B2 | `rate_limited`, any surface | `cooling`; tier = the consecutive count; `until_at` = now + `min(max(Retry-After, 15 min × 2^(tier−1)), 24 h)` (tiers 1–4: 15 min / 30 min / 1 h / 2 h). |
   | B3 | the fifth consecutive B2 | `stopped`; `min_resume_at` = now + 24 h. Manual resume. |
   | B4 | `permission_denied` on the deals surface | `stopped`; `min_resume_at` = now. (Classifieds: a session problem, the gate is untouched.) |
-  | B5 | a failing deals cycle (third consecutive) | `cooling`; `until_at` = now + `min(2 × interval, 6 h)`. A failed B5 probe re-cools with a longer cap (4×, 8×, …, capped at 6 h). |
+  | B5 | a failing deals cycle (third consecutive) | `cooling`; `until_at` = now + `min(2 × interval, 6 h)`. A failed B5 probe re-cools with a longer cool-off (4×, 8×, …, capped at 6 h). |
 
   `ok` / `304` while open resets the counters; a successful probe reopens the gate and resets everything.
 - **No catch-up.** A closed gate makes zero requests and records no failures; when the gate reopens, polling simply resumes at the normal interval. There is no burst of missed polls.
