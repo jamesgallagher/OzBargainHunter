@@ -19,13 +19,15 @@ function withStore(fn) {
   }
 }
 
-test('a fresh database is created at schema version 2 with all eleven tables', () => {
+test('a fresh database is created at schema version 3 with all thirteen tables', () => {
   withStore((store) => {
-    assert.equal(store.schemaVersion, 2);
+    assert.equal(store.schemaVersion, 3);
     const expected = [
+      'access_gate',
       'deals',
       'feed_state',
       'failures',
+      'gate_events',
       'ledger',
       'observations',
       'pending_alerts',
@@ -36,7 +38,7 @@ test('a fresh database is created at schema version 2 with all eleven tables', (
       'suppressions',
     ].sort();
     assert.deepEqual([...store.tables].sort(), expected);
-    assert.equal(store.tables.length, 11);
+    assert.equal(store.tables.length, 13);
   });
 });
 
@@ -358,11 +360,12 @@ test('writeSnapshot produces a valid database with identical row counts and sour
 });
 
 // A v1-shaped database: the v1 schema (no `sent` column, no unique
-// observations index) carrying a node seen in both the deals feed and the
-// front feed as two rows with the same (deal_id, observed_at) — exactly the
-// state the previous commit's own engine wrote. openStore() must migrate it
-// to v2 without a UNIQUE constraint error, and must leave one row per pair.
-test('openStore migrates a v1 database with a duplicate observation pair to v2 without a UNIQUE constraint error', () => {
+// observations index, no gate tables) carrying a node seen in both the deals
+// feed and the front feed as two rows with the same (deal_id, observed_at) —
+// exactly the state the previous commit's own engine wrote. openStore() must
+// migrate it to v3 without a UNIQUE constraint error, and must leave one row
+// per pair.
+test('openStore migrates a v1 database with a duplicate observation pair to v3 without a UNIQUE constraint error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ozb-store-'));
   const dbPath = join(dir, 'test.db');
   const clock = fixedClock('2026-09-19T06:20:00Z');
@@ -379,6 +382,10 @@ test('openStore migrates a v1 database with a duplicate observation pair to v2 w
   // so the previous commit's engine wrote the node once per feed.
   db.exec('DROP INDEX idx_observations_deal_poll');
   db.exec('ALTER TABLE ledger DROP COLUMN sent');
+  // A v1 database also has no gate tables (added by the v3 migration).
+  db.exec('DROP INDEX idx_gate_events_at');
+  db.exec('DROP TABLE gate_events');
+  db.exec('DROP TABLE access_gate');
   // Two rows, same (deal_id, observed_at): one per feed, as v1 left them.
   db.prepare(
     `INSERT INTO observations (deal_id, votes_pos, votes_neg, comment_count, click_count, observed_at)
@@ -393,10 +400,13 @@ test('openStore migrates a v1 database with a duplicate observation pair to v2 w
   db.prepare('INSERT INTO schema_version (version, applied_at) VALUES (1, ?)').run('2026-09-19T06:20:00Z');
   build.close();
 
-  // 2. Re-open: the v2 migration must de-duplicate before creating the index.
+  // 2. Re-open: the migrations must de-duplicate before creating the index,
+  // and the v3 migration must create the gate tables.
   const store = openStore({ path: dbPath, clock });
   const db2 = store.getDb();
-  assert.equal(store.schemaVersion, 2, 'migrated to v2');
+  assert.equal(store.schemaVersion, 3, 'migrated to v3');
+  const gate = db2.prepare("SELECT state FROM access_gate WHERE id = 1").get();
+  assert.equal(gate.state, 'open', 'the gate row is seeded open by the v3 migration');
   const obs = db2.prepare('SELECT id, deal_id, observed_at FROM observations ORDER BY id').all();
   assert.equal(obs.length, 1, 'one row per (deal, poll) pair after migration');
   assert.equal(obs[0].deal_id, 1);

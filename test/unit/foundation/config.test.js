@@ -110,3 +110,62 @@ test('the request-pause test override is honoured only when NODE_ENV is test', (
   assert.equal(loadConfig({ NODE_ENV: 'production', OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE: '0' }).OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE, undefined);
   assert.throws(() => loadConfig({ NODE_ENV: 'test', OZB_REQUEST_PAUSE_MS_TEST_OVERRIDE: '-1' }), /zero or positive/);
 });
+
+// G10: the four OZB_GATE_* keys have hard floors (design 3.7). Unset, they
+// default; at or above the floor they are accepted; below the floor,
+// loadConfig throws naming the key and the floor.
+test('loadConfig returns the four gate key defaults when unset (G10)', () => {
+  const config = loadConfig({});
+  assert.equal(config.OZB_GATE_B1_MIN_HOURS, 24);
+  assert.equal(config.OZB_GATE_B1_REPEAT_DAYS, 7);
+  assert.equal(config.OZB_GATE_B2_BASE_MINUTES, 15);
+  assert.equal(config.OZB_GATE_B5_CAP_HOURS, 6);
+});
+
+test('loadConfig rejects OZB_GATE_B1_MIN_HOURS below 24 (G10)', () => {
+  assert.throws(
+    () => loadConfig({ OZB_GATE_B1_MIN_HOURS: '23' }),
+    /OZB_GATE_B1_MIN_HOURS must be at least 24/,
+  );
+});
+
+test('loadConfig accepts OZB_GATE_B1_MIN_HOURS at the floor and above (G10)', () => {
+  assert.equal(loadConfig({ OZB_GATE_B1_MIN_HOURS: '24' }).OZB_GATE_B1_MIN_HOURS, 24);
+  assert.equal(loadConfig({ OZB_GATE_B1_MIN_HOURS: '48' }).OZB_GATE_B1_MIN_HOURS, 48);
+});
+
+test('loadConfig rejects OZB_GATE_B1_REPEAT_DAYS below 7 (G10)', () => {
+  assert.throws(
+    () => loadConfig({ OZB_GATE_B1_REPEAT_DAYS: '6' }),
+    /OZB_GATE_B1_REPEAT_DAYS must be at least 7/,
+  );
+});
+
+test('loadConfig accepts OZB_GATE_B1_REPEAT_DAYS at the floor and above (G10)', () => {
+  assert.equal(loadConfig({ OZB_GATE_B1_REPEAT_DAYS: '7' }).OZB_GATE_B1_REPEAT_DAYS, 7);
+  assert.equal(loadConfig({ OZB_GATE_B1_REPEAT_DAYS: '14' }).OZB_GATE_B1_REPEAT_DAYS, 14);
+});
+
+test('loadConfig rejects OZB_GATE_B2_BASE_MINUTES below 15 (G10)', () => {
+  assert.throws(
+    () => loadConfig({ OZB_GATE_B2_BASE_MINUTES: '14' }),
+    /OZB_GATE_B2_BASE_MINUTES must be at least 15/,
+  );
+});
+
+test('loadConfig accepts OZB_GATE_B2_BASE_MINUTES at the floor and above (G10)', () => {
+  assert.equal(loadConfig({ OZB_GATE_B2_BASE_MINUTES: '15' }).OZB_GATE_B2_BASE_MINUTES, 15);
+  assert.equal(loadConfig({ OZB_GATE_B2_BASE_MINUTES: '30' }).OZB_GATE_B2_BASE_MINUTES, 30);
+});
+
+test('loadConfig rejects OZB_GATE_B5_CAP_HOURS below 6 (G10)', () => {
+  assert.throws(
+    () => loadConfig({ OZB_GATE_B5_CAP_HOURS: '5' }),
+    /OZB_GATE_B5_CAP_HOURS must be at least 6/,
+  );
+});
+
+test('loadConfig accepts OZB_GATE_B5_CAP_HOURS at the floor and above (G10)', () => {
+  assert.equal(loadConfig({ OZB_GATE_B5_CAP_HOURS: '6' }).OZB_GATE_B5_CAP_HOURS, 6);
+  assert.equal(loadConfig({ OZB_GATE_B5_CAP_HOURS: '12' }).OZB_GATE_B5_CAP_HOURS, 12);
+});

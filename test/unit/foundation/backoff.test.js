@@ -7,6 +7,7 @@ import { openStore } from '../../../lib/store/index.js';
 import { fixedClock } from '../../../lib/clock.js';
 import { seededRandom } from '../../../lib/random.js';
 import { createOzbClient, BlockedError } from '../../../lib/http/client.js';
+import { createGate } from '../../../lib/gate/index.js';
 import { createFixtureTransport } from '../../support/fixtureTransport.js';
 
 const CLOUDFLARE_BODY = readFileSync(
@@ -30,20 +31,25 @@ function makeClient(routes, opts = {}) {
       return randomSource.next();
     },
   };
+  const gate = createGate({ store, clock, config: {}, log: () => {} });
   const client = createOzbClient({
     transport,
     store,
     clock,
     random,
     config: {},
+    gate,
     log: () => {},
   });
-  return { client, transport, store, clock, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); }, randomCalls: () => randomCalls };
+  return { client, transport, store, clock, gate, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }); }, randomCalls: () => randomCalls };
 }
 
-test('after a cloudflare_block, the next client calls throw BlockedError and the transport call count does not increase', async () => {
-  const url = 'https://www.ozbargain.com.au/deals/feed';
-  const { client, transport, cleanup } = makeClient({
+test('after a cloudflare_block the gate stops (B1): the next client calls throw BlockedError and the transport call count does not increase', async () => {
+  // The URL is the gate's probe URL (deals feed page 0): after a manual
+  // resume the gate goes probing, where exactly ONE request — the probe —
+  // may go out (design 3.7).
+  const url = 'https://www.ozbargain.com.au/deals/feed?page=0';
+  const { client, transport, clock, gate, cleanup } = makeClient({
     [url]: { status: 403, headers: { server: 'cloudflare' }, body: CLOUDFLARE_BODY },
   });
 
@@ -52,7 +58,8 @@ test('after a cloudflare_block, the next client calls throw BlockedError and the
     assert.equal(first.class, 'cloudflare_block');
     assert.equal(transport.calls, 1);
 
-    // The next THREE calls (persistence beyond two) throw BlockedError.
+    // The gate is now stopped (B1): the next THREE calls (persistence
+    // beyond two) throw BlockedError.
     for (let i = 0; i < 3; i++) {
       await assert.rejects(
         () => client.request(url),
@@ -67,9 +74,10 @@ test('after a cloudflare_block, the next client calls throw BlockedError and the
     assert.equal(transport.calls, 1);
     assert.equal(client.blocked, true);
 
-    // clearBlock allows the client to work again.
-    client.clearBlock();
-    assert.equal(client.blocked, false);
+    // Manual resume after the 24 h minimum (design 3.7): the gate goes
+    // probing, and exactly one request (the probe) may go out.
+    await clock.advance(24 * 60 * 60 * 1000);
+    assert.deepEqual(gate.resume(), { ok: true });
     const after = await client.request(url);
     assert.equal(after.class, 'cloudflare_block'); // still 403
     assert.equal(transport.calls, 2);
@@ -86,12 +94,16 @@ test('a permission_denied 403 does not latch the client (design 3.6 expired-sess
   });
 
   try {
-    const first = await client.request(url);
+    // The classifieds poll always tags its requests with surface
+    // 'classifieds' (lib/acquire/classifieds.js); a classifieds
+    // permission_denied is NOT a gate signal (B4 is deals-only), so the
+    // gate stays open and the client is not blocked.
+    const first = await client.request(url, { surface: 'classifieds' });
     assert.equal(first.class, 'permission_denied');
     assert.equal(client.blocked, false);
 
     // The client is NOT latched: the next call goes out again.
-    const second = await client.request(url);
+    const second = await client.request(url, { surface: 'classifieds' });
     assert.equal(second.class, 'permission_denied');
     assert.equal(transport.calls, 2);
     assert.equal(client.blocked, false);
@@ -147,9 +159,9 @@ test('backoff with seededRandom(1) produces the same delay sequence on two runs,
   );
 });
 
-test('Retry-After is honoured on 429: the clock advances by the header value', async () => {
+test('a 429 cools the gate instead of waiting in-request (design 3.7)', async () => {
   const url = 'https://www.ozbargain.com.au/deals/feed';
-  const { client, clock, cleanup } = makeClient({
+  const { client, clock, gate, cleanup } = makeClient({
     [url]: { status: 429, headers: { 'retry-after': '120' }, body: '' },
   });
 
@@ -158,17 +170,23 @@ test('Retry-After is honoured on 429: the clock advances by the header value', a
     const result = await client.request(url);
     assert.equal(result.class, 'rate_limited');
     assert.equal(result.retryAfterSeconds, 120);
-    // 120s Retry-After + the 3s inter-request pause (first request has no
-    // pause, so only the 120s is expected here).
-    assert.equal(clock.now().getTime() - startMs, 120 * 1000);
+    // NO in-request wait: the gate cools the whole app instead (design 3.7).
+    assert.equal(clock.now().getTime() - startMs, 0);
+    // The gate is cooling at B2 tier 1. Retry-After (120 s) is below the
+    // 15 m base, so until_at is START + 15 m.
+    const g = gate.read();
+    assert.equal(g.state, 'cooling');
+    assert.equal(g.rule, 'B2');
+    assert.equal(g.tier, 1);
+    assert.equal(g.until_at, new Date(startMs + 15 * 60 * 1000).toISOString());
   } finally {
     cleanup();
   }
 });
 
-test('a 429 without Retry-After falls back to exponential backoff with jitter', async () => {
+test('a 429 without Retry-After cools the gate (no in-request backoff, no jitter)', async () => {
   const url = 'https://www.ozbargain.com.au/deals/feed';
-  const { client, clock, cleanup, randomCalls } = makeClient({
+  const { client, clock, gate, cleanup, randomCalls } = makeClient({
     [url]: { status: 429, headers: {}, body: '' },
   });
 
@@ -177,11 +195,15 @@ test('a 429 without Retry-After falls back to exponential backoff with jitter', 
     const result = await client.request(url);
     assert.equal(result.class, 'rate_limited');
     assert.equal(result.retryAfterSeconds, undefined);
-    // Backoff was used: random consulted, clock advanced by base + jitter.
-    assert.equal(randomCalls(), 1);
-    const [delay] = client.backoffDelays;
-    assert.ok(delay >= 2 && delay < 3, `first backoff delay ${delay} should be in [2, 3)`);
-    assert.equal(clock.now().getTime() - startMs, Math.round(delay * 1000));
+    // No in-request backoff: the gate cools instead (design 3.7), so the
+    // jitter source is never consulted and the clock does not move.
+    assert.equal(randomCalls(), 0);
+    assert.equal(clock.now().getTime() - startMs, 0);
+    const g = gate.read();
+    assert.equal(g.state, 'cooling');
+    assert.equal(g.rule, 'B2');
+    assert.equal(g.tier, 1);
+    assert.equal(g.until_at, new Date(startMs + 15 * 60 * 1000).toISOString());
   } finally {
     cleanup();
   }
@@ -265,9 +287,9 @@ test('a transport rejection (timeout/connection error) backs off with jitter, is
   }
 });
 
-test('a negative Retry-After does not rewind the clock (clamped to >= 0)', async () => {
+test('a negative Retry-After does not rewind the clock (clamped to >= 0; the 15 m base dominates the gate window)', async () => {
   const url = 'https://www.ozbargain.com.au/deals/feed';
-  const { client, clock, cleanup } = makeClient({
+  const { client, clock, gate, cleanup } = makeClient({
     [url]: { status: 429, headers: { 'retry-after': '-5' }, body: '' },
   });
 
@@ -275,11 +297,14 @@ test('a negative Retry-After does not rewind the clock (clamped to >= 0)', async
     const startMs = clock.now().getTime();
     const result = await client.request(url);
     assert.equal(result.class, 'rate_limited');
-    // The clock must not move backwards, and a negative Retry-After clamps
-    // the wait to 0 (no advance).
+    // No in-request wait at all (design 3.7): a negative Retry-After clamps
+    // to 0, and the 15 m B2 base dominates the gate's cooling window.
     const movedMs = clock.now().getTime() - startMs;
     assert.ok(movedMs >= 0, `clock must not rewind: moved ${movedMs} ms`);
-    assert.equal(movedMs, 0, 'a negative Retry-After clamps the wait to 0');
+    assert.equal(movedMs, 0, 'a negative Retry-After must not move the clock');
+    const g = gate.read();
+    assert.equal(g.state, 'cooling');
+    assert.equal(g.until_at, new Date(startMs + 15 * 60 * 1000).toISOString());
   } finally {
     cleanup();
   }

@@ -116,8 +116,8 @@ The feed does technically paginate to about 4 days across 11 pages. **That depth
 ### 3.3 Request discipline
 
 - **Conditional requests are mandatory.** Every request carries `If-None-Match` / `If-Modified-Since` from the previous response for that URL. A `304` with a zero-byte body is the expected common case.
-- `Retry-After` is honoured on `429` and `503`.
-- All other failures back off exponentially with jitter.
+- **All back-off lives in one persisted access gate** (3.7): a single row in the database that every OzBargain request passes through before it is sent, and that survives restarts. In-request waits are capped at **60 seconds**; anything longer is a gate state (cooling / stopped), not a sleep.
+- `Retry-After` on `429` / `503` is not waited on in the request; it is **fed to the gate** as a `rate_limited` signal (rule B2, where it sets the floor of the cool-down).
 - **A `403` is never retried quickly.** It is classified before any retry (see 3.5).
 - One request at a time; no connection-pool races.
 - Every request's URL, response class and timestamp is logged.
@@ -132,16 +132,16 @@ Note `/goto/` is the click-tracking redirect present in feed data. It may be **d
 
 ### 3.5 Response classification
 
-Every response is classified before any action is taken. The following classes are distinct and must not be conflated:
+Every response is classified before any action is taken. The following classes are distinct and must not be conflated. Each class is the access gate's (3.7) input and maps to exactly one gate rule:
 
-- **`200`** — parse and process.
-- **`304 Not Modified`** — nothing new. Not an error. The common case.
-- **Cloudflare block** — identified by a `403` with a ~17-byte body reading `error code: 1010`, or a body containing `"Just a moment..."`, or a challenge page. **Action: stop all OzBargain requests, enter long backoff, raise a prominent alert.** Never treated as transient.
-- **Application permission denial** — a `403` carrying roughly 1 KB of OzBargain's own styled HTML. On `/classified` this means the session is invalid or not entitled. On a feed it is unexpected and alerts.
-- **`404`** — the path has moved or been withdrawn. Alert. Do not retry on a timer.
-- **`429` / `503`** — back off, honour `Retry-After`, retry with jitter.
-- **Timeout / connection error** — exponential backoff; alert after three consecutive failures.
-- **`200` with unparseable XML** — treated as a failure. The raw body is retained for diagnosis.
+- **`200`** — parse and process. *Gate: `ok` — resets the failure counters while open; a probe that returns `ok` reopens the gate.*
+- **`304 Not Modified`** — nothing new. Not an error. The common case. *Gate: `not_modified` — treated as `ok`.*
+- **Cloudflare block** — identified by a `403` with a ~17-byte body reading `error code: 1010`, or a body containing `"Just a moment..."`, or a challenge page. **Action: stop all OzBargain requests, enter long backoff, raise a prominent alert.** Never treated as transient. *Gate: `cloudflare_block` — rule B1: the gate stops, manual resume only.*
+- **Application permission denial** — a `403` carrying roughly 1 KB of OzBargain's own styled HTML. On `/classified` this means the session is invalid or not entitled. On a feed it is unexpected and alerts. *Gate: `permission_denied` — rule B4 on the deals surface (the gate stops); on classifieds it is a session problem, not a gate problem, and the gate is untouched.*
+- **`404`** — the path has moved or been withdrawn. Alert. Do not retry on a timer. *Gate: `not_found` — no gate action while open; a probe that 404s still ends the probe cycle and reopens the gate.*
+- **`429` / `503`** — no in-request wait and no retry; `Retry-After` feeds the gate (B2). *Gate: `rate_limited` — rule B2: the gate cools for `min(max(Retry-After, 15 min × 2^(tier−1)), 24 h)`; the fifth consecutive one escalates to rule B3 and the gate stops.*
+- **Timeout / connection error** — in-request backoff capped at 60 s; three failing deals cycles cool the gate (B5). *Gate: `transient` / transport error — rule B5: the third failing deals cycle cools the gate; a failed B5 probe re-cools with a longer cool-off. A transient error during a probe changes nothing else.*
+- **`200` with unparseable XML** — treated as a failure. The raw body is retained for diagnosis. *Gate: `unparseable` — no gate action while open; a probe that cannot parse still ends the probe cycle and reopens the gate.*
 
 ### 3.6 Classifieds acquisition
 
@@ -172,8 +172,24 @@ Every response is classified before any action is taken. The following classes a
 
 Acquisition is expected to break without warning, because the site owner tunes his bot rules continuously.
 
-- **A dead-man's switch is part of the product.** If no poll has succeeded for 30 minutes, send a notification. Repeat at a decaying rate: 30 minutes, 2 hours, 6 hours, then daily.
-- **The container health check reflects acquisition health, not process liveness.** `/healthz` reports unhealthy when the last successful poll is older than three poll intervals.
+- **All back-off is one persisted access gate.** A single row in the database (`access_gate`) is the only place back-off state lives. Every OzBargain request — deals, classifieds, probes — passes through it before it reaches the transport, and the state survives restarts: a gate that is cooling or stopped in the database makes the next process start closed. In-request waits are capped at **60 seconds**; anything longer is a gate state, not a sleep.
+- **The gate has four states.** `open` (requests flow), `cooling` (zero requests until `until_at`), `probing` (exactly one request — the deals feed page 0 — then the cycle ends whatever the result), and `stopped` (zero requests until a manual resume). `cooling` moves to `probing` lazily on the first read at or after `until_at`; the transition is idempotent.
+- **A granted probe expires after 10 minutes.** If a probe is granted but never reports back (the process died, or the request never reached the transport), the gate would otherwise sit in `probing` forever. After 10 minutes — deliberately longer than any in-request wait — the gate lazily expires it on the next read (`probe_expired`) and re-cools at the next tier, exactly as a failed probe would, so the app resumes polling instead of staying stuck. The expiry is idempotent and writes one `gate_events` row with the fixed reason `probe expired`.
+- **The rules are a fixed table; the numbers have hard floors** (the four `OZB_GATE_*` keys, enforced at config load):
+
+  | Rule | Signal | Action |
+  |------|--------|--------|
+  | B1 | `cloudflare_block`, any surface | `stopped`; `min_resume_at` = now + 24 h, or + 7 days if a B1 occurred within the last 30 days. Manual resume only. |
+  | B2 | `rate_limited`, any surface | `cooling`; tier = the consecutive count; `until_at` = now + `min(max(Retry-After, 15 min × 2^(tier−1)), 24 h)` (tiers 1–4: 15 min / 30 min / 1 h / 2 h). |
+  | B3 | the fifth consecutive B2 | `stopped`; `min_resume_at` = now + 24 h. Manual resume. |
+  | B4 | `permission_denied` on the deals surface | `stopped`; `min_resume_at` = now. (Classifieds: a session problem, the gate is untouched.) |
+  | B5 | a failing deals cycle (third consecutive) | `cooling`; `until_at` = now + `min(2 × interval, 6 h)`. A failed B5 probe re-cools with a longer cool-off (4×, 8×, …, capped at 6 h). |
+
+  `ok` / `304` while open resets the counters; a successful probe reopens the gate and resets everything.
+- **No catch-up.** A closed gate makes zero requests and records no failures; when the gate reopens, polling simply resumes at the normal interval. There is no burst of missed polls.
+- **A dead-man's switch is part of the product.** If no poll has succeeded for 30 minutes, send a notification. Repeat at a decaying rate: 30 minutes, 2 hours, 6 hours, then daily. **While the gate is closed the dead-man is suppressed** — the back-off itself is the alert; nothing is sent and no dead-man state is written until the gate reopens.
+- **The container health check reflects acquisition health, not process liveness.** `/healthz` reports `backing_off` (503) while the gate is not open, carrying the gate's state; once open, it reports unhealthy when the last successful poll is older than three poll intervals.
+- **Every gate transition writes exactly one `gate_events` row** (not yet notified, email status null). The event's `reason` is a short fixed string (`<class> on <surface>`); no event, log line or failure body carries a response body, URL query, cookie or header.
 - **The last N failed response bodies are retained** (truncated) so the actual failure can be inspected rather than guessed from a log line.
 - **Degrade rather than die.** If `/feed` fails while `/deals/feed` succeeds, the rules that need only new deals continue, and the UI states plainly that front-page detection is unavailable.
 - **On a permanent block, the application stops.** It does not adopt bypass tooling, rotate User-Agents or introduce proxies.

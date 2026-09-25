@@ -517,9 +517,20 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   // (the real client's own backoff would overflow a fixed clock over 60
   // failures), so this isolates the poll.js/store clamp.
   const stubClient = { blocked: false, async request() { throw new Error('transport down'); } };
+  // An always-open gate isolates the poll_state counter and its clamp from
+  // the gate: every one of the 20 cycles fetches all three URLs (3 failures
+  // each, 60 total). Gate behaviour over repeated failing cycles is covered
+  // by G5.
+  const openGate = {
+    mode: () => 'open',
+    isOpen: () => true,
+    read: () => ({ state: 'open' }),
+    recordResponse() {},
+    recordDealsCycle() {},
+  };
   for (let i = 0; i < 20; i += 1) {
     await clock.advance(5 * 60 * 1000);
-    await runDealPoll({ client: stubClient, store, clock, log: () => {} });
+    await runDealPoll({ client: stubClient, store, clock, log: () => {}, gate: openGate });
     // getPollState must remain readable on every cycle: the round-2 bug
     // stored 2^54 at the 18th cycle, after which getPollState threw a
     // RangeError and wedged every later cycle at its first statement.
@@ -527,38 +538,14 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   }
   try {
     const s = store.getPollState();
-    assert.equal(s.consecutive_failures, 60); // 20 cycles x 3 URLs
+    // 20 failing cycles × 3 URLs = 60 failures, accumulated in the
+    // poll_state counter (isolated from the gate by the always-open stub
+    // gate above).
+    assert.equal(s.consecutive_failures, 60);
     // The exponent is clamped, so the stored backoff stays a safe integer
     // (2 * 2^11 = 4096) and never leaves the safe-integer range.
     assert.ok(Number.isSafeInteger(s.backoff_seconds), `backoff_seconds ${s.backoff_seconds} is not a safe integer`);
     assert.ok(s.backoff_seconds <= 4096, `backoff_seconds ${s.backoff_seconds} exceeds the clamp`);
-  } finally {
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('Minor 3: a latched client (BlockedError) is recorded as cloudflare_block, not transport_error', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ozb-m3-'));
-  const clock = fixedClock(POLL_1_AT);
-  const store = openStore({ path: join(dir, 'test.db'), clock });
-  // A client already latched by a Cloudflare block: the first request throws
-  // BlockedError and the cycle breaks. The row must be classed
-  // cloudflare_block, not transport_error (round-2 Minor 3).
-  const latchedClient = {
-    blocked: true,
-    async request() {
-      const err = new Error('Cloudflare block: client latched off');
-      err.name = 'BlockedError';
-      throw err;
-    },
-  };
-  await runDealPoll({ client: latchedClient, store, clock, log: () => {} });
-  try {
-    const failures = store.getFailures();
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0].response_class, 'cloudflare_block');
-    assert.equal(store.getPollState().last_response_class, 'cloudflare_block');
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
