@@ -314,8 +314,8 @@ describe('worker: composition root', () => {
       await second.worker.tasks.classifiedsPoll();
       assert.equal(second.transport.calls, 0, 'the restarted worker made zero transport calls while the gate is stopped');
     } finally {
-      try { first.store.close(); } catch {}
-      if (second) { try { second.store.close(); } catch {} }
+      if (first.store.getDb().isOpen) first.store.close();
+      if (second) { if (second.store.getDb().isOpen) second.store.close(); }
       rmSync(first.dir, { recursive: true, force: true });
     }
   });
@@ -389,8 +389,8 @@ describe('worker: composition root', () => {
       assert.equal(second.store.getGate().state, 'open', 'a 200 probe reopens the gate');
       assert.equal(second.transport.calls, callsBefore + 1, 'the resumed poll made exactly one (probe) request');
     } finally {
-      try { first.store.close(); } catch {}
-      if (second) { try { second.store.close(); } catch {} }
+      if (first.store.getDb().isOpen) first.store.close();
+      if (second) { if (second.store.getDb().isOpen) second.store.close(); }
       rmSync(first.dir, { recursive: true, force: true });
     }
   });

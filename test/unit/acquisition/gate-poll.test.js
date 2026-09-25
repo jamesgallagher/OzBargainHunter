@@ -515,11 +515,7 @@ describe('gate: end-to-end (design 3.7)', () => {
       assert.equal(store2.getGate().state, 'open');
     } finally {
       if (store2) store2.close();
-      try {
-        env.store.close();
-      } catch {
-        // already closed by the crash simulation
-      }
+      if (env.store.getDb().isOpen) env.store.close();
       rmSync(env.dir, { recursive: true, force: true });
     }
   });
