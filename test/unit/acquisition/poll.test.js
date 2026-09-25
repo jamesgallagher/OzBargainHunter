@@ -517,9 +517,20 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   // (the real client's own backoff would overflow a fixed clock over 60
   // failures), so this isolates the poll.js/store clamp.
   const stubClient = { blocked: false, async request() { throw new Error('transport down'); } };
+  // An always-open gate isolates the poll_state counter and its clamp from
+  // the gate: every one of the 20 cycles fetches all three URLs (3 failures
+  // each, 60 total). Gate behaviour over repeated failing cycles is covered
+  // by G5.
+  const openGate = {
+    mode: () => 'open',
+    isOpen: () => true,
+    read: () => ({ state: 'open' }),
+    recordResponse() {},
+    recordDealsCycle() {},
+  };
   for (let i = 0; i < 20; i += 1) {
     await clock.advance(5 * 60 * 1000);
-    await runDealPoll({ client: stubClient, store, clock, log: () => {} });
+    await runDealPoll({ client: stubClient, store, clock, log: () => {}, gate: openGate });
     // getPollState must remain readable on every cycle: the round-2 bug
     // stored 2^54 at the 18th cycle, after which getPollState threw a
     // RangeError and wedged every later cycle at its first statement.
@@ -527,13 +538,10 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   }
   try {
     const s = store.getPollState();
-    // Gate-aware (design 3.7): the gate cools on the 3rd failing cycle
-    // (B5), so only the first 3 open cycles fetch all three URLs (9
-    // failures); the 4th cycle is a no-op while cooling; from the 5th
-    // cycle the gate is probing and each cycle fetches exactly the probe
-    // URL — the stub never records the probe failure to the gate, so it
-    // stays probing for the remaining 16 cycles (16 failures). 9 + 16 = 25.
-    assert.equal(s.consecutive_failures, 25);
+    // 20 failing cycles × 3 URLs = 60 failures, accumulated in the
+    // poll_state counter (isolated from the gate by the always-open stub
+    // gate above).
+    assert.equal(s.consecutive_failures, 60);
     // The exponent is clamped, so the stored backoff stays a safe integer
     // (2 * 2^11 = 4096) and never leaves the safe-integer range.
     assert.ok(Number.isSafeInteger(s.backoff_seconds), `backoff_seconds ${s.backoff_seconds} is not a safe integer`);
