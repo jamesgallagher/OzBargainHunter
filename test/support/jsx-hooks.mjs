@@ -6,7 +6,15 @@ import { transformSync } from 'next/dist/build/swc/index.js';
 // else loads normally. The app screens are JSX-in-.js; plain node cannot
 // parse them, so we run them through Next's own swc with the automatic JSX
 // runtime (matching how Next compiles them in production).
-const JSX_TARGET = /\/app\/.*\.js$|\/middleware\.js$/;
+// Matched on the file: URL (always forward slashes), anchored to the repo root,
+// so it behaves the same on Windows and never matches an app/ inside
+// node_modules.
+const REPO_ROOT_URL = new URL('../../', import.meta.url).href;
+function isJsxTarget(url) {
+  if (!url.startsWith(REPO_ROOT_URL)) return false;
+  const rel = url.slice(REPO_ROOT_URL.length).split('?')[0];
+  return (rel.startsWith('app/') && rel.endsWith('.js')) || rel === 'middleware.js';
+}
 
 const SWC_OPTS = {
   jsc: {
@@ -27,7 +35,7 @@ export function load(url, context, nextLoad) {
   if (url.startsWith('file:') && url.endsWith('.css')) {
     return { format: 'module', source: 'export default {};', url, shortCircuit: true };
   }
-  if (url.startsWith('file:') && JSX_TARGET.test(fileURLToPath(url))) {
+  if (isJsxTarget(url)) {
     // Read the raw source ourselves. Calling nextLoad() on a JSX file would
     // throw a SyntaxError before we get a chance to transform it.
     const source = readFileSync(fileURLToPath(url), 'utf8');

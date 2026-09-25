@@ -1,0 +1,12 @@
+# The application runs on Linux (the container) and several tests pin exact
+# bytes (the Unraid template's SHA-256, shell scripts run by /bin/sh), so every
+# text file is checked out with LF on every platform, whatever core.autocrlf
+# says.
+* text=auto eol=lf
+
+# Captured HTTP responses are byte-exact evidence; never convert them.
+fixtures/** -text
+
+*.png binary
+*.ico binary
+*.db binary
