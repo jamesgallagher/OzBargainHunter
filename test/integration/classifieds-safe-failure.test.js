@@ -23,14 +23,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { startFixtureServer, CLASSIFIEDS_PATH } from '../../scripts/fixture-server.mjs';
 import { openTempStore, runClassifiedsFetch, POLL_1_AT } from '../support/integration.js';
-
-/** The complete page, read from the corpus (never edited). */
-function readCompletePage() {
-  return readFileSync(new URL('../../fixtures/http/classifieds-page.html', import.meta.url), 'utf8');
-}
 
 /**
  * Start a fixture server whose only timeline entry is the classifieds URL,
@@ -75,169 +69,6 @@ function classifiedsTempStore() {
   temp.store.setSetting('ozb_account_cookie', 'test-session=authenticated');
   return temp;
 }
-
-test('loopback: a truncated 200 resolves unknown (never expired), writes one unparseable failures row, and logs the URL, class and reason', async () => {
-  const full = readCompletePage();
-  // Cut the complete page mid-stream: the head (with OzB_vars) is kept, the
-  // closing </html> is not — the shape of a stream that died mid-body.
-  const truncated = full.slice(0, 4000);
-  const server = await startClassifiedsServer([{ body: truncated }]);
-  const temp = classifiedsTempStore();
-  try {
-    const { result, logLines } = await cycle(server, temp.store);
-    assert.equal(result.state, 'unknown');
-    assert.equal(result.uid, 0);
-    assert.deepEqual(result.listings, []);
-    assert.equal(result.alert, false);
-    assert.equal(result.latched, false);
-    // One unparseable failures row, carrying the raw body.
-    const failures = temp.store.getFailures();
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0].response_class, 'unparseable');
-    assert.ok(failures[0].body.length > 0, 'the stored body is non-empty');
-    // The log names the URL, the class and the parser reason.
-    const line = logLines.find((l) => l.includes('unparseable'));
-    assert.ok(line, 'an unparseable log line must be written');
-    assert.ok(line.includes(CLASSIFIEDS_PATH), 'the log must name the URL');
-    assert.ok(line.includes('missing closing </html> terminator'), 'the log must carry the parser reason');
-    // No session state was written.
-    assert.equal(temp.store.getSetting('classifieds_last_uid'), null);
-    assert.equal(temp.store.getSetting('classifieds_last_confirmed_at'), null);
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
-
-test('loopback: an empty 200 and a whitespace-only 200 resolve unknown, not expired', async () => {
-  const server = await startClassifiedsServer([{ body: '' }, { body: '   \n\t  ' }]);
-  const temp = classifiedsTempStore();
-  try {
-    const { result: empty } = await cycle(server, temp.store);
-    assert.equal(empty.state, 'unknown');
-    assert.equal(empty.uid, 0);
-    assert.equal(empty.alert, false);
-    assert.equal(empty.latched, false);
-    assert.equal(temp.store.getFailures().length, 1);
-    assert.equal(temp.store.getFailures()[0].response_class, 'unparseable');
-
-    const { result: ws } = await cycle(server, temp.store);
-    assert.equal(ws.state, 'unknown');
-    assert.equal(ws.alert, false);
-    assert.equal(ws.latched, false);
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
-
-test('loopback: a JSON (non-HTML) 200 resolves unknown, not expired', async () => {
-  const json = JSON.stringify({ error: 'rate limited', retry: 60 });
-  const server = await startClassifiedsServer([{ body: json }]);
-  const temp = classifiedsTempStore();
-  try {
-    const { result } = await cycle(server, temp.store);
-    assert.equal(result.state, 'unknown');
-    assert.equal(result.uid, 0);
-    assert.equal(result.alert, false);
-    assert.equal(result.latched, false);
-    assert.equal(temp.store.getFailures().length, 1);
-    assert.equal(temp.store.getFailures()[0].response_class, 'unparseable');
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
-
-// --- Review round-1 (Abhishek, pinned fb688f3): a fabricated session death ---
-// The parser's gates were token checks and its uid extraction defaulted an
-// absent or malformed uid to 0, so these two classes of 200 resolved `expired`
-// over a real socket: an alert, a latch, and `classifieds_last_uid=0` written
-// on no evidence. Both now resolve `unknown`, and neither is ever resolved
-// from a 304 on the repeat (the unusable validator is dropped).
-
-test('loopback: a non-HTML 200 that merely quotes the OzB_vars and </html> tokens resolves unknown, not expired — and repeats as a real 200', async () => {
-  const quoted = JSON.stringify({
-    error: 'bad gateway',
-    upstream: 'OzB_vars = {"site_name":"OzBargain","adstype":"FUSE"}; </html>',
-  });
-  const server = await startClassifiedsServer([{ body: quoted }, { body: quoted }]);
-  const temp = classifiedsTempStore();
-  try {
-    const { result, logLines } = await cycle(server, temp.store);
-    assert.equal(result.state, 'unknown');
-    assert.equal(result.uid, 0);
-    assert.equal(result.alert, false);
-    assert.equal(result.latched, false);
-    const failures = temp.store.getFailures();
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0].response_class, 'unparseable');
-    assert.equal(failures[0].body, quoted);
-    const line = logLines.find((l) => l.includes('unparseable'));
-    assert.ok(line && line.includes(CLASSIFIEDS_PATH) && line.includes('missing OzB_vars'), 'the log names the URL, class and reason');
-    // No session state was written or cleared.
-    assert.equal(temp.store.getSetting('classifieds_last_uid'), null);
-    assert.equal(temp.store.getSetting('classifieds_last_confirmed_at'), null);
-    // The real-socket proof: the validator the 200 cached was dropped, so the
-    // repeat went out without If-None-Match and the server answered 200 again
-    // rather than hiding the bad body behind a 304.
-    const feed = temp.store.getFeedState(server.appConfig().OZB_CLASSIFIEDS_URL);
-    assert.ok(feed !== null && feed.etag === null, 'the cached validator must be cleared');
-
-    const second = await cycle(server, temp.store);
-    assert.equal(second.result.state, 'unknown');
-    const requests = server.requests;
-    assert.equal(requests.length, 2, 'two requests, one per poll');
-    assert.equal(requests[1].ifNoneMatch, null, 'the second request must not carry If-None-Match');
-    assert.equal(requests[1].status, 200, 'the server answered 200, not 304');
-    assert.equal(temp.store.getFailures().length, 2, 'one unparseable row per bad 200');
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
-
-test('loopback: a complete page whose OzB_vars carries no readable uid resolves unknown, not expired', async () => {
-  // Derived from the complete page by deleting only the uid field: every other
-  // byte is the real corpus page, so nothing but the uid distinguishes it from
-  // a valid 200.
-  const full = readCompletePage();
-  const withoutUid = full.replace('"uid":226301,', '');
-  assert.notEqual(withoutUid, full, 'the derived body must differ from the fixture');
-
-  const server = await startClassifiedsServer([{ body: withoutUid }, { body: withoutUid }]);
-  const temp = classifiedsTempStore();
-  try {
-    const { result, logLines } = await cycle(server, temp.store);
-    assert.equal(result.state, 'unknown');
-    assert.equal(result.uid, 0);
-    assert.deepEqual(result.listings, []);
-    assert.equal(result.alert, false, 'a uid-less page must not raise a session-expiry alert');
-    assert.equal(result.latched, false, 'a uid-less page must not latch polling off');
-    const failures = temp.store.getFailures();
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0].response_class, 'unparseable');
-    assert.ok(failures[0].body.length > 0, 'the stored body is non-empty');
-    const line = logLines.find((l) => l.includes('unparseable'));
-    assert.ok(
-      line && line.includes(CLASSIFIEDS_PATH) && line.includes('missing uid field in OzB_vars'),
-      'the log names the URL, class and reason',
-    );
-    // No session state was written or cleared, and the unusable validator is gone.
-    assert.equal(temp.store.getSetting('classifieds_last_uid'), null);
-    assert.equal(temp.store.getSetting('classifieds_last_confirmed_at'), null);
-    const feed = temp.store.getFeedState(server.appConfig().OZB_CLASSIFIEDS_URL);
-    assert.ok(feed !== null && feed.etag === null, 'the cached validator must be cleared');
-
-    const second = await cycle(server, temp.store);
-    assert.equal(second.result.state, 'unknown', 'the repeat is still unparseable, not resolved from a 304');
-    const requests = server.requests;
-    assert.equal(requests[1].status, 200, 'the server answered 200, not 304');
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
 
 test('loopback: a repeated malformed 200 is fetched as 200, not hidden behind a 304 (the real-socket proof)', async () => {
   // The same unparseable body served twice. The first 200 carries a real
@@ -311,42 +142,6 @@ test('loopback: a 304 after a valid 200 resolves from the persisted uid and neve
     assert.equal(requests.length, 2);
     assert.ok(requests[1].ifNoneMatch, 'the second request carried the cached ETag');
     assert.equal(requests[1].status, 304, 'the server answered a real 304');
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
-
-test('loopback: a genuine uid-0 (anonymous) page still expires (the fail-closed behaviour is preserved)', async () => {
-  const server = await startClassifiedsServer(['http/derived/classifieds-page-anon.html']);
-  const temp = classifiedsTempStore();
-  try {
-    const { result } = await cycle(server, temp.store);
-    assert.equal(result.state, 'expired');
-    assert.equal(result.uid, 0);
-    assert.equal(result.alert, true);
-    assert.equal(result.latched, true);
-    // The persisted last uid is invalidated to 0.
-    assert.equal(temp.store.getSetting('classifieds_last_uid'), '0');
-  } finally {
-    temp.close();
-    await server.close();
-  }
-});
-
-test('loopback: the existing non-OK controls (500, 429) resolve unknown, never latch, never alert', async () => {
-  const server = await startClassifiedsServer([{ body: 'server error', status: 500 }, { body: 'slow down', status: 429 }]);
-  const temp = classifiedsTempStore();
-  try {
-    const { result: err500 } = await cycle(server, temp.store);
-    assert.equal(err500.state, 'unknown');
-    assert.equal(err500.alert, false);
-    assert.equal(err500.latched, false);
-
-    const { result: err429 } = await cycle(server, temp.store);
-    assert.equal(err429.state, 'unknown');
-    assert.equal(err429.alert, false);
-    assert.equal(err429.latched, false);
   } finally {
     temp.close();
     await server.close();

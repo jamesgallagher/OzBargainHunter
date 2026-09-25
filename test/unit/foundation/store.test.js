@@ -58,9 +58,10 @@ test('running migrations again changes nothing (idempotent)', () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('PRAGMA journal_mode returns wal and busy_timeout at least 5000', () => {
+test('PRAGMA journal_mode returns wal, synchronous is NORMAL and busy_timeout at least 5000', () => {
   withStore((store) => {
     assert.equal(store.journalMode, 'wal');
+    assert.equal(store.getDb().prepare('PRAGMA synchronous').get().synchronous, 1, 'synchronous = NORMAL');
     assert.ok(store.busyTimeout >= 5000, `busy_timeout ${store.busyTimeout} < 5000`);
   });
 });
