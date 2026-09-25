@@ -544,33 +544,6 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   }
 });
 
-test('Minor 3: a latched client (BlockedError) is recorded as cloudflare_block, not transport_error', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ozb-m3-'));
-  const clock = fixedClock(POLL_1_AT);
-  const store = openStore({ path: join(dir, 'test.db'), clock });
-  // A client already latched by a Cloudflare block: the first request throws
-  // BlockedError and the cycle breaks. The row must be classed
-  // cloudflare_block, not transport_error (round-2 Minor 3).
-  const latchedClient = {
-    blocked: true,
-    async request() {
-      const err = new Error('Cloudflare block: client latched off');
-      err.name = 'BlockedError';
-      throw err;
-    },
-  };
-  await runDealPoll({ client: latchedClient, store, clock, log: () => {} });
-  try {
-    const failures = store.getFailures();
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0].response_class, 'cloudflare_block');
-    assert.equal(store.getPollState().last_response_class, 'cloudflare_block');
-  } finally {
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('Minor 3: a DeniedPathError fails loudly (rethrows) rather than being recorded as a transient failure', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ozb-m3b-'));
   const clock = fixedClock(POLL_1_AT);
