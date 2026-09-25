@@ -518,4 +518,54 @@ describe('store: the persisted access gate (3.7)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('resume() validates inside the transaction: a concurrent resume is refused (R2-2)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-store-'));
+    const dbPath = join(dir, 'test.db');
+    const clock = fixedClock('2026-09-19T06:20:00Z');
+    const storeA = openStore({ path: dbPath, clock });
+    const storeB = openStore({ path: dbPath, clock });
+    let bResult;
+    try {
+      // The gate stands stopped (B1) with a past min_resume_at, so a
+      // resume is allowed — but only once.
+      storeA.mutateGate((row) => ({
+        gate: {
+          ...row,
+          state: 'stopped',
+          rule: 'B1',
+          tier: 0,
+          reason: 'cloudflare_block on deals feed',
+          since: '2026-09-19T06:00:00Z',
+          min_resume_at: '2026-09-19T00:00:00Z',
+        },
+        events: [],
+      }));
+      const gateA = createGate({ store: storeA, clock, log: () => {} });
+      const gateB = createGate({ store: storeB, clock, log: () => {} });
+      // On A's first mutateGate call (the resume's transaction), run B's
+      // resume in between: with the fix, A's single transaction completes
+      // before B's resume starts, so B is refused.
+      const innerMutateGate = storeA.mutateGate.bind(storeA);
+      let firstCall = true;
+      storeA.mutateGate = (fn) => {
+        const result = innerMutateGate(fn);
+        if (firstCall) {
+          firstCall = false;
+          bResult = gateB.resume();
+        }
+        return result;
+      };
+      const aResult = gateA.resume();
+      assert.equal(aResult.ok, true, 'the first resume succeeds');
+      assert.equal(bResult.ok, false, 'the concurrent resume is refused');
+      assert.equal(bResult.reason, 'not_stopped');
+      const resumeEvents = storeA.getGateEvents().filter((e) => e.reason === 'manual resume');
+      assert.equal(resumeEvents.length, 1, 'exactly one resume event was written');
+    } finally {
+      if (storeB.getDb().isOpen) storeB.close();
+      if (storeA.getDb().isOpen) storeA.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
