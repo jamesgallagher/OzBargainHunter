@@ -84,6 +84,11 @@ jobs:
       # suite cannot reach anything but loopback.
       - name: unit, guards and integration tests
         run: npm test
+      # Linux-only container behaviour: the POSIX supervisor's signal handling
+      # and the smoke test's /data permissions. Kept out of `npm test`, which
+      # must pass on every developer platform.
+      - name: container behaviour tests
+        run: npm run test:container
 
   build:
     name: build

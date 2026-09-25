@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 
-import { startWorker } from '../../../worker/main.js';
+import { startWorker, installShutdown } from '../../../worker/main.js';
 import { openStore } from '../../../lib/store/index.js';
 import { createFixtureTransport } from '../../support/fixtureTransport.js';
 import { fixedClock } from '../../../lib/clock.js';
@@ -83,7 +83,8 @@ async function makeWorker({ clockIso = '2026-09-19T07:30:00Z', rules = [] } = {}
     clock,
     snapshotPath: join(dir, 'snapshot.json'),
     close: async () => {
-      store.close();
+      // A test may already have closed the store (the shutdown test does).
+      if (store.getDb().isOpen) store.close();
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -210,49 +211,57 @@ describe('worker: composition root', () => {
     }
   });
 
-  // X8: the AC "on SIGTERM exits 0 with the database closed cleanly" is
-  // verified by spawning the real `node worker/main.js` as a child process
-  // and sending it SIGTERM — not by driving `startWorker` in-process.
-  test('the real worker process exits 0 on SIGTERM with the database closed cleanly', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ozb-worker-sigterm-'));
-    const dbPath = join(dir, 'worker.db');
-    const repoRoot = new URL('../../..', import.meta.url).pathname;
-    const child = spawn(process.execPath, [join(repoRoot, 'worker/main.js')], {
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        OZB_DB_PATH: dbPath,
-        OZB_SNAPSHOT_PATH: join(dir, 'snapshot.db'),
-        // The test-only override pins a short poll interval so the process
-        // comes up and ticks quickly without tripping the five-minute
-        // production minimum (X8: OZB_POLL_INTERVAL_SECONDS_TEST_OVERRIDE).
-        OZB_POLL_INTERVAL_SECONDS_TEST_OVERRIDE: '1',
-        // No real network: the transport is built but the poll tasks fail
-        // gracefully (the scheduler survives a throwing task) and the
-        // shutdown path is what this test exercises.
-        OZB_USER_AGENT: 'test',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+  // X8: "on SIGTERM exits 0 with the database closed cleanly". The handler is
+  // driven in-process through a fake process object: a real OS signal cannot
+  // be delivered gracefully on every platform, and spawning a real worker
+  // escaped the in-process network guard. Container signal forwarding is
+  // covered by the packaging entrypoint tests.
+  test('SIGTERM stops the schedulers, closes the database and exits 0; a second signal is ignored', async () => {
+    const { worker, store, close } = await makeWorker();
+    try {
+      const proc = new EventEmitter();
+      const exits = [];
+      const lines = [];
+      let stops = 0;
+      const shutdown = installShutdown({
+        worker: { stop: async () => { stops += 1; await worker.stop(); } },
+        store,
+        proc,
+        exit: (code) => exits.push(code),
+        log: (line) => lines.push(line),
+        logError: (line) => lines.push(line),
+      });
+
+      proc.emit('SIGTERM');
+      proc.emit('SIGINT');
+      await shutdown('SIGTERM');
+
+      assert.deepEqual(exits, [0], 'exactly one exit, with code 0');
+      assert.equal(stops, 1, 'the schedulers are stopped once');
+      assert.ok(lines.includes('worker stopped cleanly, database closed'), 'the clean-close log line is written');
+      assert.throws(() => store.getPollState(), 'the database is closed');
+    } finally {
+      await close().catch(() => {});
+    }
+  });
+
+  test('a failing shutdown exits 1 and reports the error', async () => {
+    const proc = new EventEmitter();
+    const exits = [];
+    const errors = [];
+    const shutdown = installShutdown({
+      worker: { stop: async () => { throw new Error('stop failed'); } },
+      store: { close() {} },
+      proc,
+      exit: (code) => exits.push(code),
+      log: () => {},
+      logError: (line) => errors.push(line),
     });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
 
-    // Give the process time to start (open the store, register the
-    // schedulers) before we signal it.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    proc.emit('SIGINT');
+    await shutdown('SIGINT');
 
-    const exitPromise = new Promise((resolve) => {
-      child.on('exit', (code, signal) => resolve({ code, signal }));
-    });
-    child.kill('SIGTERM');
-    const { code, signal } = await exitPromise;
-
-    assert.equal(signal, null, `the process exited by its own exit(0), not by the signal: ${signal}`);
-    assert.equal(code, 0, `the worker exited 0 on SIGTERM (got ${code}); stderr: ${stderr}`);
-    assert.match(stdout, /stopped cleanly, database closed/, 'the clean-close log line is present');
-    assert.ok(existsSync(dbPath), 'the database file was created by the worker');
-    rmSync(dir, { recursive: true, force: true });
+    assert.deepEqual(exits, [1]);
+    assert.match(errors[0], /shutdown error: stop failed/);
   });
 });

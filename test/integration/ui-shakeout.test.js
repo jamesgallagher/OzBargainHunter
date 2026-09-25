@@ -6,12 +6,11 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { generateCsrfToken } from '../../lib/csrf.js';
 import { insertRules, openTempStore } from '../support/integration.js';
 import { startJwksServer } from '../support/jwks.js';
-import { ensureBuild, REPO_ROOT, startAppServer } from '../support/app-server.js';
+import { ensureBuild, startAppServer } from '../support/app-server.js';
 import { startAlertSink } from '../support/alert-sink.js';
 import { collectPageErrors, launchBrowser, newAuthedContext } from '../support/browser.js';
 
@@ -20,14 +19,6 @@ const AUDIENCE = 'shakeout-audience';
 const CSRF_SECRET = 'shakeout-csrf-secret-with-enough-entropy';
 const EMAIL = 'browser@example.com';
 const SEEDED_TERM = 'seeded router';
-
-function copyWorktreeStandaloneIfNeeded() {
-  const standalone = join(REPO_ROOT, '.next', 'standalone');
-  const tracedApp = join(standalone, '.worktrees', basename(REPO_ROOT));
-  if (existsSync(join(tracedApp, 'server.js'))) {
-    cpSync(tracedApp, standalone, { recursive: true, force: true });
-  }
-}
 
 async function submit(page, formSelector, buttonSelector, responsePath, diagnostics = () => '') {
   const [response] = await Promise.all([
@@ -69,10 +60,6 @@ describe('integration: browser UI and test-send shakeout', () => {
     temp.store.upsertProvider('ntfy', JSON.stringify({ url: sink.origin, topic: 'alerts' }), 1);
 
     await ensureBuild();
-    // Next may infer the primary checkout as outputFileTracingRoot when this
-    // suite runs in a linked worktree. Copy that traced standalone output back
-    // beside this worktree's .next build before starting the production server.
-    copyWorktreeStandaloneIfNeeded();
     app = await startAppServer({
       env: {
         OZB_DB_PATH: temp.dbPath,

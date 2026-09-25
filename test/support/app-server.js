@@ -16,7 +16,7 @@ import {
   closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** The repository root (this file lives in test/support/). */
@@ -46,28 +46,30 @@ export function buildIsCurrent(root = REPO_ROOT) {
   const buildId = join(root, '.next', 'BUILD_ID');
   const server = join(root, '.next', 'standalone', 'server.js');
   if (!existsSync(buildId) || !existsSync(server)) return false;
-  const builtAt = statSync(buildId).mtimeMs;
+  return newestInputMtime(root) <= statSync(buildId).mtimeMs;
+}
+
+/** The newest mtime across every build input. */
+function newestInputMtime(root) {
+  let newest = 0;
   for (const input of BUILD_INPUTS) {
     const path = join(root, input);
-    if (!existsSync(path)) continue;
-    if (newestMtime(path) > builtAt) return false;
+    if (existsSync(path)) newest = Math.max(newest, newestMtime(path));
   }
-  return true;
+  return newest;
 }
 
 /**
- * Next can infer the primary checkout as its tracing root when this suite runs
- * from a linked worktree. In that case standalone output is nested below
- * `.worktrees/<name>` instead of being directly executable. Mirror the traced
- * application to the location used by the Dockerfile and test server.
+ * A recorded build failure that no input has changed since. Retrying it would
+ * spend the whole build time again only to fail the same way, once per suite
+ * that needs the server, so it is reported immediately instead.
  */
-function normalizeWorktreeStandalone(root) {
-  const standalone = join(root, '.next', 'standalone');
-  const server = join(standalone, 'server.js');
-  const tracedApp = join(standalone, '.worktrees', basename(root));
-  if (!existsSync(server) && existsSync(join(tracedApp, 'server.js'))) {
-    cpSync(tracedApp, standalone, { recursive: true, force: true });
-  }
+function stickyBuildFailure(root, failedPath) {
+  if (!existsSync(failedPath)) return null;
+  if (statSync(failedPath).mtimeMs < newestInputMtime(root)) return null;
+  return new Error(
+    `next build failed and no build input has changed since, so it was not retried:\n${readFileSync(failedPath, 'utf8')}`,
+  );
 }
 
 /**
@@ -87,11 +89,16 @@ function normalizeWorktreeStandalone(root) {
 export async function ensureBuild(root = REPO_ROOT) {
   if (buildIsCurrent(root)) return { built: false, ms: 0 };
 
-  const nextDir = join(root, '.next');
-  const lockPath = join(nextDir, '.build.lock');
-  const failedPath = join(nextDir, '.build.failed');
+  // The lock and the failure record live outside .next: next build empties
+  // .next when it starts, which deleted a lock kept there and let a waiting
+  // process start a second, concurrent build.
+  const stateDir = join(root, 'node_modules', '.cache', 'ozbh-next-build');
+  const lockPath = join(stateDir, 'build.lock');
+  const failedPath = join(stateDir, 'build.failed');
   const started = Date.now();
-  mkdirSync(nextDir, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  const sticky = stickyBuildFailure(root, failedPath);
+  if (sticky) throw sticky;
 
   /** Take the lock exclusively, or report that another process holds it. */
   const takeLock = () => {
@@ -107,6 +114,19 @@ export async function ensureBuild(root = REPO_ROOT) {
 
   while (true) {
     if (takeLock()) {
+      // Another process may have finished the build (or recorded a failure)
+      // while this one waited for the lock. Re-check before building, or a
+      // second build rewrites .next underneath the server a suite that
+      // accepted the first build is already running.
+      if (buildIsCurrent(root)) {
+        dropLock();
+        return { built: false, ms: Date.now() - started };
+      }
+      const failedMeanwhile = stickyBuildFailure(root, failedPath);
+      if (failedMeanwhile) {
+        dropLock();
+        throw failedMeanwhile;
+      }
       rmSync(failedPath, { force: true });
       try {
         const result = spawnSync(process.execPath, ['./node_modules/next/dist/bin/next', 'build'], {
@@ -132,7 +152,6 @@ export async function ensureBuild(root = REPO_ROOT) {
           writeFileSync(failedPath, message);
           throw new Error(message);
         }
-        normalizeWorktreeStandalone(root);
         return { built: true, ms: Date.now() - started };
       } finally {
         dropLock();
@@ -142,9 +161,8 @@ export async function ensureBuild(root = REPO_ROOT) {
     // Somebody else is building: wait for their result rather than racing them.
     await new Promise((resolve) => setTimeout(resolve, 500));
     if (buildIsCurrent(root)) return { built: false, ms: Date.now() - started };
-    if (existsSync(failedPath)) {
-      throw new Error(`another process's next build failed:\n${readFileSync(failedPath, 'utf8')}`);
-    }
+    const failedElsewhere = stickyBuildFailure(root, failedPath);
+    if (failedElsewhere) throw failedElsewhere;
     if (existsSync(lockPath) && Date.now() - statSync(lockPath).mtimeMs > 15 * 60 * 1000) {
       dropLock(); // a killed process must not wedge every later run
     }
@@ -159,7 +177,6 @@ export async function ensureBuild(root = REPO_ROOT) {
  * @param {string} root
  */
 export function prepareStandaloneRuntime(root = REPO_ROOT) {
-  normalizeWorktreeStandalone(root);
   const standalone = join(root, '.next', 'standalone');
   const staticSrc = join(root, '.next', 'static');
   if (existsSync(staticSrc)) {
@@ -191,9 +208,8 @@ export function freePort() {
  * Start the production Next.js server as a child process.
  *
  * Readiness is taken from the server's own stdout (`Ready in …`), **not** from
- * an HTTP request: the unwatched-poll test must be able to run this process to
- * completion without ever touching the application, and a liveness probe would
- * break that.
+ * an HTTP request: the live-server suite proves polling happens with no request
+ * to the application, and a liveness probe would break that.
  *
  * @param {object} args
  * @param {Record<string, string>} args.env the environment for the child
