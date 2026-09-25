@@ -568,4 +568,25 @@ describe('store: the persisted access gate (3.7)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('mutateGate upserts: a missing row is created (N3)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-store-'));
+    const store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T06:20:00Z') });
+    try {
+      store.getDb().prepare('DELETE FROM access_gate').run();
+      assert.equal(store.getGate(), null, 'the row is missing before the upsert');
+      const result = store.mutateGate((row) => ({
+        gate: { ...row, state: 'cooling', until_at: '2026-09-19T06:35:00Z' },
+        events: [],
+      }));
+      assert.equal(result.state, 'cooling');
+      const gate = store.getGate();
+      assert.notEqual(gate, null, 'the row exists after the upsert');
+      assert.equal(gate.id, 1);
+      assert.equal(gate.state, 'cooling');
+    } finally {
+      if (store.getDb().isOpen) store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
