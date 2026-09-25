@@ -90,6 +90,83 @@ async function makeWorker({ clockIso = '2026-09-19T07:30:00Z', rules = [] } = {}
   };
 }
 
+/**
+ * Drive the persisted gate to a given state by writing the full row and one
+ * event through the store. The worker's gate re-reads the store on every
+ * `read()` (design 3.7: the gate is the single persisted source of truth),
+ * so a direct write is immediately visible to the worker without touching
+ * the worker's own gate object.
+ */
+function setGateState(store, state, extra = {}) {
+  const row = {
+    state,
+    rule: null,
+    tier: 0,
+    reason: null,
+    since: '2026-09-19T07:30:00Z',
+    until_at: null,
+    min_resume_at: null,
+    consecutive_b2: 0,
+    failing_cycles: 0,
+    b5_tier: 0,
+    probe_used: 0,
+    ...extra,
+  };
+  store.applyGateTransition(row, [
+    {
+      at: row.since,
+      from_state: 'open',
+      to_state: state,
+      rule: row.rule,
+      tier: row.tier,
+      reason: row.reason,
+      until_at: row.until_at,
+      min_resume_at: row.min_resume_at,
+    },
+  ]);
+}
+
+/**
+ * G1: build a worker on a temp store with a caller-supplied routes object.
+ * Returns the handles (including the dir and db path) so the caller can
+ * close the store, reopen a second store on the same file, and clean up.
+ * The real schedulers are stopped immediately, as in makeWorker. When
+ * `dir`/`dbPath` are supplied they are reused (the restart case); otherwise
+ * a fresh temp dir is created.
+ */
+async function makeGateWorker({ clockIso = '2026-09-19T07:30:00Z', routes, rules = [], dir, dbPath } = {}) {
+  const realDir = dir ?? mkdtempSync(join(tmpdir(), 'ozb-worker-gate-'));
+  const realDbPath = dbPath ?? join(realDir, 'test.db');
+  const clock = fixedClock(clockIso);
+  const store = openStore({ path: realDbPath, clock });
+  for (const r of rules) insertRule(store, r);
+
+  const transport = createFixtureTransport(routes);
+  const sent = [];
+  const fakeProvider = makeProvider('test', (n) => {
+    sent.push(n);
+  });
+  store.upsertProvider('test', JSON.stringify({}), true);
+
+  const worker = await startWorker({
+    store,
+    transport,
+    clock,
+    random: seededRandom(1),
+    config: {
+      OZB_POLL_INTERVAL_SECONDS: 1,
+      OZB_CLASSIFIEDS_INTERVAL_SECONDS: 1,
+      OZB_SNAPSHOT_PATH: join(realDir, 'snapshot.json'),
+      OZB_USER_AGENT: 'test',
+    },
+    providers: [fakeProvider],
+    log: () => {},
+  });
+
+  await worker.stop();
+  return { dir: realDir, dbPath: realDbPath, clock, store, transport, sent, worker };
+}
+
 describe('worker: composition root', () => {
   test('cold start seeds the ledger silently and sends zero notifications', async () => {
     const { worker, store, sent, close } = await makeWorker({
@@ -206,6 +283,94 @@ describe('worker: composition root', () => {
         transport.requestLog.filter((r) => r.url.includes('/deals/feed')).length > 0,
         'deals polling still makes requests when classifieds is disabled',
       );
+    } finally {
+      await close();
+    }
+  });
+
+  // G1: the back-off survives a restart. A Cloudflare block on the front
+  // feed stops the gate (B1); closing the store and reopening a second
+  // store/worker on the same database file must find the persisted stopped
+  // state, and every OzBargain request (deals tick, classifieds tick) is
+  // refused before it reaches the transport.
+  test('a back-off survives a restart: a stopped gate makes zero requests in a fresh process', async () => {
+    const routes = {
+      'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+      'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+      'https://www.ozbargain.com.au/feed': { status: 403, body: 'error code: 1010' },
+      'https://www.ozbargain.com.au/classified': { status: 200, fixture: 'http/classifieds-page.html' },
+    };
+    const first = await makeGateWorker({ routes });
+    let second;
+    try {
+      await first.worker.tasks.dealPoll();
+      assert.equal(first.store.getGate().state, 'stopped', 'the front-feed Cloudflare block stopped the gate (B1)');
+      first.store.close();
+      second = await makeGateWorker({ routes, dir: first.dir, dbPath: first.dbPath });
+      assert.equal(second.store.getGate().state, 'stopped', 'the restarted store reads the persisted stopped state');
+      second.store.setSetting('classifieds_enabled', '1');
+      second.store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+      await second.worker.tasks.dealPoll();
+      await second.worker.tasks.classifiedsPoll();
+      assert.equal(second.transport.calls, 0, 'the restarted worker made zero transport calls while the gate is stopped');
+    } finally {
+      try { first.store.close(); } catch {}
+      if (second) { try { second.store.close(); } catch {} }
+      rmSync(first.dir, { recursive: true, force: true });
+    }
+  });
+
+  // G8: the dead-man's switch is suppressed while the gate is closed —
+  // even when the last success was days ago — and resumes once the gate
+  // opens. Nothing is sent and deadman_state is not written while closed.
+  test('the dead-man switch is suppressed while the gate is closed and resumes when it opens', async () => {
+    const { worker, store, sent, close } = await makeWorker({});
+    try {
+      // Last success four days before the fixed clock, no prior
+      // deadman_state: a dead-man notification is due (step 30min) as soon
+      // as the gate is open.
+      store.setPollState({
+        lastSuccessAt: '2026-09-15T07:30:00Z',
+        lastResponseClass: 'ok',
+        backoffSeconds: 0,
+        consecutiveFailures: 0,
+      });
+      const before = store.getSetting('deadman_state');
+      for (const state of ['cooling', 'stopped', 'probing']) {
+        setGateState(store, state, state === 'cooling' ? { until_at: '2027-01-01T00:00:00Z' } : {});
+        await worker.tasks.deadmanCheck();
+        assert.equal(sent.length, 0, `the dead-man sent nothing while the gate is ${state}`);
+        assert.equal(store.getSetting('deadman_state'), before, `deadman_state is unchanged while the gate is ${state}`);
+      }
+      setGateState(store, 'open');
+      await worker.tasks.deadmanCheck();
+      const deadmanSent = sent.filter((n) => n.tags?.includes('deadman'));
+      assert.ok(deadmanSent.length >= 1, 'the dead-man sent the due notification once the gate reopened');
+    } finally {
+      await close();
+    }
+  });
+
+  // G6: a closed gate makes zero requests and records no failures rows —
+  // no catch-up. Both the deals poll and the classifieds poll early-return
+  // without touching the transport.
+  test('a closed gate makes zero requests and records no failures (no catch-up)', async () => {
+    const { worker, store, transport, close } = await makeWorker({});
+    try {
+      // until_at far in the future so the gate stays cooling (no lazy
+      // transition to probing on read).
+      setGateState(store, 'cooling', { until_at: '2027-01-01T00:00:00Z' });
+      await worker.tasks.dealPoll();
+      const dealsCalls = transport.requestLog.filter(
+        (r) => r.url.includes('/deals/feed') || r.url === 'https://www.ozbargain.com.au/feed',
+      );
+      assert.equal(dealsCalls.length, 0, 'a closed gate makes zero deals requests');
+      assert.equal(store.getFailures().length, 0, 'a closed gate records no failures rows');
+      store.setSetting('classifieds_enabled', '1');
+      store.setSetting('ozb_account_cookie', 'test-session=authenticated');
+      await worker.tasks.classifiedsPoll();
+      const classifiedsCalls = transport.requestLog.filter((r) => r.url === 'https://www.ozbargain.com.au/classified');
+      assert.equal(classifiedsCalls.length, 0, 'a closed gate makes zero classifieds requests');
     } finally {
       await close();
     }

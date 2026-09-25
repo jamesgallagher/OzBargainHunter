@@ -498,6 +498,74 @@ describe('route: /healthz reports acquisition health (3.7)', () => {
     const body = await res.json();
     assert.equal(body.status, 'unhealthy');
   });
+
+  // G9: while the access gate is not open (cooling / stopped / probing),
+  // /healthz reports 503 backing_off carrying the gate's state — ahead of
+  // the last-success age check. The gate is driven through the shared
+  // store; the route re-reads it on every call.
+  test('a stopped gate is 503 backing_off with the gate state (G9)', async () => {
+    const { GET } = await import('../../../app/healthz/route.js');
+    store.applyGateTransition(
+      {
+        state: 'stopped',
+        rule: 'B1',
+        tier: 0,
+        reason: 'cloudflare_block on deals',
+        since: '2026-09-19T07:30:00Z',
+        until_at: null,
+        min_resume_at: '2026-09-20T07:30:00Z',
+        consecutive_b2: 0,
+        failing_cycles: 0,
+        b5_tier: 0,
+        probe_used: 0,
+      },
+      [],
+    );
+    const res = await GET(
+      new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'healthcheck-secret-for-tests' } }),
+    );
+    assert.equal(res.status, 503, 'a stopped gate is 503');
+    const body = await res.json();
+    assert.equal(body.status, 'backing_off');
+    assert.equal(body.gate.state, 'stopped');
+    assert.equal(body.gate.rule, 'B1');
+    assert.equal(body.gate.tier, 0);
+    assert.equal(body.gate.since, '2026-09-19T07:30:00Z');
+    assert.equal(body.gate.until_at, null);
+    assert.equal(body.gate.min_resume_at, '2026-09-20T07:30:00Z');
+  });
+
+  test('a cooling gate is 503 backing_off with until_at (G9)', async () => {
+    const { GET } = await import('../../../app/healthz/route.js');
+    // until_at far in the future: the route's gate (system clock) stays
+    // cooling — no lazy transition to probing on read.
+    store.applyGateTransition(
+      {
+        state: 'cooling',
+        rule: 'B2',
+        tier: 2,
+        reason: 'rate_limited on deals',
+        since: '2026-09-19T07:30:00Z',
+        until_at: '2027-01-01T00:00:00Z',
+        min_resume_at: null,
+        consecutive_b2: 2,
+        failing_cycles: 0,
+        b5_tier: 0,
+        probe_used: 0,
+      },
+      [],
+    );
+    const res = await GET(
+      new Request('https://app.example.com/healthz', { headers: { 'x-healthcheck-secret': 'healthcheck-secret-for-tests' } }),
+    );
+    assert.equal(res.status, 503, 'a cooling gate is 503');
+    const body = await res.json();
+    assert.equal(body.status, 'backing_off');
+    assert.equal(body.gate.state, 'cooling');
+    assert.equal(body.gate.rule, 'B2');
+    assert.equal(body.gate.until_at, '2027-01-01T00:00:00Z');
+    assert.equal(body.gate.min_resume_at, null);
+  });
 });
 
 // X1 / 11.3.6: /failures/clear is a state-changing route in its own segment.

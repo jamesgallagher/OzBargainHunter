@@ -527,7 +527,13 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   }
   try {
     const s = store.getPollState();
-    assert.equal(s.consecutive_failures, 60); // 20 cycles x 3 URLs
+    // Gate-aware (design 3.7): the gate cools on the 3rd failing cycle
+    // (B5), so only the first 3 open cycles fetch all three URLs (9
+    // failures); the 4th cycle is a no-op while cooling; from the 5th
+    // cycle the gate is probing and each cycle fetches exactly the probe
+    // URL — the stub never records the probe failure to the gate, so it
+    // stays probing for the remaining 16 cycles (16 failures). 9 + 16 = 25.
+    assert.equal(s.consecutive_failures, 25);
     // The exponent is clamped, so the stored backoff stays a safe integer
     // (2 * 2^11 = 4096) and never leaves the safe-integer range.
     assert.ok(Number.isSafeInteger(s.backoff_seconds), `backoff_seconds ${s.backoff_seconds} is not a safe integer`);
