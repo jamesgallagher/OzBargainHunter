@@ -29,6 +29,7 @@ import { openStore } from '../lib/store/index.js';
 import { createHttpTransport } from '../lib/http/transport.js';
 import { createDevMockTransport, isDevMockTransport } from '../lib/http/mock-transport.js';
 import { createOzbClient } from '../lib/http/client.js';
+import { createGate } from '../lib/gate/index.js';
 import { systemRandom } from '../lib/random.js';
 import { systemClock } from '../lib/clock.js';
 import { createScheduler } from '../lib/scheduler.js';
@@ -118,8 +119,10 @@ function buildProviders(store, config, providerFactories) {
  *   by the caller; defaults to building them from the store)
  * @param {object} [deps.providerFactories] provider kind to factory (used when
  *   `providers` is not supplied)
+ * @param {object} [deps.gate] the access gate (design 3.7); defaults to one
+ *   over the shared store
  * @param {(line: string) => void} [deps.log] log sink
- * @returns {Promise<{ stop(): Promise<void>, store: object, schedulers: object[] }>}
+ * @returns {Promise<{ stop(): Promise<void>, store: object, schedulers: object[], gate: object }>}
  *   `stop` stops the schedulers and resolves once an in-flight tick settles;
  *   the caller closes `store` and exits.
  */
@@ -131,9 +134,15 @@ export async function startWorker({
   config,
   providers,
   providerFactories,
+  gate,
   log = console.log,
 }) {
-  const client = createOzbClient({ transport, store, clock, random, config, log });
+  // The persisted access gate (design 3.7): one gate for the whole worker,
+  // shared by the HTTP client, the deal poll and the classifieds poll, so
+  // a back-off in one surface stops every OzBargain request, and the state
+  // (in the store's access_gate row) survives a restart.
+  const theGate = gate ?? createGate({ store, clock, config, log });
+  const client = createOzbClient({ transport, store, clock, random, config, log, gate: theGate });
   const selectedProviders = providers ?? buildProviders(store, config, providerFactories ?? {});
 
   // The last poll instant, for gap detection (6.3). A gap over two hours
@@ -171,7 +180,11 @@ export async function startWorker({
     // count is already non-zero and the first poll would alert instead of
     // seeding (acceptance 11.4.5).
     const wasEmpty = store.countDeals() === 0 && store.countAllObservations() === 0;
-    const result = await runDealPoll({ client, store, clock, config, log });
+    const result = await runDealPoll({ client, store, clock, config, log, gate: theGate });
+    // A cycle skipped by the access gate (design 3.7) is a no-op: no
+    // evaluation, no fan-out, and lastPollAtMs is not updated (a skipped
+    // cycle is not a poll for gap detection).
+    if (result.skipped === 'gate_closed') return;
     // The cycle's observation instant, not "now": the poller stamped its
     // observations with it, and the engine must evaluate the feeds at the same
     // instant so its own upsert of those records lands on the same
@@ -194,7 +207,7 @@ export async function startWorker({
    */
   async function classifiedsPollTask() {
     const wasEmpty = store.countDeals() === 0 && store.countAllObservations() === 0;
-    const result = await runClassifiedsPoll({ client, store, clock, config, log });
+    const result = await runClassifiedsPoll({ client, store, clock, config, log, gate: theGate });
     if (result.listings.length > 0) {
       const pollAt = nowIso();
       await evaluateAndFanout([{ surface: 'classifieds', records: result.listings }], pollAt, wasEmpty, null);
@@ -203,9 +216,12 @@ export async function startWorker({
 
   /**
    * The dead-man's-switch check: read the last successful poll, decide if a
-   * notification is due, and send it when it is.
+   * notification is due, and send it when it is. Suppressed while the
+   * access gate is closed (design 3.7): the back-off itself is the signal,
+   * so nothing is sent and deadman_state is not written.
    */
   async function deadmanCheckTask() {
+    if (!theGate.isOpen()) return;
     const pollState = store.getPollState() ?? {};
     const lastSuccess = pollState.last_success_at ?? null;
     const state = readDeadmanState(store);
@@ -274,7 +290,7 @@ export async function startWorker({
 
   // The task functions are exposed so a test can drive a single job without
   // waiting on a real timer. In production the schedulers drive them.
-  return { stop, store, schedulers, tasks: { dealPoll: dealPollTask, classifiedsPoll: classifiedsPollTask, deadmanCheck: deadmanCheckTask, nightly: nightlyTask } };
+  return { stop, store, schedulers, gate: theGate, tasks: { dealPoll: dealPollTask, classifiedsPoll: classifiedsPollTask, deadmanCheck: deadmanCheckTask, nightly: nightlyTask } };
 }
 
 /**

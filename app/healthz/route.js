@@ -1,9 +1,11 @@
 /**
  * /healthz — acquisition health, not process liveness (design 3.7). Reports
  * **unhealthy when the last successful poll is older than three poll
- * intervals**. The middleware authenticates it with the container-local
- * `OZB_HEALTHCHECK_SECRET` header; a LAN request without the secret is
- * rejected exactly like any other path.
+ * intervals**, and **backing_off (503) while the access gate is not open**
+ * (cooling / stopped / probing), carrying the gate's state — the back-off
+ * itself is the reason, ahead of the last-success age check. The middleware
+ * authenticates it with the container-local `OZB_HEALTHCHECK_SECRET` header;
+ * a LAN request without the secret is rejected exactly like any other path.
  *
  * A state-reading route (no CSRF). The access check is the middleware's job;
  * when called directly (as in the acceptance test) the healthcheck-secret
@@ -11,6 +13,8 @@
  */
 
 import { getStore } from '../../lib/web/db.js';
+import { createGate } from '../../lib/gate/index.js';
+import { systemClock } from '../../lib/clock.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { normalizeAppSecret } from '../../lib/env-secret.js';
 
@@ -53,6 +57,37 @@ export async function GET(request) {
   }
 
   const store = getStore();
+
+  // The access gate (design 3.7): while it is not open (cooling / stopped
+  // / probing) the app is backing off, and that is the health status —
+  // ahead of the last-success age check. The gate is built over the shared
+  // store with the system clock (web code; the injected-clock rule applies
+  // to lib/ and worker/), and its lazy cooling→probing transition in
+  // read() uses the same clock.
+  const gate = createGate({
+    store,
+    clock: systemClock(),
+    config: { OZB_DEALS_FEED_URL: process.env.OZB_DEALS_FEED_URL },
+    log: () => {},
+  });
+  const gateRow = gate.read();
+  if (gateRow.state !== 'open') {
+    return Response.json(
+      {
+        status: 'backing_off',
+        gate: {
+          state: gateRow.state,
+          rule: gateRow.rule,
+          tier: gateRow.tier,
+          since: gateRow.since,
+          until_at: gateRow.until_at,
+          min_resume_at: gateRow.min_resume_at,
+        },
+      },
+      { status: 503 },
+    );
+  }
+
   const pollState = store.getPollState() ?? {};
   const lastSuccess = pollState.last_success_at;
   const intervalSeconds = Number(process.env.OZB_POLL_INTERVAL_SECONDS ?? 300);
