@@ -32,14 +32,22 @@ test('the base image is node:24-bookworm-slim in every stage', () => {
   for (const base of bases) {
     assert.equal(base, 'node:24-bookworm-slim', `stage base ${base}: one libc across the build (a musl builder feeding a glibc runtime is a latent crash for native binaries like Chromium)`);
   }
+  // A second guard on the instructions, not the prose (the header comment names
+  // Alpine while explaining the move off it): no instruction may reference an
+  // Alpine base anywhere, not just on a FROM line.
+  const instructions = dockerfile.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
+  assert.doesNotMatch(instructions, /alpine/i, 'no instruction may reference an Alpine base: the whole build is on glibc (node:24-bookworm-slim), so a musl image anywhere would be a latent crash for Chromium');
 });
 
 test('the browser is installed into the image with the pinned Playwright', () => {
   const dockerfile = read('Dockerfile');
   assert.match(dockerfile, /^ENV PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright$/m, 'the browser path is a runtime ENV, not a build ARG');
   assert.match(dockerfile, /node node_modules\/playwright\/cli\.js install --with-deps --only-shell chromium|npx --no-install playwright install --with-deps --only-shell chromium/, 'the install runs the pinned local CLI with --with-deps (apt, needs root) and --only-shell chromium');
-  const install = dockerfile.search(/playwright(\/cli\.js)? install/);
-  const user = dockerfile.search(/^USER node$/m);
+  // The ordering check runs on the instructions, not the prose: a comment that
+  // mentions the install must not stand in for the RUN that performs it.
+  const instructions = dockerfile.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
+  const install = instructions.search(/playwright(\/cli\.js)? install/);
+  const user = instructions.search(/^USER node$/m);
   assert.ok(install !== -1 && user !== -1 && install < user, 'the install runs while the stage is still root, before the final USER node');
 });
 
