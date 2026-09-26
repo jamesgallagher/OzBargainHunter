@@ -23,9 +23,9 @@
 #     this script exits non-zero, so Docker's restart policy brings the whole
 #     application back.
 #
-# It is POSIX sh: the runtime image is Alpine, whose shell is busybox ash. There
-# is no `wait -n` here, so the first exit is detected by polling the children
-# with `kill -0` on a one-second beat.
+# It is POSIX sh: the runtime image is node:24-bookworm-slim, whose /bin/sh is
+# dash. There is no `wait -n` here, so the first exit is detected by polling
+# the children with `kill -0` on a one-second beat.
 #
 # The two commands are overridable through the environment
 # (`OZB_NEXT_SERVER_CMD`, `OZB_WORKER_CMD`) purely so the supervisor can be
