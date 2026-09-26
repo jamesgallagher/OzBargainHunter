@@ -60,6 +60,7 @@ The application is a single container running five internal components:
 - **The two processes share the SQLite database (4.3) and nothing else.** There is no socket, queue or RPC between them. Both open the same file, so both set a busy timeout; WAL mode (4.3) is what keeps the UI's reads out of the worker's way.
 - **The entrypoint supervises both.** It propagates `SIGTERM` and `SIGINT` to each child, and **if either process exits, the container exits non-zero** so Docker restarts it. A half-running container — UI up, poller dead — is the failure this prevents, and from the outside it is indistinguishable from a quiet day (6.7).
 - **A user-initiated action may still send a notification in the Next.js process** — the test-send button in delivery configuration (7.1) is a request, not a schedule. Scheduled delivery belongs to the worker.
+- **The image is `node:24-bookworm-slim` and carries Playwright's Chromium headless shell** (the feature card's decision 5). The browser exists only for the classifieds sign-in: it is launched per login by the web process, never by the worker, and never kept running. The base is one libc across both build stages because Chromium is a native binary.
 - The application binds port **8000** inside the container. The worker binds no port.
 - `/healthz` is served by the Next.js process and reports on state the worker wrote (3.7). It is an acquisition-health endpoint, not a liveness probe of the process answering it.
 - No inbound dependency: the poller only makes outbound requests.
@@ -542,6 +543,8 @@ The workflow runs on **Node.js 24 LTS**, the same major version the image is bui
 
 **The smoke test does not touch `ozbargain.com.au`.** The feed URLs are configuration (9.1), so the job points them at a fixture server on loopback. That is not a convenience: the health check reports unhealthy until a poll has succeeded (3.7), so a smoke test with no reachable feed could only pass by making the health check meaningless. It also lets the job assert the thing that matters most about the runtime split (2.2) — **that the database gains observations while no HTTP request is made to the application at all.**
 
+The smoke job also proves that **Chromium launches as `node` inside the built image**: the container's default user is uid 1000, the headless shell is launched with Playwright's defaults only (no extra arguments, no sandbox override), renders a page that is set rather than fetched — every request is aborted and counted — and leaves no browser process behind.
+
 The workflow sets a **concurrency group keyed on the branch reference with cancel-in-progress enabled**, so two rapid pushes cannot finish out of order and leave `:latest` pointing at the older commit.
 
 Images are built for **`linux/amd64` only**, carry OCI labels including `org.opencontainers.image.source`, and use the GitHub Actions build cache.
@@ -560,6 +563,8 @@ Images are built for **`linux/amd64` only**, carry OCI labels including `org.ope
 - Data directory: **`/mnt/user/appdata/ozbargain-hunter/`** → `/data`
 - Internal port: **8000**, published to the host
 - **All persistent state lives on the bind mount.** Nothing of value is written inside the container.
+
+**The browser, and why it adds no privilege.** The sign-in browser is Playwright's **headless shell only** — the full Chromium build is not installed, and switching to it later means dropping one install flag. It is installed at build time, while the stage is still root, into **`/ms-playwright`** (a runtime `ENV`, `PLAYWRIGHT_BROWSERS_PATH`, read by the web process at launch; the directory is left root-owned and merely readable by `node`). Playwright's default is to launch Chromium with **`--no-sandbox`** (4.4), so the browser runs as the unprivileged `node` user (uid 1000) with no `SYS_ADMIN`, no seccomp profile and no user namespaces: the container gains **no extra privileges because of the browser** — no `--cap-add`, no `--security-opt`, no `--ipc=host`, and the Unraid template is unchanged. The cost is image size: the headless shell and its system libraries add about 150–250 MB to the image.
 
 **Update mechanism — primary.** The assistant monitors the repository's CI runs on a short interval. When a run on `main` completes successfully, it applies the update on the host by invoking Unraid's own update script:
 
