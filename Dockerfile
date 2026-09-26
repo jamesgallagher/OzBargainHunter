@@ -15,7 +15,7 @@
 # launched per login at runtime by the web process — never by the worker, and
 # never kept running. Playwright's default is to launch Chromium with
 # --no-sandbox, so the container needs no extra privileges: no --cap-add, no
-# --security-opt, no --ipc=host (design 4.4, 10).
+# --security-opt, no --ipc=host (D66; the feature card's decision 7).
 #
 # Build:
 #   docker build -t ozbargainhunter:local .
@@ -94,7 +94,7 @@ RUN npm ci --omit=dev
 # --no-sandbox (chromiumSandbox is false unless requested), so the browser runs
 # as the unprivileged node user (uid 1000) with no SYS_ADMIN, no seccomp
 # profile and no user namespaces: the container gains no privileges because of
-# the browser (design 4.4, 10).
+# the browser (D66; the feature card's decision 7).
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN node node_modules/playwright/cli.js install --with-deps --only-shell chromium \
   && rm -rf /var/lib/apt/lists/*
