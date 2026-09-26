@@ -27,6 +27,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 - **D6 — Beta container.** Not built. The tool serves one person, so there is no separate beta instance. **DECIDED**
 - **D16 — Registry retention policy** for per-commit tags. **OPEN (O16)**
 - **D64 — Merge gate.** `main` is protected with classic branch protection requiring the four CI checks `lint`, `test`, `build`, `smoke` with `strict: true` and `enforce_admins: true`. No required approval is set: GitHub counts only write-access approvals, the approver is deliberately read-only, so the independent approval is enforced by the pipeline, not the platform. The `publish` condition remains the deployment gate: CI refuses to publish `ghcr.io` images unless the four jobs pass. Supersedes the earlier descoping to convention (the repository is now public and the protection endpoints are available). **DECIDED**
+- **D66 — Runtime image on `node:24-bookworm-slim` with Playwright's Chromium headless shell.** Both build stages moved off Alpine so the build is one libc (Chromium is a native binary). The browser is installed at build time into `/ms-playwright` (a runtime `ENV`), headless shell only, and runs on Playwright's default **no-sandbox** launch as the unprivileged `node` user (uid 1000) — **no extra container privileges** (no `--cap-add`, no `--security-opt`, no `--ipc=host`; the Unraid template is unchanged). See design §2.2, §10.6; the feature card's decision 7. **SPECIFIED**
 
 ## Exposure and access control
 
@@ -105,7 +106,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 ## Counts
 
 **DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D41, D42, D60, D61, D64, D65
-**SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34, D62, D63
+**SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34, D62, D63, D66
 **OPEN:** D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D38, D39, D40
 **SUPERSEDED:** D11 (by D22), D36 (by D60), D37 (by D50)
 **DEFERRED:** D28

@@ -19,3 +19,10 @@ coverage
 .env
 .env.*
 .worktrees/
+
+# Browser installs, spike captures and the local coding agent's state are never
+# part of the image: the browser is installed by the Dockerfile itself
+# (--only-shell chromium), so a local one must not be able to stand in for it.
+.playwright-browsers
+spike-output
+.qwen

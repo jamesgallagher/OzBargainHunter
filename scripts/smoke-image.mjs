@@ -20,9 +20,15 @@
  * 3. Then the access control: without a session the application is not a 200,
  *    with a properly signed Access JWT it is, and a static asset with no
  *    session is not a 200 either (11.2.1-11.2.4).
+ * 4. Then the browser: the image's Chromium headless shell must launch *as the
+ *    unprivileged node user* (uid 1000) with no extra launch arguments, render
+ *    a page that is set, not fetched — every network request is aborted and
+ *    counted, so the step cannot reach anywhere, least of all
+ *    `ozbargain.com.au` — and leave no browser process behind.
  *
  * The smoke test never touches `ozbargain.com.au`, and it could not pass if it
- * did: with no reachable feed the health check would never go healthy.
+ * did: with no reachable feed the health check would never go healthy, and the
+ * browser step aborts every request it makes.
  *
  * Docker is required, and on Linux `--network host` is used so the container can
  * reach the fixture server and the JWKS server on the host's loopback. When
@@ -74,6 +80,10 @@ const HEALTH_TIMEOUT_SLACK_SECONDS = 120;
  * a healthy container.
  */
 const HEALTH_TIMEOUT_MS = (POLL_INTERVAL_SECONDS + HEALTH_TIMEOUT_SLACK_SECONDS) * 1000;
+
+/** The browser launch may take this long: the headless shell's first cold
+ *  launch in a fresh container, including the browser's own startup. */
+const BROWSER_TIMEOUT_MS = 60000;
 
 const TEAM_DOMAIN = 'smoke.cloudflareaccess.com';
 const AUD = 'smoke-aud';
@@ -250,7 +260,87 @@ async function main() {
     console.log(`smoke: a static asset with no session is not a 200 (${staticRes.status})`);
     await staticRes.text();
 
-    console.log(`PASS  ${IMAGE}: healthy, ${observations} observations before any request, access control holds`);
+    // 4. The browser: the image's Chromium headless shell must launch as the
+    //    unprivileged node user, with Playwright's defaults only — no extra
+    //    launch arguments, no chromiumSandbox override — and prove it can
+    //    render. The page is set, not fetched: every request is aborted and
+    //    counted, so this step cannot reach anywhere, least of all
+    //    ozbargain.com.au.
+    const uid = (await docker('exec', CONTAINER_NAME, 'id', '-u')).stdout.trim();
+    if (uid !== '1000') {
+      await fail(`the container's default user is uid ${uid}; the browser must be proven to run as node (uid 1000)`);
+    }
+
+    const browserScript = [
+      'const t0 = Date.now();',
+      'let routed = 0;',
+      '(async () => {',
+      "  const { chromium } = require('playwright');",
+      '  const browser = await chromium.launch({ headless: true });',
+      '  try {',
+      '    const context = await browser.newContext();',
+      '    const page = await context.newPage();',
+      "    await context.route('**/*', (route) => { routed += 1; route.abort(); });",
+      "    await page.setContent('<p id=\"ok\">ok</p>');",
+      '    const text = await page.textContent("#ok");',
+      "    console.log(JSON.stringify({ version: browser.version(), text, routed, ms: Date.now() - t0 }));",
+      '  } finally {',
+      '    await browser.close();',
+      '  }',
+      '})().catch((err) => { console.error(err); process.exit(1); });',
+    ].join('\n');
+    let browser;
+    try {
+      // run (the promisified execFile) with a timeout so a hung launch cannot
+      // hang the smoke run: on expiry the docker exec is killed and the promise
+      // rejects. run is used (not the raw execFile) so stdout is a string, as
+      // every other docker call in this script relies on.
+      ({ stdout: browser } = await run('docker', ['exec', CONTAINER_NAME, 'node', '-e', browserScript], { timeout: BROWSER_TIMEOUT_MS }));
+    } catch (err) {
+      await fail(`the browser launch in the image failed: ${err.killed ? `timed out after ${BROWSER_TIMEOUT_MS / 1000}s` : err.stderr || err.message}`);
+    }
+    let browserResult;
+    try {
+      browserResult = JSON.parse(browser.trim());
+    } catch {
+      await fail(`the browser launch printed unparsable output: ${browser.trim()}`);
+    }
+    if (browserResult.text !== 'ok') {
+      await fail(`the browser rendered the wrong page (got ${JSON.stringify(browserResult.text)})`);
+    }
+    if (browserResult.routed !== 0) {
+      await fail(`the browser made ${browserResult.routed} network request(s); the page is set, not fetched`);
+    }
+
+    // The launch is done; no browser may still be running inside the image.
+    // The slim image has no ps or pgrep, so the processes are read from
+    // /proc.
+    const strayScript = [
+      'const fs = require("fs");',
+      'const pids = fs.readdirSync("/proc").filter((n) => n.match(/^[0-9]+$/));',
+      'const hits = [];',
+      'for (const pid of pids) {',
+      '  // Skip this check\'s own process: it runs as `node -e <this script>`, so its',
+      '  // cmdline contains the very words it searches for and would otherwise flag itself.',
+      '  if (Number(pid) === process.pid) continue;',
+      '  let raw = "";',
+      '  try { raw = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch { continue; }',
+      '  const cmd = raw.split("\\0").join(" ");',
+      '  if (/headless_shell|chrome/i.test(cmd)) hits.push(cmd);',
+      '}',
+      'console.log(hits.length ? hits.join("\\n") : "none");',
+    ].join('\n');
+    const { stdout: stray } = await docker('exec', CONTAINER_NAME, 'node', '-e', strayScript);
+    if (stray.trim() !== 'none') {
+      await fail(`a browser process is still running after the launch: ${stray.trim()}`);
+    }
+
+    const imageBytes = (await docker('image', 'inspect', IMAGE, '--format', '{{.Size}}')).stdout.trim();
+    const imageMB = Math.round(Number.parseInt(imageBytes, 10) / 1024 / 1024);
+    console.log(`smoke: Chromium ${browserResult.version} launched as node (uid 1000), rendered in ${browserResult.ms} ms, no network, no stray process`);
+    console.log(`smoke: the image is ${imageMB} MB`);
+
+    console.log(`PASS  ${IMAGE}: healthy, ${observations} observations before any request, access control holds, Chromium ${browserResult.version} launches as node`);
   } finally {
     if (containerStarted) {
       await docker('rm', '-f', CONTAINER_NAME).catch(() => {});
