@@ -291,9 +291,11 @@ async function main() {
     ].join('\n');
     let browser;
     try {
-      // execFile with a timeout so a hung launch cannot hang the smoke run:
-      // on expiry the docker exec is killed and the promise rejects.
-      ({ stdout: browser } = await execFile('docker', ['exec', CONTAINER_NAME, 'node', '-e', browserScript], { timeout: BROWSER_TIMEOUT_MS }));
+      // run (the promisified execFile) with a timeout so a hung launch cannot
+      // hang the smoke run: on expiry the docker exec is killed and the promise
+      // rejects. run is used (not the raw execFile) so stdout is a string, as
+      // every other docker call in this script relies on.
+      ({ stdout: browser } = await run('docker', ['exec', CONTAINER_NAME, 'node', '-e', browserScript], { timeout: BROWSER_TIMEOUT_MS }));
     } catch (err) {
       await fail(`the browser launch in the image failed: ${err.killed ? `timed out after ${BROWSER_TIMEOUT_MS / 1000}s` : err.stderr || err.message}`);
     }
