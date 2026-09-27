@@ -275,6 +275,34 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.browsers[0].isConnected(), false);
   });
 
+  it('a timeout during launch: the late browser is closed and no request is made', async (t) => {
+    const lateBrowsers = [];
+    const ctx = await runScenario('ok', {
+      timeoutMs: 500,
+      launchBrowser: async (options) => {
+        // The launch outlives the hard timeout: it returns a browser the
+        // timer's exit could not close (it ran while the launch was pending).
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const { chromium } = await import('playwright');
+        const browser = await chromium.launch(options);
+        lateBrowsers.push(browser);
+        return browser;
+      },
+    });
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'timeout');
+    assert.ok(ctx.elapsedMs < 2000, `resolved at the hard timeout (got ${ctx.elapsedMs}ms)`);
+    // The launch returns ~1500ms after the call resolved; the guard after it
+    // closes the browser. Poll for that (no fixed sleep).
+    const deadline = Date.now() + 10000;
+    while (lateBrowsers.length === 0 || lateBrowsers[0].isConnected()) {
+      assert.ok(Date.now() < deadline, 'the late browser was closed');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(ctx.browsers.length, 0, 'the default launcher was never used');
+    assert.equal(loginSequence(ctx.server).length, 0, 'no request reached the fixture');
+  });
+
   it('no_session_cookie: a cleared PHPSESSID is a login_failed (the page still loads)', async (t) => {
     const ctx = await runScenario('no_session_cookie');
     t.after(() => ctx.close());
