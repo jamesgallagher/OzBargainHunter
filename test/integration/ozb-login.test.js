@@ -372,6 +372,26 @@ describe('integration: performLogin (prompt section 5)', () => {
   it('the browser is always closed: the headless process count is unchanged (linux only)', {
     skip: process.platform !== 'linux',
   }, async (t) => {
+    // Count only processes descending from this test process, so an unrelated
+    // chrome on the host (a developer's browser) cannot skew the comparison.
+    const isDescendant = (pid) => {
+      let current = pid;
+      for (let hops = 0; hops < 64; hops += 1) {
+        let stat;
+        try {
+          stat = readFileSync(join('/proc', String(current), 'stat'), 'utf8');
+        } catch {
+          return false;
+        }
+        // The comm field (index 1) may contain spaces and parentheses, so
+        // parse from after the last ')': fields[0] is state, fields[1] is ppid.
+        const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+        current = Number(fields[1]);
+        if (current === process.pid) return true;
+        if (current <= 1) return false;
+      }
+      return false;
+    };
     const countChrome = () => {
       let count = 0;
       for (const entry of readdirSync('/proc')) {
@@ -382,7 +402,7 @@ describe('integration: performLogin (prompt section 5)', () => {
         } catch {
           continue;
         }
-        if (/headless_shell|chrome/.test(cmdline)) count += 1;
+        if (/headless_shell|chrome/.test(cmdline) && isDescendant(Number(entry))) count += 1;
       }
       return count;
     };
