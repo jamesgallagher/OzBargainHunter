@@ -39,11 +39,12 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Data acquisition
 
-- **D14 — Client identity.** Honest, explicit self-identification. The tool represents the user and does not disguise itself: no browser impersonation, no TLS-fingerprint impersonation, no identity rotation, no proxies, no bypass tooling. On being blocked while identified honestly, it stops and surfaces the block rather than escalating. **DECIDED**
+- **D14 — Client identity.** The tool acts as its owner. The browser presents as an ordinary desktop Chrome (standard User-Agent, en-AU locale, Melbourne time zone, human pacing). No stealth or fingerprint plugins, no challenge solving, no proxies or rotation, no retrying after a block: a block stops the app and is surfaced to the owner. `fetch`-based polling keeps the honest application User-Agent. **DECIDED**
   - **Consequence of D60: the `curl_cffi` / `tls-client` question is moot.** Those tools were weighed when the stack was Python, and their only purpose is to imitate a browser's TLS handshake — which D14 already forbids. The platform's own HTTP client is therefore the correct one, on any stack, and under D60 that is Node's built-in `fetch`. Nothing about the stack change reopens this.
-- **D13 / D10 — Classifieds authentication.** The container performs the login itself, using a dedicated account created for the tool. **DECIDED, but BLOCKED (O21)** — it requires `/user/login`, which D14's deny list (design §3.4) forbids outright. v1 therefore takes the session cookie supplied through UI screen 9 (design §7.1) and does not build the self-login. James to resolve.
+- **D13 / D10 — Classifieds authentication.** The container performs the login itself, using a dedicated account created for the tool. **DECIDED** — O21 is resolved in favour of D13 by a scoped exception (card decision 1, design §3.4): `/user/login` stays denied in the shared poll client, but the login module (`lib/ozb-login/`), driving a real browser, may visit it, and only when a person submits the wizard.
 - **D10b — OzBargain credential storage.** Environment variables in the container's `.env`, accepting the Unraid-template storage risk. **DECIDED**
 - **D65 — OzBargain access gate.** All back-off is one persisted gate row that every OzBargain request passes through and that survives restarts. Rules B1–B5: Cloudflare block stops the gate for 24 h (7 days on a repeat within 30 days), rate limiting cools it on a 15-minute doubling ladder (five consecutive stops it), a deals permission denial stops it, and three failing cycles cool it with a 6 h cap; the four `OZB_GATE_*` keys have hard floors, in-request waits are capped at 60 s, there is no catch-up, the dead-man is suppressed while the gate is closed, and `/healthz` reports `backing_off`. See design §3.7. **DECIDED**
+- **D67 — The login runs only in a real browser.** The login is driven by Playwright controlling a full headless Chromium, never by `fetch` or a hand-built form POST. This applies to the product and to every live test. The classifieds and deals polls still use the plain `fetch` client with the honest application User-Agent (D14). **DECIDED**
 
 ## Alerting
 
@@ -105,7 +106,7 @@ Update this file whenever a decision changes. Do not append history — replace 
 
 ## Counts
 
-**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D41, D42, D60, D61, D64, D65
+**DECIDED:** D1, D2, D4, D5, D6, D7, D8, D10, D10b, D12, D13, D14, D17, D22, D29, D41, D42, D60, D61, D64, D65, D67
 **SPECIFIED:** D3, D16(old), D20, D21, D23, D25, D26, D27, D32, D33, D34, D62, D63, D66
 **OPEN:** D9, D11(replaced), D15(old), D18, D19, D24, D30(partial), D31, D35, D38, D39, D40
 **SUPERSEDED:** D11 (by D22), D36 (by D60), D37 (by D50)

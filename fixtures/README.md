@@ -114,7 +114,7 @@ one. If a build ever did ask, this is the body it would get, and it is not a fee
 
 `cls403.html`, `feed_classifieds_feed.xml` and `derived/cloudflare-1010.txt` are the three refusals
 the classifier must keep apart. They share nothing but a status code family: the 403 and 404 pages
-are ~1 KB of OzBargain's own template, the Cloudflare block is 17 bytes with no HTML at all.
+are ~1 KB of OzBargain's own template, the Cloudflare block is 16 bytes with no HTML at all.
 
 #### What is on the classifieds page
 
@@ -159,7 +159,7 @@ of a real capture; the script records why each exists.
 |---|---|---|---|
 | `classifieds-page-unpinned-freebie.html` | `classifieds-page.html` | listing 975712 retyped `sell` → `free` | the positive freebie path — the raw capture's only Freebie is pinned |
 | `classifieds-page-anon.html` | `classifieds-page.html` | `OzB_vars.uid` `226301` → `0` | expired session detection (design §3.6) |
-| `cloudflare-1010.txt` | — | 17 bytes, `error code: 1010\n` | Cloudflare block, reproduced byte-exactly from `research.md` §2.2 |
+| `cloudflare-1010.txt` | — | 16 bytes, `error code: 1010` (no trailing newline) | Cloudflare block, reproduced byte-exactly from `research.md` §2.2 |
 | `deals-page0-truncated.xml` | `r0.xml` | cut inside the third `<item>` | `200` with unparseable XML |
 | `front-feed-promoted.xml` | `cmp_front.xml` | item 975122 spliced in verbatim from `pg9.xml` | D43 — a deal on the front page that never appeared on pages 0–1 |
 
@@ -167,6 +167,33 @@ Node 975122 (*"Disney and Pixar's Lightning McQueen Dinoco Crocband Clog $125 De
 Kings"*, 9 votes, no expiry) was posted four days before the capture and sits at page 9. It is
 therefore unreachable under the two-page cap by any route except the front-page feed — which is
 precisely the case D43 exists for.
+
+### Login fixtures (chunk 5)
+
+Two synthetic pages, **modelled on the live measurements of 26 September 2026** — no real
+token, uid, cookie or username appears in either.
+
+| File | What it is | Why it exists |
+|---|---|---|
+| `user-login.html` | a minimal login page: `<title>Log in \| OzBargain</title>`, `OzB_vars={"uid":0}`, an `accounts.google.com` script tag (so the login's request allowlist has something to block), **the decoy search form first** (submit name `op`, value `Search`), then the login form `form#user_login` with `#edit-name` / `#edit-pass` / `#edit-form_token` | the login module's page 1; the decoy-first ordering is a live-site fact (1.2) that the unscoped-submit trap (7) exists for; `{{FORM_TOKEN}}` and `{{MESSAGES}}` are filled in by the fixture server |
+| `user-profile.html` | a profile page with **no `OzB_vars`** | the live profile page defines no site variables (1.2), so the uid must be read from the URL `/user/<uid>` — the fixture makes that the only path |
+
+The fixture server serves them through its opt-in `login` option (prompt 4.11); with `login`
+absent, behaviour is byte-for-byte unchanged.
+
+### The `--login` dev loop
+
+`node scripts/fixture-server.mjs --login` starts the fixture server with login enabled
+(`username: 'dev'`, `password: 'dev-password'`, both printed on startup). To exercise the
+login in dev:
+
+1. Start the fixture server with `--login` and note the port.
+2. Set `OZB_CLASSIFIEDS_URL=http://127.0.0.1:<port>/classified`.
+3. (Chunk 6) Use the wizard.
+
+In dev mode (`OZB_DEV_MOCK_TRANSPORT=1`), the login origin resolver allows only loopback
+origins, so this is the only way a developer can reach a login endpoint — the live origin
+is refused with `dev_mode_live_origin`.
 
 ---
 
