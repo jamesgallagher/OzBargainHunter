@@ -7,6 +7,11 @@ import { join } from 'node:path';
 import { openStore } from '../../../lib/store/index.js';
 import { fixedClock } from '../../../lib/clock.js';
 import { formatMelbourne } from '../../../lib/time.js';
+import { setStoreForTest } from '../../../lib/web/db.js';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createElement } from 'react';
+import Layout from '../../../app/layout.js';
+import StatusPage from '../../../app/page.js';
 import { brevoProvider } from '../../../lib/notify/brevo.js';
 import {
   shouldNotify,
@@ -528,4 +533,82 @@ test('sendGateEvents: no unsent events — no log, no throw', () =>
     const logs = [];
     await assert.doesNotReject(sweep(store, {}, logs));
     assert.deepEqual(logs, []);
+  }));
+
+// --- A10 hygiene (F3): a failed send never leaks the credential or the
+// error message into the notification, the mail, the logs or the UI ---
+
+test('A10: a failed send never leaks the credential or the error message (F3)', () =>
+  withStore(async (store) => {
+    const sentinels = ['SENTINEL-API-KEY', 'SENTINEL-LOGIN', 'SENTINEL-ERRMSG'];
+    store.upsertProvider(
+      'brevo_smtp',
+      JSON.stringify({
+        mailFrom: 'alerts@example.com',
+        recipient: 'james@example.com',
+        apiKey: sentinels[0],
+        login: sentinels[1],
+      }),
+      true,
+    );
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+
+    const calls = [];
+    const failingFactory = () => {
+      const transport = {
+        async sendMail(args) {
+          calls.push(args);
+          throw new Error(sentinels[2]);
+        },
+      };
+      return brevoProvider(transport);
+    };
+    const logs = [];
+    await sweep(store, { brevo_smtp: failingFactory }, logs);
+
+    // 1. The composed notification (title, body, url, tags).
+    const n = composeGateNotification(stoppedEvent(), { publicUrl: '' });
+    for (const s of sentinels) {
+      assert.ok(
+        ![n.title, n.body, n.url, n.tags.join(' ')].some((part) => part.includes(s)),
+        `the notification must not carry ${s}`,
+      );
+    }
+    // 2. The sendMail arguments.
+    assert.equal(calls.length, 1, 'the send was attempted');
+    for (const s of sentinels) {
+      assert.ok(!JSON.stringify(calls[0]).includes(s), `the mail must not carry ${s}`);
+    }
+    // 3. The log lines: the name only, never the message.
+    assert.deepEqual(logs, ['gate-notify event 1 stopped email=failed others=0/0']);
+    for (const s of sentinels) {
+      for (const line of logs) assert.ok(!line.includes(s), `a log line must not carry ${s}`);
+    }
+    // 4. The rendered banner + Status panel (the failed email surfaces as
+    // fixed text, the credential and the message do not).
+    setStoreForTest(store);
+    let html;
+    try {
+      html = renderToStaticMarkup(createElement(Layout, null, renderToStaticMarkup(await StatusPage())));
+    } finally {
+      setStoreForTest(null);
+    }
+    for (const s of sentinels) {
+      assert.ok(!html.includes(s), `the rendered UI must not carry ${s}`);
+    }
+    assert.match(html, /Email alert not sent — sending failed/, 'the failed email surfaces as fixed text');
+  }));
+
+test('F3: the outer catch logs the error name only, never the message', () =>
+  withStore(async (store) => {
+    store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    store.upsertProvider('matrix', '{}', true);
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+    const { factory } = fakeBrevo();
+    const matrixFactory = () => {
+      throw new Error('SENTINEL-MATRIX-ERRMSG');
+    };
+    const logs = [];
+    await assert.doesNotReject(sweep(store, { brevo_smtp: factory, matrix: matrixFactory }, logs));
+    assert.deepEqual(logs, ['gate-notify error (Error)'], 'the name only — the message is never logged');
   }));
