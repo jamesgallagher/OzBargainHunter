@@ -204,7 +204,7 @@ Acquisition is expected to break without warning, because the site owner tunes h
 **The tool acts as its owner, with two honest identities.** It is a personal assistant representing him: it does not disguise itself as something it is not.
 
 - **The `fetch` polls identify themselves.** Every poll request carries an explicit User-Agent naming the application, its version and a contact URL. A Chrome User-Agent on a non-Chrome connection is an inconsistency, more detectable than an honest bot — so the polls never do it.
-- **The login browser presents as an ordinary desktop Chrome.** The one browser use — the login (D67) — runs a full headless Chromium that presents as James: a standard Chrome User-Agent with no `HeadlessChrome`, `en-AU` locale, `Australia/Melbourne` time zone, a normal desktop window size, and human pacing.
+- **The login browser presents as an ordinary desktop Chrome.** The one browser use — the login (D67) — runs a headless Chromium (Playwright's headless shell in the image; D66) that presents as James: a standard Chrome User-Agent with no `HeadlessChrome`, `en-AU` locale, `Australia/Melbourne` time zone, a normal desktop window size, and human pacing.
 
 **What stays forbidden:** stealth or fingerprint-masking plugins, captcha or challenge solving, proxies or identity rotation, retrying after a block, and TLS-fingerprint impersonation — clients whose purpose is to mimic a real browser's TLS handshake are not used, whatever they would technically permit. A block or challenge stops the app and is surfaced to the user as a decision for him, not worked around.
 
