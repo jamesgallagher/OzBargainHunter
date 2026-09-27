@@ -27,11 +27,11 @@ const BREVO_CONFIG = JSON.stringify({ mailFrom: 'alerts@example.com', recipient:
  * selected provider row is the injected one). The real schedulers are stopped
  * immediately so the test drives the exposed task functions directly.
  */
-async function makeWorker({ failing = false } = {}) {
+async function makeWorker({ failing = false, routes = ROUTES } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ozb-worker-gate-delivery-'));
   const clock = fixedClock('2026-09-19T07:30:00Z');
   const store = openStore({ path: join(dir, 'test.db'), clock });
-  const transport = createFixtureTransport(ROUTES);
+  const transport = createFixtureTransport(routes);
   const mailCalls = [];
   const smtp = {
     async sendMail(args) {
@@ -157,6 +157,33 @@ describe('worker: gate-alert delivery on the task paths (crash-safe sweep)', () 
       await assert.doesNotReject(worker.tasks.deadmanCheck(), 'the delivery sweep never throws');
 
       assert.equal(store.getGateEventsAsc()[0].email_status, 'failed');
+    } finally {
+      await close();
+    }
+  });
+
+  test('A1: a Cloudflare block (403) during the deal poll closes the gate (B1) and the same task sends the alert', async () => {
+    // The first deal URL answers a Cloudflare 403 (the 1010 body); the rest
+    // would be 200, but the gate closes on the first block so they are never
+    // fetched. The alert must be sent by this very dealPoll task, not a later
+    // sweep, with the gate open before the poll (no pre-closing).
+    const routes = {
+      'https://www.ozbargain.com.au/deals/feed?page=0': { status: 403, fixture: 'http/cloudflare-1010.txt' },
+      'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+      'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    };
+    const { worker, store, mailCalls, close } = await makeWorker({ routes });
+    try {
+      store.upsertProvider('brevo_smtp', BREVO_CONFIG, true);
+      assert.equal(store.getGate().state, 'open', 'the gate is open before the poll (no pre-closing)');
+
+      await worker.tasks.dealPoll();
+
+      assert.equal(store.getGate().state, 'stopped', 'the 403 closes the gate');
+      assert.equal(store.getGate().rule, 'B1', 'rule B1 (Cloudflare block)');
+      assert.equal(mailCalls.length, 1, 'exactly one sendMail in the one dealPoll task');
+      assert.equal(mailCalls[0].subject, 'OzBargain Hunter — access STOPPED (B1: Cloudflare block)');
+      assert.equal(store.getGateEventsAsc()[0].email_status, 'sent', 'the B1 event is marked sent');
     } finally {
       await close();
     }

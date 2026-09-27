@@ -612,3 +612,74 @@ test('F3: the outer catch logs the error name only, never the message', () =>
     await assert.doesNotReject(sweep(store, { brevo_smtp: factory, matrix: matrixFactory }, logs));
     assert.deepEqual(logs, ['gate-notify error (Error)'], 'the name only — the message is never logged');
   }));
+
+// --- A5 (S4): two concurrent sweeps over the same store file deliver each
+// notify-worthy event exactly once — the atomic claim is the dedup ---
+
+test('A5: two concurrent sweeps over the same store deliver each event once (claim dedup)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-notify-'));
+  const dbPath = join(dir, 'test.db');
+  const clockA = fixedClock('2026-09-19T07:30:00Z');
+  const a = openStore({ path: dbPath, clock: clockA });
+  const b = openStore({ path: dbPath, clock: fixedClock('2026-09-19T07:30:00Z') });
+  try {
+    a.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    // Two notify-worthy (stopped) events, distinct instants.
+    seedEvent(a, { state: 'stopped', rule: 'B1', min_resume_at: '2026-09-20T07:30:00Z' }, stoppedEvent());
+    seedEvent(a, { state: 'stopped', rule: 'B1', min_resume_at: '2026-09-20T07:30:00Z' }, stoppedEvent({ at: '2026-09-19T07:31:00Z' }));
+
+    const { factory, calls } = fakeBrevo();
+    await Promise.all([
+      sendGateEvents({ store: a, clock: clockA, config: CONFIG, providerFactories: { brevo_smtp: factory }, log: () => {} }),
+      sendGateEvents({ store: b, clock: fixedClock('2026-09-19T07:30:00Z'), config: CONFIG, providerFactories: { brevo_smtp: factory }, log: () => {} }),
+    ]);
+
+    assert.equal(calls.length, 2, 'one send per notify-worthy event, not per-sweep-per-event');
+    assert.deepEqual(
+      a.getGateEventsAsc().map((e) => e.email_status),
+      ['sent', 'sent'],
+      'both events are marked sent exactly once',
+    );
+  } finally {
+    if (a.getDb().isOpen) a.close();
+    if (b.getDb().isOpen) b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- A3 (S4): a failing other provider does not stop the Brevo send, and a
+// failing Brevo does not stop the other provider (per-provider isolation) ---
+
+test('A3: a failing other provider does not stop the Brevo send', () =>
+  withStore(async (store) => {
+    store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    store.upsertProvider('ntfy', JSON.stringify({ url: 'http://127.0.0.1:2', topic: 'alerts' }), true);
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+    const ntfyCalls = [];
+    const ntfyFactory = () => ({ kind: 'ntfy', send: async () => { ntfyCalls.push(1); throw new Error('ntfy down'); } });
+    const { factory, calls } = fakeBrevo(); // Brevo succeeds
+    const logs = [];
+    await sweep(store, { brevo_smtp: factory, ntfy: ntfyFactory }, logs);
+
+    assert.equal(calls.length, 1, 'Brevo was sent despite the other provider failing');
+    assert.equal(ntfyCalls.length, 1, 'the other provider was still attempted');
+    assert.deepEqual(statuses(store), [{ id: 1, to_state: 'stopped', notified: 1, email_status: 'sent' }]);
+    assert.deepEqual(logs, ['gate-notify event 1 stopped email=sent others=0/1']);
+  }));
+
+test('A3: a failing Brevo does not stop the other provider', () =>
+  withStore(async (store) => {
+    store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    store.upsertProvider('ntfy', JSON.stringify({ url: 'http://127.0.0.1:2', topic: 'alerts' }), true);
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+    const ntfyCalls = [];
+    const ntfyFactory = () => ({ kind: 'ntfy', send: async (n) => { ntfyCalls.push(n); } }); // ntfy succeeds
+    const { factory, calls } = fakeBrevo({ failing: true }); // Brevo fails
+    const logs = [];
+    await sweep(store, { brevo_smtp: factory, ntfy: ntfyFactory }, logs);
+
+    assert.equal(calls.length, 1, 'Brevo was attempted (and failed)');
+    assert.equal(ntfyCalls.length, 1, 'the other provider was still sent despite the Brevo failure');
+    assert.deepEqual(statuses(store), [{ id: 1, to_state: 'stopped', notified: 1, email_status: 'failed' }]);
+    assert.deepEqual(logs, ['gate-notify event 1 stopped email=failed others=1/0']);
+  }));
