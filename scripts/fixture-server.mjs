@@ -145,8 +145,6 @@ export function createFixtureServer({
   const loginSessions = new Map();
   /** Seed for the deterministic session ids. */
   let loginIdCounter = 0;
-  /** The most recently created login session id (the no-cookie fallback). */
-  let activeLoginSessionId = null;
 
   /** A fresh synthetic session id (never a real credential). */
   function randomLoginId() {
@@ -198,28 +196,31 @@ export function createFixtureServer({
   /** The login session a request refers to, or null. */
   function resolveLoginSession(req) {
     const cookies = parseCookies(req.headers.cookie);
-    const sid = cookies.PHPSESSID;
+    // The `no_session_cookie` scenario issues the logged-in session under a
+    // differently named cookie (`SSESS_fixture`), which the fixture honours
+    // too: a request without either cookie is anonymous, whatever happened
+    // server-side.
+    const sid = cookies.PHPSESSID ?? cookies.SSESS_fixture;
     if (sid && loginSessions.has(sid)) return loginSessions.get(sid);
-    // A cleared cookie (the `no_session_cookie` scenario) still has a
-    // server-side session; the page is served, only the cookie is gone.
-    if (!sid && activeLoginSessionId && loginSessions.has(activeLoginSessionId)) {
-      return loginSessions.get(activeLoginSessionId);
-    }
     return null;
   }
 
   /**
    * Record a login request: method, path without query, status, scenario, and
    * a `reason` when it is a decoy submit. The POST body is never recorded.
+   * `hadSession` records whether the request carried a session cookie (a
+   * boolean — never the value).
    */
   function recordLogin(req, status, reason = null) {
     const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+    const cookies = parseCookies(req.headers.cookie);
     const entry = {
       method: req.method,
       url: pathname,
       status,
       at: new Date().toISOString(),
       scenario: login.scenario ?? 'ok',
+      hadSession: Boolean(cookies.PHPSESSID || cookies.SSESS_fixture),
     };
     if (reason) entry.reason = reason;
     requests.push(entry);
@@ -276,7 +277,6 @@ export function createFixtureServer({
       sid = randomLoginId();
       formToken = `fixture-form-token-${sid}`;
       loginSessions.set(sid, { loggedIn: false, uid: 0, formToken });
-      activeLoginSessionId = sid;
     }
     recordLogin(req, 200);
     const html = fixtureBody('http/derived/user-login.html')
@@ -324,19 +324,20 @@ export function createFixtureServer({
     const uid = login.uid ?? 226301;
     if (scenario === 'no_session_cookie') {
       // Success, but the `PHPSESSID` is not re-issued and the anonymous one
-      // is cleared: the server-side session stays logged in, the cookie does
-      // not, so the cookie check (not the page) is what fails.
+      // is cleared: the logged-in session is issued under a differently
+      // named cookie (`SSESS_fixture`), which the fixture honours but the
+      // module's `PHPSESSID`-only selection does not — so the page loads
+      // and the cookie check (not the page) is what fails.
       if (session) {
         const cookies = parseCookies(req.headers.cookie);
         if (cookies.PHPSESSID) loginSessions.delete(cookies.PHPSESSID);
       }
       const sid = randomLoginId();
       loginSessions.set(sid, { loggedIn: true, uid, formToken: '' });
-      activeLoginSessionId = sid;
       recordLogin(req, 302);
       res.writeHead(302, {
         Location: '/user/login',
-        'Set-Cookie': 'PHPSESSID=deleted; Max-Age=0; Path=/',
+        'Set-Cookie': ['PHPSESSID=deleted; Max-Age=0; Path=/', `SSESS_fixture=${sid}; Path=/`],
       });
       res.end();
       return;
@@ -350,7 +351,6 @@ export function createFixtureServer({
       if (cookies.PHPSESSID) loginSessions.delete(cookies.PHPSESSID);
     }
     loginSessions.set(cookieValue, { loggedIn: true, uid, formToken: '' });
-    activeLoginSessionId = cookieValue;
     recordLogin(req, 302);
     res.writeHead(302, {
       Location: '/user/login',
@@ -605,7 +605,6 @@ export function createFixtureServer({
       served.clear();
       loginSessions.clear();
       loginIdCounter = 0;
-      activeLoginSessionId = null;
     },
     /**
      * The config a caller points the application at.

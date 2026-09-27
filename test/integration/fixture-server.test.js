@@ -458,7 +458,7 @@ describe('integration: the fixture server login routes (prompt 4.11)', () => {
     });
   });
 
-  it('no_session_cookie: the success clears the cookie; the pages still resolve via the server-side session', async () => {
+  it('no_session_cookie: the success clears the cookie and issues the session under a different name', async () => {
     await withLoginServer({ username: SENTINEL_USER, password: SENTINEL_PASS, scenario: 'no_session_cookie' }, async (server) => {
       const page = await fetch(`${server.origin}/user/login`);
       const sid = sessionId(page.headers.getSetCookie()[0]);
@@ -477,13 +477,47 @@ describe('integration: the fixture server login routes (prompt 4.11)', () => {
       assert.equal(post.status, 302);
       assert.equal(post.headers.get('location'), '/user/login');
       const cookies = post.headers.getSetCookie();
-      assert.equal(cookies.length, 1);
+      assert.equal(cookies.length, 2);
       assert.equal(cookies[0], 'PHPSESSID=deleted; Max-Age=0; Path=/');
+      assert.match(cookies[1], /^SSESS_fixture=[0-9a-f]{64}; Path=\/$/);
+      const fixtureSid = cookies[1].split(';')[0].slice('SSESS_fixture='.length);
       await post.text();
-      // Without the cookie, the server-side session still serves the profile.
-      const profile = await fetch(`${server.origin}/user/226301`);
+      // Without a cookie the request is anonymous: the profile is a 403.
+      const anonymous = await fetch(`${server.origin}/user/226301`);
+      assert.equal(anonymous.status, 403);
+      await anonymous.text();
+      // The differently named cookie resolves the logged-in session.
+      const profile = await fetch(`${server.origin}/user/226301`, { headers: { cookie: `SSESS_fixture=${fixtureSid}` } });
       assert.equal(profile.status, 200);
-      await profile.text();
+      assert.match(await profile.text(), /My Profile/);
+    });
+  });
+
+  it('ok: a cookieless /classified is a 403; the issued PHPSESSID serves the page', async () => {
+    await withLoginServer({ username: SENTINEL_USER, password: SENTINEL_PASS, sessionCookieValue: SENTINEL_COOKIE }, async (server) => {
+      const page = await fetch(`${server.origin}/user/login`);
+      const sid = sessionId(page.headers.getSetCookie()[0]);
+      await page.text();
+      const post = await fetch(`${server.origin}/user/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: `PHPSESSID=${sid}` },
+        body: new URLSearchParams({
+          'edit[name]': SENTINEL_USER,
+          'edit[pass]': SENTINEL_PASS,
+          'edit[form_token]': `fixture-form-token-${sid}`,
+          op: 'Log in',
+        }),
+        redirect: 'manual',
+      });
+      assert.equal(post.status, 302);
+      await post.text();
+      const anonymous = await fetch(`${server.origin}/classified`);
+      assert.equal(anonymous.status, 403, 'without a cookie the request is anonymous');
+      const body = await anonymous.text();
+      assert.match(body, /403 Access Denied/);
+      const withCookie = await fetch(`${server.origin}/classified`, { headers: { cookie: `PHPSESSID=${SENTINEL_COOKIE}` } });
+      assert.equal(withCookie.status, 200);
+      assert.match(await withCookie.text(), /OzB_vars/);
     });
   });
 });

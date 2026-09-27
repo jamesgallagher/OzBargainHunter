@@ -172,6 +172,8 @@ describe('integration: performLogin (prompt section 5)', () => {
     ]);
     assert.ok(!loginSequence(ctx.server).some((r) => r[1] === '/search/node'), 'no /search/node request');
     assert.ok(!ctx.server.requests.some((e) => e.reason === 'decoy-submit'), 'no decoy submit');
+    const classifiedEntry = ctx.server.requests.find((e) => e.scenario !== undefined && e.url === '/classified');
+    assert.equal(classifiedEntry.hadSession, true, 'the /classified request carried the session cookie');
     assert.equal(ctx.gate.read().state, 'open');
     assert.equal(ctx.store.getGateEvents().length, 0);
     assert.equal(ctx.calls.length, 1);
