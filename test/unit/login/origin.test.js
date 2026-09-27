@@ -24,6 +24,12 @@ test('a loopback http origin (localhost) is allowed', () => {
   assert.equal(result.baseUrl, 'http://localhost:8080');
 });
 
+test('a loopback http origin ([::1]) is allowed', () => {
+  const result = resolveLoginOrigin({ classifiedsUrl: 'http://[::1]:8080/classified', env: {} });
+  assert.equal(result.ok, true);
+  assert.equal(result.baseUrl, 'http://[::1]:8080');
+});
+
 test('the one live origin is allowed, and the base URL is that origin', () => {
   const result = resolveLoginOrigin({ classifiedsUrl: LIVE, env: {} });
   assert.equal(result.ok, true);
@@ -75,6 +81,24 @@ test('dev mode: a loopback origin is allowed', () => {
   });
   assert.equal(result.ok, true);
   assert.equal(result.baseUrl, 'http://127.0.0.1:8080');
+});
+
+test('dev mode: the localhost loopback origin is allowed', () => {
+  const result = resolveLoginOrigin({
+    classifiedsUrl: 'http://localhost:8080/classified',
+    env: { OZB_DEV_MOCK_TRANSPORT: '1' },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.baseUrl, 'http://localhost:8080');
+});
+
+test('dev mode: the [::1] loopback origin is allowed', () => {
+  const result = resolveLoginOrigin({
+    classifiedsUrl: 'http://[::1]:8080/classified',
+    env: { OZB_DEV_MOCK_TRANSPORT: '1' },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.baseUrl, 'http://[::1]:8080');
 });
 
 test('dev mode: the live origin is refused with the dev-mode reason', () => {
