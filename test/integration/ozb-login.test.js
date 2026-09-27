@@ -27,6 +27,14 @@ const SENTINEL_USER = 'SENTINEL_USER_5d1c';
 const SENTINEL_PASS = 'SENTINEL_PASS_8e2f';
 const SENTINEL_COOKIE = 'SENTINEL_COOKIE_3a9b';
 
+/** The two error-path stimuli the hygiene and shape tests share. */
+const forcedPause = async () => {
+  throw new Error('forced');
+};
+const rejectingLaunch = async () => {
+  throw new Error('launch failed');
+};
+
 /**
  * Run one `performLogin` scenario end to end and return the context a test
  * asserts on. A dedicated fixture server is started per scenario (so the
@@ -397,6 +405,10 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['server_error_submit'],
       ['not_entitled'],
       ['no_session_cookie'],
+      ['hang_submit', { timeoutMs: 3000 }],
+      ['ok', { pause: forcedPause }],
+      ['ok', { launchBrowser: rejectingLaunch }],
+      ['ok', { preStopGate: true }],
     ];
     let okResult;
     for (const [scenario, opts = {}] of scenarios) {
@@ -413,7 +425,7 @@ describe('integration: performLogin (prompt section 5)', () => {
           }
           assert.ok(!logStr.includes(SENTINEL_COOKIE), `cookie sentinel in log (${scenario})`);
           assert.ok(!bytes.includes(SENTINEL_COOKIE), `cookie sentinel in database (${scenario})`);
-          if (scenario === 'ok' && !opts.password) {
+          if (scenario === 'ok' && Object.keys(opts).length === 0) {
             assert.ok(resultStr.includes(SENTINEL_COOKIE), 'the ok result carries the cookie sentinel');
             okResult = c.result;
           } else {
@@ -438,6 +450,9 @@ describe('integration: performLogin (prompt section 5)', () => {
       [['not_entitled'], ['outcome']],
       [['no_session_cookie'], ['outcome']],
       [['ok', { preStopGate: true }], ['outcome']],
+      [['hang_submit', { timeoutMs: 3000 }], ['outcome']],
+      [['ok', { pause: forcedPause }], ['outcome']],
+      [['ok', { launchBrowser: rejectingLaunch }], ['outcome']],
     ];
     for (const [[scenario, opts], expectedKeys] of cases) {
       const ctx = await runScenario(scenario, opts ?? {});
