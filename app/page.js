@@ -104,6 +104,12 @@ export default async function StatusPage() {
                 : `Available from ${formatMelbourne(gate.minResumeAt)}`}
             </Button>
           </AsyncForm>
+        ) : gate.state === 'cooling' ? (
+          <p className="gate-open-line">
+            Backing off — no requests until {gate.untilAt ? formatMelbourne(gate.untilAt) : 'the next check'}.
+          </p>
+        ) : gate.state === 'probing' ? (
+          <p className="gate-open-line">Resuming — one test request will be made at the next poll.</p>
         ) : (
           <p className="gate-open-line">Access is open.</p>
         )}
