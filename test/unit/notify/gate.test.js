@@ -486,7 +486,7 @@ test('sendGateEvents: a persisted skipped outcome does not trigger the resumed a
     assert.equal(calls.length, 0);
   }));
 
-test('sendGateEvents: never throws — a factory failure is logged and the sweep ends', () =>
+test('sendGateEvents: never throws — a factory failure marks the event failed and the sweep ends', () =>
   withStore(async (store) => {
     store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
     seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
@@ -494,7 +494,33 @@ test('sendGateEvents: never throws — a factory failure is logged and the sweep
     await assert.doesNotReject(
       sweep(store, { brevo_smtp: () => { throw new Error('factory boom'); } }, logs),
     );
-    assert.deepEqual(logs, ['gate-notify error: factory boom']);
+    assert.deepEqual(statuses(store), [{ id: 1, to_state: 'stopped', notified: 1, email_status: 'failed' }]);
+    assert.deepEqual(logs, ['gate-notify event 1 error (Error)']);
+  }));
+
+test('sendGateEvents: an unexpected failure on one event does not stop the next event in the same sweep', () =>
+  withStore(async (store) => {
+    store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent({ at: '2026-09-19T07:31:00Z' }));
+    const { factory, calls } = fakeBrevo();
+    let builds = 0;
+    const flakyFactory = () => {
+      builds += 1;
+      if (builds === 1) throw new Error('factory boom');
+      return factory();
+    };
+    const logs = [];
+    await assert.doesNotReject(sweep(store, { brevo_smtp: flakyFactory }, logs));
+    assert.equal(builds, 2, 'the factory is consulted once per event');
+    assert.deepEqual(
+      statuses(store).map((e) => e.email_status),
+      ['failed', 'sent'],
+      'the first event is failed, the next is still delivered',
+    );
+    assert.equal(calls.length, 1, 'one send for the second event');
+    assert.ok(logs.includes('gate-notify event 1 error (Error)'));
+    assert.ok(logs.includes('gate-notify event 2 stopped email=sent others=0/0'));
   }));
 
 test('sendGateEvents: no unsent events — no log, no throw', () =>
