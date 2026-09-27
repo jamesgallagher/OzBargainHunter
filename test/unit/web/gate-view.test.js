@@ -82,6 +82,35 @@ describe('viewGate (pure, read-only)', () => {
     assert.equal(view.emailProblem, null);
   });
 
+  test('S1: a failed stop email still surfaces after the manual resume (the resume is not notify-worthy)', () => {
+    // B1 stop (email failed) → manual resume: the resume transition is
+    // `stopped → probing` (one test request at the next poll), which the
+    // policy does not notify — the view must walk back to the stop and
+    // report its failed email.
+    const row = { ...BASE_ROW, state: 'stopped', rule: 'B1', min_resume_at: '2026-09-20T07:30:00Z' };
+    const events = [
+      { id: 2, to_state: 'probing', notified: 1, email_status: 'skipped' },
+      { id: 1, to_state: 'stopped', rule: 'B1', tier: 0, notified: 1, email_status: 'failed' },
+    ];
+    const view = viewGate(row, events, NOW);
+    assert.equal(view.emailProblem, 'failed');
+  });
+
+  test('S1: a failed tier-2 cool-off email still surfaces after the lazy cooling→probing event', () => {
+    // B2 tier-2 cool-off (email failed) → the cool-off expired, so the
+    // effective state is `probing` and the latest event is the (skipped)
+    // `probing` transition — the view must report the cool-off's failed
+    // email.
+    const row = { ...BASE_ROW, state: 'cooling', rule: 'B2', tier: 2, until_at: '2026-09-19T07:45:00Z' };
+    const events = [
+      { id: 2, to_state: 'probing', notified: 1, email_status: 'skipped' },
+      { id: 1, to_state: 'cooling', rule: 'B2', tier: 2, notified: 1, email_status: 'failed' },
+    ];
+    const view = viewGate(row, events, NOW);
+    assert.equal(view.state, 'probing');
+    assert.equal(view.emailProblem, 'failed');
+  });
+
   test('events before the most recent open event are not part of the episode', () => {
     // Newest first: the open event (id 2) closes the episode that contained
     // the failed stop (id 1); the tier-1 cooling (id 3) does not notify.
