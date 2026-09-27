@@ -359,7 +359,7 @@ describe('integration: the fixture server login routes (prompt 4.11)', () => {
       const res = await fetch(`${server.origin}/user/login`);
       assert.equal(res.status, 403);
       assert.match(res.headers.get('content-type'), /^text\/plain/);
-      assert.equal(await res.text(), 'error code: 1010');
+      assert.equal(await res.text(), 'error code: 1010\n');
       assert.equal(server.requests.at(-1).status, 403);
     });
   });
@@ -373,7 +373,7 @@ describe('integration: the fixture server login routes (prompt 4.11)', () => {
       });
       assert.equal(res.status, 403);
       assert.match(res.headers.get('content-type'), /^text\/plain/);
-      assert.equal(await res.text(), 'error code: 1010');
+      assert.equal(await res.text(), 'error code: 1010\n');
       assert.equal(server.requests.at(-1).status, 403);
     });
   });
@@ -383,7 +383,7 @@ describe('integration: the fixture server login routes (prompt 4.11)', () => {
       const res = await fetch(`${server.origin}/classified`);
       assert.equal(res.status, 403);
       assert.match(res.headers.get('content-type'), /^text\/plain/);
-      assert.equal(await res.text(), 'error code: 1010');
+      assert.equal(await res.text(), 'error code: 1010\n');
       assert.equal(server.requests.at(-1).status, 403);
     });
   });

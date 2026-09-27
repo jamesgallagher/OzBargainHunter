@@ -114,7 +114,7 @@ one. If a build ever did ask, this is the body it would get, and it is not a fee
 
 `cls403.html`, `feed_classifieds_feed.xml` and `derived/cloudflare-1010.txt` are the three refusals
 the classifier must keep apart. They share nothing but a status code family: the 403 and 404 pages
-are ~1 KB of OzBargain's own template, the Cloudflare block is 16 bytes with no HTML at all.
+are ~1 KB of OzBargain's own template, the Cloudflare block is 17 bytes with no HTML at all.
 
 #### What is on the classifieds page
 
@@ -159,7 +159,7 @@ of a real capture; the script records why each exists.
 |---|---|---|---|
 | `classifieds-page-unpinned-freebie.html` | `classifieds-page.html` | listing 975712 retyped `sell` → `free` | the positive freebie path — the raw capture's only Freebie is pinned |
 | `classifieds-page-anon.html` | `classifieds-page.html` | `OzB_vars.uid` `226301` → `0` | expired session detection (design §3.6) |
-| `cloudflare-1010.txt` | — | 16 bytes, `error code: 1010` (no trailing newline) | Cloudflare block, reproduced byte-exactly from `research.md` §2.2 |
+| `cloudflare-1010.txt` | — | 17 bytes, `error code: 1010\n` | Cloudflare block, reproduced byte-exactly from `research.md` §2.2 |
 | `deals-page0-truncated.xml` | `r0.xml` | cut inside the third `<item>` | `200` with unparseable XML |
 | `front-feed-promoted.xml` | `cmp_front.xml` | item 975122 spliced in verbatim from `pg9.xml` | D43 — a deal on the front page that never appeared on pages 0–1 |
 
