@@ -82,7 +82,7 @@ async function runScenario(scenario, opts = {}) {
       clock,
       pause: opts.pause ?? (async () => {}),
       random: seededRandom(1),
-      log: { info: logLine },
+      log: opts.log ?? logLine,
       platform: process.platform,
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
@@ -347,6 +347,17 @@ describe('integration: performLogin (prompt section 5)', () => {
     });
     t.after(() => ctx.close());
     assert.equal(ctx.result.outcome, 'browser_error');
+    assert.equal(ctx.browsers[0].isConnected(), false);
+  });
+
+  it('a throwing log sink still produces a resolved outcome, with the browser closed', async (t) => {
+    const ctx = await runScenario('ok', {
+      log: () => {
+        throw new Error('log sink broken');
+      },
+    });
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'ok');
     assert.equal(ctx.browsers[0].isConnected(), false);
   });
 
