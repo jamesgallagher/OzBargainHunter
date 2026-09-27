@@ -125,15 +125,19 @@ The feed does technically paginate to about 4 days across 11 pages. **That depth
 
 ### 3.4 Denied paths
 
-The HTTP client carries a **hard-coded deny list**. These paths are never requested by any part of the application, including future features:
+The shared poll client carries a **hard-coded deny list**. These paths are never requested by the shared poll client:
 
 `/api/` · `/ozbapi/` · `/search/` · `/comment/` · `/goto/` · `/privatemsg/` · `/user/login`
 
 Note `/goto/` is the click-tracking redirect present in feed data. It may be **displayed** as a link for the user to click; the application never follows it. Notification links point at the deal's `/node/<id>` page.
 
+**Scoped exception (card decision 1).** `/user/login` stays denied in the shared poll client. Only the login module (`lib/ozb-login/`), driving a real browser (D67), may visit it, and only when a person submits the login wizard. This is a deliberate, recorded departure from `robots.txt` (F14), which disallows `/user/login`, and it is justified on these terms: a person triggers it, it makes three page visits per attempt, it behaves as its owner would in their own browser, and it never retries automatically.
+
 ### 3.5 Response classification
 
-Every response is classified before any action is taken. The following classes are distinct and must not be conflated. Each class is the access gate's (3.7) input and maps to exactly one gate rule:
+Every response is classified before any action is taken. The following classes are distinct and must not be conflated. Each class is the access gate's (3.7) input and maps to exactly one gate rule.
+
+Classification is implemented in `lib/classify.js` and is shared by the poll client and the login module: the login classifies its browser steps with the same `classifyResponse`, so both surfaces see one class for one shape of refusal.
 
 - **`200`** — parse and process. *Gate: `ok` — resets the failure counters while open; a probe that returns `ok` reopens the gate.*
 - **`304 Not Modified`** — nothing new. Not an error. The common case. *Gate: `not_modified` — treated as `ok`.*
@@ -197,12 +201,12 @@ Acquisition is expected to break without warning, because the site owner tunes h
 
 ### 3.8 Client identity
 
-**The application acts on the user's behalf and is open about it.** It is a personal assistant representing him: it does not disguise itself as something it is not.
+**The tool acts as its owner, with two honest identities.** It is a personal assistant representing him: it does not disguise itself as something it is not.
 
-- Every request carries an explicit User-Agent naming the application, its version and a contact URL.
-- **No browser impersonation.** No spoofed Chrome, curl, or other client identity.
-- **No TLS-fingerprint impersonation.** Clients whose purpose is to mimic a real browser's TLS handshake are not used, whatever they would technically permit.
-- **No identity rotation, no proxies, no bypass tooling.**
+- **The `fetch` polls identify themselves.** Every poll request carries an explicit User-Agent naming the application, its version and a contact URL. A Chrome User-Agent on a non-Chrome connection is an inconsistency, more detectable than an honest bot — so the polls never do it.
+- **The login browser presents as an ordinary desktop Chrome.** The one browser use — the login (D67) — runs a headless Chromium (Playwright's headless shell in the image; D66) that presents as James: a standard Chrome User-Agent with no `HeadlessChrome`, `en-AU` locale, `Australia/Melbourne` time zone, a normal desktop window size, and human pacing.
+
+**What stays forbidden:** stealth or fingerprint-masking plugins, captcha or challenge solving, proxies or identity rotation, retrying after a block, and TLS-fingerprint impersonation — clients whose purpose is to mimic a real browser's TLS handshake are not used, whatever they would technically permit. A block or challenge stops the app and is surfaced to the user as a decision for him, not worked around.
 
 Because the tool represents the user, its conduct is his conduct:
 

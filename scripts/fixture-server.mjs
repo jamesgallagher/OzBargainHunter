@@ -117,6 +117,13 @@ export function resolveKey(requestUrl) {
  * @param {string} [options.host] the bind address; `127.0.0.1` only by default
  * @param {number} [options.port] the port; 0 asks the OS for a free one
  * @param {(line: string) => void} [options.log] a request log sink
+ * @param {{ username: string, password: string, uid?: number, scenario?: string, sessionCookieValue?: string }|null} [options.login]
+ *   when present, the login routes (`/user/login` GET/POST, `/user/<uid>`,
+ *   `/search/node`, `/classified`) are served by the login model instead of
+ *   the timeline; when absent, behaviour is byte-for-byte unchanged.
+ *   `scenario` is one of `ok`, `validation_error`, `challenge_login_page`,
+ *   `challenge_submit`, `challenge_classified`, `rate_limit_login_page`,
+ *   `server_error_submit`, `not_entitled`, `hang_submit`, `no_session_cookie`.
  * @returns {object} the server handle
  */
 export function createFixtureServer({
@@ -124,6 +131,7 @@ export function createFixtureServer({
   host = '127.0.0.1',
   port = 0,
   log = null,
+  login = null,
 } = {}) {
   /** Every request served, in order. */
   let requests = [];
@@ -131,6 +139,317 @@ export function createFixtureServer({
   const counters = new Map();
   /** Per-URL ETag of the version most recently served (for diagnostics). */
   const served = new Map();
+
+  // --- The login model (prompt 4.11). Active only when `login` is present. ---
+  /** Login sessions, keyed by session id (the `PHPSESSID` value). */
+  const loginSessions = new Map();
+  /** Seed for the deterministic session ids. */
+  let loginIdCounter = 0;
+
+  /** A fresh synthetic session id (never a real credential). */
+  function randomLoginId() {
+    loginIdCounter += 1;
+    return createHash('sha256').update(`fixture-login-${loginIdCounter}-${Date.now()}`).digest('hex');
+  }
+
+  /** Parse a `Cookie` header into a name/value map. */
+  function parseCookies(header) {
+    const out = {};
+    for (const part of String(header ?? '').split(';')) {
+      const idx = part.indexOf('=');
+      if (idx > 0) out[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
+    }
+    return out;
+  }
+
+  /** Parse a `application/x-www-form-urlencoded` body into a name/value map. */
+  function parseUrlEncoded(body) {
+    const out = {};
+    for (const [key, value] of new URLSearchParams(String(body ?? ''))) {
+      out[key] = value;
+    }
+    return out;
+  }
+
+  /**
+   * Collect a request body (the login POST is the only body this server reads).
+   * Rejects if the connection closes before the body is complete (the
+   * `hang_submit` scenario, where the browser is closed by the hard timeout
+   * while the POST is still pending) so a pending read never hangs the handler.
+   */
+  function readBody(req, res) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        fn(value);
+      };
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => finish(resolve, Buffer.concat(chunks).toString('utf8')));
+      req.on('error', (err) => finish(reject, err));
+      res.on('close', () => finish(reject, new Error('request closed before body complete')));
+    });
+  }
+
+  /** The login session a request refers to, or null. */
+  function resolveLoginSession(req) {
+    const cookies = parseCookies(req.headers.cookie);
+    // The `no_session_cookie` scenario issues the logged-in session under a
+    // differently named cookie (`SSESS_fixture`), which the fixture honours
+    // too: a request without either cookie is anonymous, whatever happened
+    // server-side.
+    const sid = cookies.PHPSESSID ?? cookies.SSESS_fixture;
+    if (sid && loginSessions.has(sid)) return loginSessions.get(sid);
+    return null;
+  }
+
+  /**
+   * Record a login request: method, path without query, status, scenario, and
+   * a `reason` when it is a decoy submit. The POST body is never recorded.
+   * `hadSession` records whether the request carried a session cookie (a
+   * boolean — never the value).
+   */
+  function recordLogin(req, status, reason = null) {
+    const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+    const cookies = parseCookies(req.headers.cookie);
+    const entry = {
+      method: req.method,
+      url: pathname,
+      status,
+      at: new Date().toISOString(),
+      scenario: login.scenario ?? 'ok',
+      hadSession: Boolean(cookies.PHPSESSID || cookies.SSESS_fixture),
+    };
+    if (reason) entry.reason = reason;
+    requests.push(entry);
+    log?.(`${entry.at} ${req.method} ${pathname} ${status} login:${entry.scenario}${reason ? ` (${reason})` : ''}`);
+  }
+
+  /** A Cloudflare challenge: 403 with the 17-byte `error code: 1010` body. */
+  function respondChallenge(req, res, status) {
+    recordLogin(req, status);
+    res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(fixtureBody('http/derived/cloudflare-1010.txt'));
+  }
+
+  /** A failed login: the form page again with a `.messages.error` block. */
+  function serveLoginError(req, res, kind) {
+    const message =
+      kind === 'validation'
+        ? 'Validation error, please try again. If this error persists, please contact the site administrator.'
+        : 'Sorry. Unrecognised username or password.';
+    recordLogin(req, 200);
+    const html = fixtureBody('http/derived/user-login.html')
+      .replaceAll('{{FORM_TOKEN}}', '')
+      .replaceAll('{{MESSAGES}}', `<div class="messages error">${message}</div>`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+  }
+
+  /** `GET /user/login`: the form, a challenge, or a redirect when logged in. */
+  async function loginGetLoginPage(req, res) {
+    const scenario = login.scenario ?? 'ok';
+    if (scenario === 'challenge_login_page') return respondChallenge(req, res, 403);
+    if (scenario === 'rate_limit_login_page') {
+      recordLogin(req, 429);
+      res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '120' });
+      res.end('rate limited');
+      return;
+    }
+    const session = resolveLoginSession(req);
+    if (session && session.loggedIn) {
+      recordLogin(req, 302);
+      res.writeHead(302, { Location: `/user/${session.uid}` });
+      res.end();
+      return;
+    }
+    // No valid logged-in session: an anonymous one, created or reused.
+    const cookies = parseCookies(req.headers.cookie);
+    const known = cookies.PHPSESSID && loginSessions.has(cookies.PHPSESSID);
+    let sid;
+    let formToken;
+    if (known) {
+      sid = cookies.PHPSESSID;
+      formToken = loginSessions.get(sid).formToken;
+    } else {
+      sid = randomLoginId();
+      formToken = `fixture-form-token-${sid}`;
+      loginSessions.set(sid, { loggedIn: false, uid: 0, formToken });
+    }
+    recordLogin(req, 200);
+    const html = fixtureBody('http/derived/user-login.html')
+      .replaceAll('{{FORM_TOKEN}}', formToken)
+      .replaceAll('{{MESSAGES}}', '');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Set-Cookie': `PHPSESSID=${sid}; Max-Age=7776000; Path=/; HttpOnly`,
+    });
+    res.end(html);
+  }
+
+  /** `POST /user/login`: the scenarios, the decoy, the token, the credentials. */
+  async function loginPostLogin(req, res) {
+    const scenario = login.scenario ?? 'ok';
+    if (scenario === 'challenge_submit') return respondChallenge(req, res, 403);
+    if (scenario === 'hang_submit') {
+      // The POST never answers; the hard timeout is what ends the attempt.
+      recordLogin(req, 0);
+      return;
+    }
+    if (scenario === 'server_error_submit') {
+      recordLogin(req, 500);
+      res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('internal error');
+      return;
+    }
+    const fields = parseUrlEncoded(await readBody(req, res));
+    const session = resolveLoginSession(req);
+    // The decoy: an `op` other than `Log in` is the search form's submit.
+    if (fields.op && fields.op !== 'Log in') {
+      recordLogin(req, 302, 'decoy-submit');
+      res.writeHead(302, { Location: '/search/node' });
+      res.end();
+      return;
+    }
+    const tokenOk =
+      scenario !== 'validation_error' &&
+      Boolean(session) &&
+      fields['edit[form_token]'] === session.formToken;
+    if (!tokenOk) return serveLoginError(req, res, 'validation');
+    if (fields['edit[name]'] !== login.username || fields['edit[pass]'] !== login.password) {
+      return serveLoginError(req, res, 'credentials');
+    }
+    const uid = login.uid ?? 226301;
+    if (scenario === 'no_session_cookie') {
+      // Success, but the `PHPSESSID` is not re-issued and the anonymous one
+      // is cleared: the logged-in session is issued under a differently
+      // named cookie (`SSESS_fixture`), which the fixture honours but the
+      // module's `PHPSESSID`-only selection does not — so the page loads
+      // and the cookie check (not the page) is what fails.
+      if (session) {
+        const cookies = parseCookies(req.headers.cookie);
+        if (cookies.PHPSESSID) loginSessions.delete(cookies.PHPSESSID);
+      }
+      const sid = randomLoginId();
+      loginSessions.set(sid, { loggedIn: true, uid, formToken: '' });
+      recordLogin(req, 302);
+      res.writeHead(302, {
+        Location: '/user/login',
+        'Set-Cookie': ['PHPSESSID=deleted; Max-Age=0; Path=/', `SSESS_fixture=${sid}; Path=/`],
+      });
+      res.end();
+      return;
+    }
+    // Success: a new `PHPSESSID` (the session id is the cookie value, so the
+    // browser's later requests resolve the stored session), plus the cookies
+    // the live site sets on a successful login.
+    const cookieValue = login.sessionCookieValue ?? randomLoginId();
+    if (session) {
+      const cookies = parseCookies(req.headers.cookie);
+      if (cookies.PHPSESSID) loginSessions.delete(cookies.PHPSESSID);
+    }
+    loginSessions.set(cookieValue, { loggedIn: true, uid, formToken: '' });
+    recordLogin(req, 302);
+    res.writeHead(302, {
+      Location: '/user/login',
+      'Set-Cookie': [
+        `PHPSESSID=${cookieValue}; Max-Age=7776000; Path=/; HttpOnly`,
+        'ozbuserhash=fixture-ozbuserhash; Path=/user',
+        '_ga=GA1.1.test; Path=/',
+        '__cf_bm=fixture-cf-bm; Path=/',
+      ],
+    });
+    res.end();
+  }
+
+  /** `GET /user/<uid>`: the profile page when logged in, a 403 otherwise. */
+  function loginGetProfile(req, res) {
+    const session = resolveLoginSession(req);
+    if (session && session.loggedIn) {
+      recordLogin(req, 200);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(fixtureBody('http/derived/user-profile.html'));
+      return;
+    }
+    recordLogin(req, 403);
+    res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(fixtureBody('http/cls403.html'));
+  }
+
+  /** `GET /search/node`: a short search-results page (a decoy click, visible). */
+  function loginGetSearch(req, res) {
+    recordLogin(req, 200);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(
+      '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Search results | OzBargain</title></head><body><h2>Search results</h2><p>No results.</p></body></html>',
+    );
+  }
+
+  /** `GET /classified`: the timeline page when logged in, a 403 otherwise. */
+  function loginGetClassified(req, res) {
+    const scenario = login.scenario ?? 'ok';
+    if (scenario === 'challenge_classified') return respondChallenge(req, res, 403);
+    const session = resolveLoginSession(req);
+    if (scenario === 'not_entitled' || !session || !session.loggedIn) {
+      recordLogin(req, 403);
+      res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(fixtureBody('http/cls403.html'));
+      return;
+    }
+    recordLogin(req, 200);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(fixtureBody('http/classifieds-page.html'));
+  }
+
+  /**
+   * Dispatch a login route (async only for the POST body read). A handler
+   * failure is answered 500 so a test never hangs on a broken fixture.
+   */
+  async function handleLoginRoute(req, res, route) {
+    try {
+      switch (route) {
+        case 'login-page':
+          await loginGetLoginPage(req, res);
+          break;
+        case 'login-submit':
+          await loginPostLogin(req, res);
+          break;
+        case 'profile':
+          loginGetProfile(req, res);
+          break;
+        case 'search':
+          loginGetSearch(req, res);
+          break;
+        case 'classified':
+          loginGetClassified(req, res);
+          break;
+      }
+    } catch {
+      recordLogin(req, 500);
+      try {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('fixture login error');
+      } catch {
+        // The response may already be sent (the hang scenario).
+      }
+    }
+  }
+
+  /**
+   * Match a request to a login route, or null. Only called when `login` is
+   * present; the non-login behaviour is untouched.
+   */
+  function matchLoginRoute(req) {
+    const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+    if (req.method === 'GET' && pathname === '/user/login') return 'login-page';
+    if (req.method === 'POST' && pathname === '/user/login') return 'login-submit';
+    if (req.method === 'GET' && /^\/user\/\d+$/.test(pathname)) return 'profile';
+    if (req.method === 'GET' && pathname === '/search/node') return 'search';
+    if (req.method === 'GET' && pathname === '/classified') return 'classified';
+    return null;
+  }
 
   function fixtureBody(name) {
     return readFileSync(`${FIXTURES_DIR}${name}`, 'utf8');
@@ -142,6 +461,16 @@ export function createFixtureServer({
   }
 
   function handle(req, res) {
+    // The login model (prompt 4.11): active only when `login` is present. When
+    // absent, `matchLoginRoute` is never called and behaviour is byte-for-byte
+    // unchanged. `handle` stays synchronous so the non-login path is untouched.
+    if (login) {
+      const route = matchLoginRoute(req);
+      if (route !== null) {
+        void handleLoginRoute(req, res, route);
+        return;
+      }
+    }
     const { key, page } = resolveKey(req.url);
     const ifNoneMatch = req.headers['if-none-match'] ?? null;
     const entry = {
@@ -274,6 +603,8 @@ export function createFixtureServer({
       requests = [];
       counters.clear();
       served.clear();
+      loginSessions.clear();
+      loginIdCounter = 0;
     },
     /**
      * The config a caller points the application at.
@@ -323,14 +654,19 @@ if (isMain) {
     options: {
       port: { type: 'string', default: '0' },
       host: { type: 'string', default: '127.0.0.1' },
+      login: { type: 'boolean', default: false },
     },
   });
   const server = await startFixtureServer({
     host: values.host,
     port: Number.parseInt(values.port, 10),
     log: (line) => console.log(line),
+    login: values.login ? { username: 'dev', password: 'dev-password' } : null,
   });
   console.log(`fixture server listening on ${server.origin}`);
+  if (values.login) {
+    console.log('  login enabled: username=dev password=dev-password');
+  }
   console.log(`  OZB_DEALS_FEED_URL=${server.appConfig().OZB_DEALS_FEED_URL}`);
   console.log(`  OZB_FRONT_FEED_URL=${server.appConfig().OZB_FRONT_FEED_URL}`);
   console.log(`  OZB_CLASSIFIEDS_URL=${server.appConfig().OZB_CLASSIFIEDS_URL}`);

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { classifyResponse } from '../../../lib/http/classify.js';
+import { classifyResponse, hasCloudflareMarkers } from '../../../lib/classify.js';
 
 function readFixture(path) {
   return readFileSync(new URL(`../../../${path}`, import.meta.url), 'utf8');
@@ -91,4 +91,35 @@ test('a 503 without Retry-After gives rate_limited with no retryAfterSeconds', (
 test('a response with missing headers does not throw', () => {
   const result = classifyResponse({ status: 403, body: readFixture('fixtures/http/cls403.html') });
   assert.equal(result.class, 'permission_denied');
+});
+
+// The Cloudflare marker test (prompt 4.8, chunk 3): the body markers that
+// identify a Cloudflare challenge, independent of the status or headers.
+
+test('hasCloudflareMarkers: each marker is detected, case-insensitively', () => {
+  assert.ok(hasCloudflareMarkers('error code: 1010'));
+  assert.ok(hasCloudflareMarkers('Error Code: 1010'));
+  assert.ok(hasCloudflareMarkers('ERROR CODE: 1010'));
+  assert.ok(hasCloudflareMarkers('Just a moment...'));
+  assert.ok(hasCloudflareMarkers('just a moment...'));
+  assert.ok(hasCloudflareMarkers('<div id="cf-chl">'));
+  assert.ok(hasCloudflareMarkers('CF-CHL'));
+  assert.ok(hasCloudflareMarkers('challenge-platform'));
+  assert.ok(hasCloudflareMarkers('Challenge-Platform'));
+  assert.ok(hasCloudflareMarkers('cf-browser-verification'));
+});
+
+test('hasCloudflareMarkers: a marker embedded in a larger body is detected', () => {
+  const body = '<html><head><title>Just a moment...</title></head><body><h1>Checking your browser</h1></body></html>';
+  assert.ok(hasCloudflareMarkers(body));
+});
+
+test('hasCloudflareMarkers: a body with no marker is not flagged', () => {
+  assert.ok(!hasCloudflareMarkers('<html><body><h1>Log in | OzBargain</h1></body></html>'));
+  assert.ok(!hasCloudflareMarkers('error code: 1011'), 'a different error code is not the 1010 marker');
+  assert.ok(!hasCloudflareMarkers('just a moment, please wait'), 'the marker is the exact "just a moment..."');
+});
+
+test('hasCloudflareMarkers: an empty body is not flagged', () => {
+  assert.ok(!hasCloudflareMarkers(''));
 });

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Log in | OzBargain</title>
+  <script>var OzB_vars={"uid":0};</script>
+  <script src="https://accounts.google.com/gsi/client"></script>
+</head>
+<body class="simple">
+  <!--
+    Synthetic fixture, modelled on the live measurements of 26 September 2026.
+    The decoy search form (submit name "op") precedes the login form, exactly
+    as on the live site. {{FORM_TOKEN}} and {{MESSAGES}} are filled in by the
+    fixture server.
+  -->
+  <form action="/search/node" id="search_form" method="get">
+    <input type="text" name="q" />
+    <input type="hidden" name="edit[form_id]" value="search_form" />
+    <input type="submit" name="op" value="Search" />
+  </form>
+  {{MESSAGES}}
+  <form action="/user/login?destination=user/login" method="post" id="user_login">
+    <input type="text"     name="edit[name]"       id="edit-name" maxlength="60" />
+    <input type="password" name="edit[pass]"       id="edit-pass" />
+    <input type="hidden"   name="edit[form_token]" id="edit-form_token" value="{{FORM_TOKEN}}"/>
+    <input type="hidden"   name="edit[form_id]"    id="edit-user-login" value="user_login"/>
+    <input type="submit"   name="op" value="Log in" />
+  </form>
+</body>
+</html>

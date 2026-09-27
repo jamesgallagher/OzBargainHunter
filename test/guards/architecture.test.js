@@ -20,9 +20,10 @@
  *     destination path*, so a re-export shim cannot launder a denied module.
  *   - Denied destinations: `lib/acquire/**`, `lib/http/**`, `lib/parse/**`,
  *     `lib/rules/**`, `lib/scheduler.js`, `worker/**`.
- *   - Allowed families: `lib/clock.js`, `lib/config.js`, `lib/csrf.js`,
- *     `lib/notify/**`, `lib/random.js`, `lib/store/**`, `lib/time.js`,
- *     `lib/web/**`.
+ *   - Allowed families: `lib/classify.js`, `lib/clock.js`, `lib/config.js`,
+ *     `lib/csrf.js`, `lib/dev-mode.js`, `lib/env-secret.js`, `lib/gate/`,
+ *     `lib/notify/**`, `lib/ozb-login/`, `lib/random.js`, `lib/store/**`,
+ *     `lib/time.js`, `lib/web/**`.
  *   - Every source file under `lib/**` and `worker/**` is classified exactly
  *     once; an unclassified file fails by name.
  *   - For closure files only: reject the `setInterval` token after comments
@@ -37,6 +38,14 @@
  *   - One-shot timers are legal. Worker polling/timers are legal: `worker/**`
  *     is a denied *destination* (it can never enter the closure), and worker
  *     files are never scanned for loops.
+ *
+ * The deliberate allowance (chunk 5): Playwright starts Chromium as a child
+ * process internally, for one human-triggered login at a time. That is why
+ * `lib/ozb-login/` may be reached from the server tree although
+ * `child_process` is a denied bare import — the child process is spawned by
+ * Playwright, not by this code. The guard still forbids a *direct*
+ * `child_process` import anywhere in the closure, including
+ * `lib/ozb-login/` (the denied-bare-import check is unchanged).
  *
  * The loop detector is a hand-rolled source scanner, the union of two arms,
  * so a poll loop moved into the server tree in either spelling fails the
@@ -106,7 +115,7 @@ const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.jsx', '.ts', '.tsx']);
 
 // The guard's contract — non-empty and applied by `assertServerTreeClean`.
 const DENIED_FAMILIES = ['lib/acquire/', 'lib/http/', 'lib/parse/', 'lib/rules/', 'lib/scheduler.js', 'worker/'];
-const ALLOWED_FAMILIES = ['lib/clock.js', 'lib/config.js', 'lib/csrf.js', 'lib/env-secret.js', 'lib/gate/', 'lib/notify/', 'lib/random.js', 'lib/store/', 'lib/time.js', 'lib/web/'];
+const ALLOWED_FAMILIES = ['lib/classify.js', 'lib/clock.js', 'lib/config.js', 'lib/csrf.js', 'lib/dev-mode.js', 'lib/env-secret.js', 'lib/gate/', 'lib/notify/', 'lib/ozb-login/', 'lib/random.js', 'lib/store/', 'lib/time.js', 'lib/web/'];
 const FORBIDDEN_TOKENS = ['setInterval'];
 const DENIED_BARE_IMPORTS = new Set([
   'child_process',
@@ -186,6 +195,29 @@ function listLibWorkerRelPaths(base) {
       }
     }
   }
+  return out;
+}
+
+/**
+ * Every base-relative source file under `base/app`, `base/lib`, and
+ * `base/worker`, plus the root `middleware.js` if present — the scan set
+ * for the chunk-5 boundary checks (the Playwright import, the `/user/login`
+ * string, and the login module's network surface).
+ * @param {string} base
+ * @returns {string[]}
+ */
+function listServerScanRelPaths(base) {
+  const out = [];
+  for (const sub of ['app', 'lib', 'worker']) {
+    const dir = join(base, sub);
+    if (existsSync(dir) && statSync(dir).isDirectory()) {
+      for (const file of listFiles(dir)) {
+        if (isSourceFile(file)) out.push(relPath(base, file));
+      }
+    }
+  }
+  const mw = join(base, 'middleware.js');
+  if (existsSync(mw) && statSync(mw).isFile()) out.push('middleware.js');
   return out;
 }
 
@@ -1200,6 +1232,79 @@ function withTree(prefix, fn) {
 }
 
 // ---------------------------------------------------------------------------
+// The chunk-5 boundary checks: the Playwright import is confined to
+// `lib/ozb-login/browser.js`, the string `/user/login` is confined to
+// `lib/ozb-login/**` and `lib/http/client.js` (its deny list), and the login
+// module never uses `fetch` or imports from `lib/http/`.
+// ---------------------------------------------------------------------------
+
+// The Playwright packages the check keys on (the import is allowed in
+// `lib/ozb-login/browser.js` only — the one file that drives a browser).
+const PLAYWRIGHT_SPECS = new Set(['playwright', 'playwright-core', '@playwright/test']);
+
+/**
+ * Only `lib/ozb-login/browser.js` may import a Playwright package (static,
+ * dynamic, or `require` form). Scans every source file under `app/`, `lib/`,
+ * `worker/`, plus the root `middleware.js`.
+ * @param {string} base
+ */
+function assertPlaywrightOnlyInLoginBrowser(base) {
+  for (const rel of listServerScanRelPaths(base)) {
+    const source = readFileSync(join(base, rel), 'utf8');
+    for (const spec of importSpecifiers(source)) {
+      assert.ok(
+        !PLAYWRIGHT_SPECS.has(spec) || rel === 'lib/ozb-login/browser.js',
+        `${rel} must not import ${spec} (only lib/ozb-login/browser.js may import a Playwright package)`,
+      );
+    }
+  }
+}
+
+/**
+ * The string `/user/login` may appear only in `lib/ozb-login/**` (the module
+ * that visits it) and `lib/http/client.js` (the shared client's deny list).
+ * Scans every source file under `app/`, `lib/`, `worker/`, plus the root
+ * `middleware.js`.
+ * @param {string} base
+ */
+function assertLoginPathOnlyWhereAllowed(base) {
+  for (const rel of listServerScanRelPaths(base)) {
+    const source = readFileSync(join(base, rel), 'utf8');
+    const allowed = rel.startsWith('lib/ozb-login/') || rel === 'lib/http/client.js';
+    assert.ok(
+      !source.includes('/user/login') || allowed,
+      `${rel} must not reference /user/login (only lib/ozb-login/** and lib/http/client.js may)`,
+    );
+  }
+}
+
+/**
+ * The login module never uses `fetch` (a Playwright page is its only network
+ * surface — the `fetch(` token is checked after comments are blanked, strings
+ * remain) and never imports from `lib/http/` (the poll client's family).
+ * @param {string} base
+ */
+function assertLoginModuleNeverFetches(base) {
+  const dir = join(base, 'lib', 'ozb-login');
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
+  for (const file of listFiles(dir)) {
+    if (!isSourceFile(file)) continue;
+    const rel = relPath(base, file);
+    const source = readFileSync(file, 'utf8');
+    assert.ok(
+      !blankCommentsOnly(source).includes('fetch('),
+      `${rel} must not use fetch (the login module's only network surface is the Playwright page)`,
+    );
+    for (const spec of importSpecifiers(source)) {
+      assert.ok(
+        !spec.startsWith('../http'),
+        `${rel} must not import from lib/http/ (the poll client is a separate family)`,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1668,4 +1773,108 @@ test('worker/main.js imports lib/acquire/poll.js (positive control)', () => {
     specs.includes('../lib/acquire/poll.js'),
     'worker/main.js must import lib/acquire/poll.js — the guard is only meaningful if the worker owns the poll loop',
   );
+});
+
+// C19: only `lib/ozb-login/browser.js` may import a Playwright package.
+test('only lib/ozb-login/browser.js imports a Playwright package (playwright, playwright-core, @playwright/test)', () => {
+  // Positive control: the real `lib/ozb-login/browser.js` must actually
+  // import `playwright`, so the allowance is not vacuous.
+  const browserSource = readFileSync(join(root, 'lib', 'ozb-login', 'browser.js'), 'utf8');
+  assert.ok(
+    importSpecifiers(browserSource).includes('playwright'),
+    'lib/ozb-login/browser.js must import playwright (the allowance is not vacuous)',
+  );
+  assertPlaywrightOnlyInLoginBrowser(root);
+
+  // Negative control: an app seed that imports `playwright` is flagged.
+  withTree('guard-pw-bad-', (base) => {
+    mkdirSync(join(base, 'app'));
+    writeFileSync(join(base, 'app', 'index.js'), "const { chromium } = await import('playwright');\n");
+    assert.throws(
+      () => assertPlaywrightOnlyInLoginBrowser(base),
+      /app\/index\.js must not import playwright/,
+      'an app file importing playwright must be flagged (positive control for the Playwright-import layer)',
+    );
+  });
+
+  // Unmutated twin: the same dynamic import in `lib/ozb-login/browser.js`
+  // passes.
+  withTree('guard-pw-good-', (base) => {
+    mkdirSync(join(base, 'lib', 'ozb-login'), { recursive: true });
+    writeFileSync(
+      join(base, 'lib', 'ozb-login', 'browser.js'),
+      "export async function launchChromium(options) { const { chromium } = await import('playwright'); return chromium.launch(options); }\n",
+    );
+    assertPlaywrightOnlyInLoginBrowser(base);
+  });
+});
+
+// C20: the string `/user/login` appears only in `lib/ozb-login/**` and
+// `lib/http/client.js` (its deny list).
+test('/user/login appears only in lib/ozb-login/** and lib/http/client.js (its deny list)', () => {
+  // Positive control: the real `lib/http/client.js` must actually carry the
+  // string (the deny list), so the allowance is not vacuous.
+  const clientSource = readFileSync(join(root, 'lib', 'http', 'client.js'), 'utf8');
+  assert.ok(
+    clientSource.includes('/user/login'),
+    'lib/http/client.js must carry /user/login in its deny list (the allowance is not vacuous)',
+  );
+  assertLoginPathOnlyWhereAllowed(root);
+
+  // Negative control: an app seed that references /user/login is flagged.
+  withTree('guard-loginpath-bad-', (base) => {
+    mkdirSync(join(base, 'app'));
+    writeFileSync(join(base, 'app', 'index.js'), "const url = 'https://x/user/login';\n");
+    assert.throws(
+      () => assertLoginPathOnlyWhereAllowed(base),
+      /app\/index\.js must not reference \/user\/login/,
+      'an app file referencing /user/login must be flagged (positive control for the /user/login string layer)',
+    );
+  });
+
+  // Unmutated twin: the same string in `lib/http/client.js` passes.
+  withTree('guard-loginpath-good-', (base) => {
+    mkdirSync(join(base, 'lib', 'http'), { recursive: true });
+    writeFileSync(join(base, 'lib', 'http', 'client.js'), "const denied = ['/user/login'];\n");
+    assertLoginPathOnlyWhereAllowed(base);
+  });
+});
+
+// C21: the login module never uses `fetch` and never imports from
+// `lib/http/`.
+test('the login module never uses fetch and never imports from lib/http/', () => {
+  assertLoginModuleNeverFetches(root);
+
+  // Negative control: a `lib/ozb-login` file that calls `fetch` is flagged
+  // (the `fetch(` token check, comments blanked, strings remain).
+  withTree('guard-loginfetch-bad-', (base) => {
+    mkdirSync(join(base, 'lib', 'ozb-login'), { recursive: true });
+    writeFileSync(join(base, 'lib', 'ozb-login', 'index.js'), "export async function p() { return fetch('http://x'); }\n");
+    assert.throws(
+      () => assertLoginModuleNeverFetches(base),
+      /lib\/ozb-login\/index\.js must not use fetch/,
+      'a lib/ozb-login file calling fetch must be flagged (positive control for the fetch token layer)',
+    );
+  });
+
+  // Negative control: a `lib/ozb-login` file that imports from `lib/http/`
+  // is flagged.
+  withTree('guard-loginhttp-bad-', (base) => {
+    mkdirSync(join(base, 'lib', 'ozb-login'), { recursive: true });
+    mkdirSync(join(base, 'lib', 'http'), { recursive: true });
+    writeFileSync(join(base, 'lib', 'ozb-login', 'index.js'), "import { createOzbClient } from '../http/client.js';\nexport const c = createOzbClient;\n");
+    writeFileSync(join(base, 'lib', 'http', 'client.js'), 'export function createOzbClient() {}\n');
+    assert.throws(
+      () => assertLoginModuleNeverFetches(base),
+      /lib\/ozb-login\/index\.js must not import from lib\/http\//,
+      'a lib/ozb-login file importing lib/http/ must be flagged (positive control for the lib/http import layer)',
+    );
+  });
+
+  // Unmutated twin: a clean `lib/ozb-login` file passes.
+  withTree('guard-loginfetch-good-', (base) => {
+    mkdirSync(join(base, 'lib', 'ozb-login'), { recursive: true });
+    writeFileSync(join(base, 'lib', 'ozb-login', 'index.js'), 'export const ok = true;\n');
+    assertLoginModuleNeverFetches(base);
+  });
 });
