@@ -179,7 +179,9 @@ token, uid, cookie or username appears in either.
 | `user-profile.html` | a profile page with **no `OzB_vars`** | the live profile page defines no site variables (1.2), so the uid must be read from the URL `/user/<uid>` — the fixture makes that the only path |
 
 The fixture server serves them through its opt-in `login` option (prompt 4.11); with `login`
-absent, behaviour is byte-for-byte unchanged.
+absent, behaviour is byte-for-byte unchanged. With `login` enabled, a logged-in `GET
+/classified` always serves `classifieds-page.html` directly — the 403 `cls403.html` is
+returned only when the request carries no session (or under the `not_entitled` scenario).
 
 ### The `--login` dev loop
 
