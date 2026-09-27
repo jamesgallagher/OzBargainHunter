@@ -61,6 +61,29 @@ export function healthFromPollState(poll) {
 }
 
 /**
+ * The acquisition-health summary with the access gate taken into account
+ * (design 3.7, chunk 2). While the gate is closed the whole app is
+ * stopped, so the summary is an attention line regardless of the poll
+ * state; the existing amber `backing-off` tone from
+ * `poll_state.backoff_seconds` stays for the gate-open case.
+ *
+ * @param {object} pollState the poll state row (or empty)
+ * @param {object} gateView the gate view (`viewGate` output)
+ * @returns {{ tone: string, label: string, detail: string }}
+ */
+export function healthWithGate(pollState, gateView) {
+  if (!gateView || !gateView.closed) return healthFromPollState(pollState);
+  return {
+    tone: 'attention',
+    label: gateView.state === 'stopped' ? 'Stopped' : 'Backing off',
+    detail:
+      gateView.state === 'stopped'
+        ? 'OzBargain access is stopped'
+        : 'OzBargain is being backed off',
+  };
+}
+
+/**
  * Badge (spec §4.4): a status label. Colour is never the only cue — the text
  * label always accompanies the tone.
  */

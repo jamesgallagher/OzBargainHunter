@@ -17,8 +17,10 @@
  */
 
 import { getStore } from '../lib/web/db.js';
+import { systemClock } from '../lib/clock.js';
+import { viewGate } from '../lib/gate/view.js';
 import AppShell from './components/app-shell.js';
-import { healthFromPollState } from './components/ui.js';
+import { healthWithGate } from './components/ui.js';
 import './globals.css';
 
 export const dynamic = 'force-dynamic';
@@ -87,7 +89,12 @@ export default function Layout({ children }) {
   const lastChecked = pollState.last_success_at ?? 'never';
   const lastResponseClass = pollState.last_response_class ?? '—';
   const backoffSeconds = pollState.backoff_seconds ?? 0;
-  const health = healthFromPollState(pollState);
+  // The access gate (design 3.7, chunk 2): read-only. `viewGate` never
+  // writes — the lazy `cooling→probing` transition stays in the worker, so
+  // a render with a stale cooling row must not touch the gate row or the
+  // event table.
+  const gate = viewGate(store.getGate(), store.getGateEvents({ limit: 50 }), systemClock().now());
+  const health = healthWithGate(pollState, gate);
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -100,6 +107,7 @@ export default function Layout({ children }) {
           lastChecked={lastChecked}
           lastResponseClass={lastResponseClass}
           backoffSeconds={backoffSeconds}
+          gate={gate}
         >
           {children}
         </AppShell>

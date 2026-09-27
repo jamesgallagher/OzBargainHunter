@@ -13,6 +13,10 @@
  *   - a **nightly** job running `pruneObservations` and `writeSnapshot`
  *     (4.2, 4.3).
  *
+ * The deal poll, the classifieds poll and the dead-man check also deliver
+ * unsent gate events (3.7, chunk 2) — the crash-safety net for gate
+ * alerts: an event a dead worker left unsent is sent by the next sweep.
+ *
  * `SIGTERM` and `SIGINT` stop the schedulers, let an in-flight tick finish,
  * close the database and exit 0. An unrecoverable error exits non-zero —
  * card 5's entrypoint then takes the container down, because a container
@@ -40,6 +44,7 @@ import { sendDeadman } from '../lib/notify/deadman.js';
 import { evaluatePoll } from '../lib/rules/engine.js';
 import { groupAndCompose } from '../lib/notify/compose.js';
 import { fanout } from '../lib/notify/fanout.js';
+import { sendGateEvents } from '../lib/notify/gate.js';
 
 /**
  * The dead-man's-switch state, persisted in `settings` so the worker's
@@ -108,6 +113,26 @@ function buildProviders(store, config, providerFactories) {
 }
 
 /**
+ * Build the provider-factory map for gate-alert delivery (design 3.7,
+ * chunk 2). `sendGateEvents` sends Brevo directly — `fanout` skips
+ * unselected providers, and Brevo must alert even when it is not selected
+ * for deal alerts — so the map must cover every mechanism, not just the
+ * selected ones. Injected factories win (a test's fake Brevo transport);
+ * missing kinds are filled from the delivery-mechanism registry, the same
+ * construction point `main()` uses.
+ * @param {object} injected provider kind to factory (may be empty)
+ * @returns {Promise<object>} kind to factory, covering every mechanism
+ */
+async function buildGateDeliveryFactories(injected) {
+  const { MECHANISMS } = await import('../lib/notify/registry.js');
+  const factories = { ...injected };
+  for (const m of MECHANISMS) {
+    if (!factories[m.kind]) factories[m.kind] = (row, cfg) => m.build(row, cfg);
+  }
+  return factories;
+}
+
+/**
  * Start the worker.
  * @param {object} deps
  * @param {object} deps.store an already-open store (the caller closes it)
@@ -144,6 +169,22 @@ export async function startWorker({
   const theGate = gate ?? createGate({ store, clock, config, log });
   const client = createOzbClient({ transport, store, clock, random, config, log, gate: theGate });
   const selectedProviders = providers ?? buildProviders(store, config, providerFactories ?? {});
+  // Gate-alert delivery (design 3.7, chunk 2): the factories cover every
+  // mechanism (Brevo alerts even when not selected for deal alerts).
+  const gateFactories = await buildGateDeliveryFactories(providerFactories ?? {});
+
+  /**
+   * Deliver unsent gate events (design 3.7, chunk 2). Never throws: a
+   * delivery failure is logged and the calling task (a poll or the
+   * dead-man check) continues — an alert failure must not stop polling.
+   */
+  async function deliverGateEvents() {
+    try {
+      await sendGateEvents({ store, clock, config, providerFactories: gateFactories, log });
+    } catch (err) {
+      log(`gate delivery error: ${err?.message ?? err}`);
+    }
+  }
 
   // The last poll instant, for gap detection (6.3). A gap over two hours
   // suppresses threshold rules for one cycle.
@@ -181,6 +222,10 @@ export async function startWorker({
     // seeding (acceptance 11.4.5).
     const wasEmpty = store.countDeals() === 0 && store.countAllObservations() === 0;
     const result = await runDealPoll({ client, store, clock, config, log, gate: theGate });
+    // Gate alerts (design 3.7, chunk 2): deliver unsent gate events before
+    // the gate-closed early return, so a B1 recorded during this very task
+    // is alerted by it.
+    await deliverGateEvents();
     // A cycle skipped by the access gate (design 3.7) is a no-op: no
     // evaluation, no fan-out, and lastPollAtMs is not updated (a skipped
     // cycle is not a poll for gap detection).
@@ -208,6 +253,10 @@ export async function startWorker({
   async function classifiedsPollTask() {
     const wasEmpty = store.countDeals() === 0 && store.countAllObservations() === 0;
     const result = await runClassifiedsPoll({ client, store, clock, config, log, gate: theGate });
+    // Gate alerts (design 3.7, chunk 2): deliver unsent gate events before
+    // any early return, so an event recorded during this very task is
+    // alerted by it.
+    await deliverGateEvents();
     if (result.listings.length > 0) {
       const pollAt = nowIso();
       await evaluateAndFanout([{ surface: 'classifieds', records: result.listings }], pollAt, wasEmpty, null);
@@ -221,6 +270,11 @@ export async function startWorker({
    * so nothing is sent and deadman_state is not written.
    */
   async function deadmanCheckTask() {
+    // Gate alerts (design 3.7, chunk 2): the dead-man sweep is the
+    // crash-safety net — it delivers gate events a dead worker left
+    // unsent, even while the gate is closed (the early return below
+    // suppresses the dead-man notification, not gate-alert delivery).
+    await deliverGateEvents();
     if (!theGate.isOpen()) return;
     const pollState = store.getPollState() ?? {};
     const lastSuccess = pollState.last_success_at ?? null;

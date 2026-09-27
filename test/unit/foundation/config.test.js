@@ -169,3 +169,27 @@ test('loadConfig accepts OZB_GATE_B5_CAP_HOURS at the floor and above (G10)', ()
   assert.equal(loadConfig({ OZB_GATE_B5_CAP_HOURS: '6' }).OZB_GATE_B5_CAP_HOURS, 6);
   assert.equal(loadConfig({ OZB_GATE_B5_CAP_HOURS: '12' }).OZB_GATE_B5_CAP_HOURS, 12);
 });
+
+test('OZB_PUBLIC_URL defaults to empty and accepts the empty string', () => {
+  assert.equal(loadConfig({}).OZB_PUBLIC_URL, '');
+  assert.equal(loadConfig({ OZB_PUBLIC_URL: '' }).OZB_PUBLIC_URL, '');
+});
+
+test('OZB_PUBLIC_URL strips trailing slashes', () => {
+  assert.equal(loadConfig({ OZB_PUBLIC_URL: 'https://ozb.gallagherhome.au/' }).OZB_PUBLIC_URL, 'https://ozb.gallagherhome.au');
+  assert.equal(loadConfig({ OZB_PUBLIC_URL: 'https://ozb.gallagherhome.au///' }).OZB_PUBLIC_URL, 'https://ozb.gallagherhome.au');
+});
+
+test('OZB_PUBLIC_URL rejects a non-URL value', () => {
+  assert.throws(
+    () => loadConfig({ OZB_PUBLIC_URL: 'not-a-url' }),
+    /OZB_PUBLIC_URL must be a valid URL/,
+  );
+});
+
+test('OZB_PUBLIC_URL rejects a non-http(s) protocol', () => {
+  assert.throws(
+    () => loadConfig({ OZB_PUBLIC_URL: 'ftp://example.com' }),
+    /OZB_PUBLIC_URL must use http\(s\)/,
+  );
+});
