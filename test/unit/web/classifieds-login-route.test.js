@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { openStore } from '../../../lib/store/index.js';
 import { fixedClock } from '../../../lib/clock.js';
 import { setStoreForTest } from '../../../lib/web/db.js';
-import { setLoginDepsForTest } from '../../../lib/web/classifieds-login.js';
+import { setLoginDepsForTest, handleLoginRequest } from '../../../lib/web/classifieds-login.js';
 import { generateCsrfToken } from '../../../lib/csrf.js';
 import { startJwksServer } from '../../support/jwks.js';
 import { POST as loginPost } from '../../../app/classifieds-session/login/route.js';
@@ -154,6 +154,25 @@ describe('route: /classifieds-session/login (faked performLogin)', () => {
       }
     }
     assert.equal(performLoginCalls.length, 0, 'validation failures never reach the login');
+  });
+
+  test('a non-string field is refused with the fixed required message, not coerced', async () => {
+    // The route's body comes from urlencoded parsing (always strings), so the
+    // non-string case is exercised by calling `handleLoginRequest` directly:
+    // input validation is step 1, so it returns `inputError` before the
+    // origin check, the lock, or the gate.
+    const cases = [
+      { username: 42, password: 'p' },
+      { username: 'u', password: null },
+      { username: { toString() { return 'u'; } }, password: 'p' },
+      { username: undefined, password: 'p' },
+    ];
+    for (const body of cases) {
+      const result = await handleLoginRequest({ body, store, config: {}, env: {}, now: new Date() });
+      assert.equal(result.inputError, 'Username and password are required.', `refused: ${JSON.stringify(body)}`);
+      assert.ok(!('outcome' in result), 'an input refusal has no outcome');
+    }
+    assert.equal(performLoginCalls.length, 0, 'non-string fields never reach the login');
   });
 
   test('an unallowed classifieds URL is an unavailable 200 (origin_not_allowed)', async () => {
