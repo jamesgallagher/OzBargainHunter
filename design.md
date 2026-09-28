@@ -173,6 +173,8 @@ Classification is implemented in `lib/classify.js` and is shared by the poll cli
 
 **Pinned listings are genuinely ancient, which is why they are excluded.** In the captured page every pinned listing dated from 2021 to 2023, and the single pinned *Freebie* was from January 2023. Excluding pinned listings is not a stylistic preference: **it is what prevents the application alerting on a three-year-old announcement that will never leave the top of the board.**
 
+**The session is acquired and renewed by the sign-in wizard (7.1, screen 9).** A person submits the wizard; the login module (D67) drives a real browser through the login and stores only the session cookie it produces. The submitted username and password are used once over the wire and are never stored (D10b). The login is throttled (rule B6): a minimum gap between attempts, a small number of attempts per window, and a lock after repeated failures — repeated failed logins are the pattern that gets an account flagged, so the application makes them impossible. A Cloudflare challenge or a rate limit on the login page feeds the access gate exactly as any other surface does (3.7), and a login refused by a closed gate or by the B6 lock makes no request at all.
+
 ### 3.7 Breakage handling
 
 Acquisition is expected to break without warning, because the site owner tunes his bot rules continuously.
@@ -191,6 +193,7 @@ Acquisition is expected to break without warning, because the site owner tunes h
   | B5 | a failing deals cycle (third consecutive) | `cooling`; `until_at` = now + `min(2 × interval, 6 h)`. A failed B5 probe re-cools with a longer cool-off (4×, 8×, …, capped at 6 h). |
 
   `ok` / `304` while open resets the counters; a successful probe reopens the gate and resets everything.
+- **The login surface feeds the gate like any other.** A `cloudflare_block` or `rate_limited` on the sign-in page applies rules B1 / B2 exactly as on the polls, and a login refused by a closed gate (`gate_closed`) or by the login throttle (B6) makes no request at all.
 - **No catch-up.** A closed gate makes zero requests and records no failures; when the gate reopens, polling simply resumes at the normal interval. There is no burst of missed polls.
 - **A dead-man's switch is part of the product.** If no poll has succeeded for 30 minutes, send a notification. Repeat at a decaying rate: 30 minutes, 2 hours, 6 hours, then daily. **While the gate is closed the dead-man is suppressed** — the back-off itself is the alert; nothing is sent and no dead-man state is written until the gate reopens.
 - **The container health check reflects acquisition health, not process liveness.** `/healthz` reports `backing_off` (503) while the gate is not open, carrying the gate's state; once open, it reports unhealthy when the last successful poll is older than three poll intervals.
@@ -417,7 +420,7 @@ The UI contains the following screens. Nothing else.
 6. **Near-miss and suppression log** — how close the top deals came to firing on each poll, plus suppressed reposts and expired deals.
 7. **Threshold configuration** — editable.
 8. **Delivery configuration** — provider selection, credentials, and a test-send button.
-9. **Classifieds session status** — cookie validity, when it was last confirmed working, and somewhere to supply a fresh one.
+9. **Classifieds session** — the session state (uid, when it was last confirmed working, or not yet confirmed), the **sign-in wizard** (a username and password form; the credentials are used once over the wire and never stored, D10b; timed step estimates — estimates only, not live progress — while the browser login runs; a fixed message per outcome that never echoes the submitted credentials), and a control to turn classifieds polling on after a sign-in.
 
 **A red gate banner appears on every screen while the gate is closed** (`cooling`, `probing`, or `stopped`): fixed text with the rule's plain meaning and Melbourne times, an "Email alert not sent" line when the alert did not go out, and a link to the Status screen. It carries no response body, URL query, cookie or header.
 
@@ -472,7 +475,7 @@ The application's own JWT verification is what makes the LAN path harmless, and 
 ### 8.5 Secrets
 
 - Application secrets live in **environment variables** in the container's `.env` file, by explicit decision of the owner, who accepts the risk of them being stored in the Unraid template.
-- **The classifieds credential is a login for a dedicated account created for this purpose**, not the owner's personal account.
+- **The classifieds credential is a login for a dedicated account created for this purpose**, not the owner's personal account. The username and password are **never stored** (D10b): they are submitted through the sign-in wizard (7.1, screen 9), used once over the wire, and cleared immediately; only the session cookie the login produces is kept, server-side.
 - Secrets are never logged, never rendered in the UI, and redacted from diagnostic output.
 - Residual risks are recorded in Open Item O7.
 
