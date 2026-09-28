@@ -589,7 +589,7 @@ test('A10: a failed send never leaks the credential or the error message (F3)', 
     setStoreForTest(store);
     let html;
     try {
-      html = renderToStaticMarkup(createElement(Layout, null, renderToStaticMarkup(await StatusPage())));
+      html = renderToStaticMarkup(createElement(Layout, null, await StatusPage()));
     } finally {
       setStoreForTest(null);
     }
@@ -597,6 +597,7 @@ test('A10: a failed send never leaks the credential or the error message (F3)', 
       assert.ok(!html.includes(s), `the rendered UI must not carry ${s}`);
     }
     assert.match(html, /Email alert not sent — sending failed/, 'the failed email surfaces as fixed text');
+    assert.match(html, /data-label="Email"><span class="cell-value">failed<\/span>/, 'the Status panel event row renders the failed email status');
   }));
 
 test('F3: the outer catch logs the error name only, never the message', () =>
