@@ -403,11 +403,59 @@ describe('route: /classifieds-session/login (faked performLogin)', () => {
       assert.deepEqual(await res.json(), { outcome: 'browser_error' });
     } finally {
       console.log = original;
+      // Reset the shared error so a later test's `performLogin` does not throw
+      // this leftover (which would mask a step-8 save failure as a step-7 throw).
+      performLoginError = null;
     }
     assert.ok(lines.some((l) => l.includes('Error')), 'the log carries err.name');
     assert.ok(!lines.some((l) => l.includes('SECRET-LOGIN-DETAILS-MUST-NOT-LEAK')), 'the log never carries err.message');
     const attempts = JSON.parse(store.getSetting(ATTEMPTS_KEY));
     assert.equal(attempts[attempts.length - 1].outcome, 'browser_error', 'the attempt is recorded');
+  });
+
+  test('an unexpected error inside the locked body is a browser_error and the lock is released', async () => {
+    // A store whose setSetting throws on ozb_account_cookie (the step-8 save).
+    const realSetSetting = store.setSetting.bind(store);
+    store.setSetting = (key, value) => {
+      if (key === 'ozb_account_cookie') throw new Error('disk full');
+      return realSetSetting(key, value);
+    };
+    // A dedicated performLogin that returns `ok` (isolated from the shared
+    // performLoginError/performLoginResult, which the "throwing login" test
+    // leaves set) plus the injected log (captured once at `handleLoginRequest`
+    // start, so a concurrent test swapping `testDeps` mid-flight cannot change
+    // where this call logs).
+    const lines = [];
+    setLoginDepsForTest({
+      ...originalDeps,
+      performLogin: async () => ({ outcome: 'ok', cookie: 'PHPSESSID=fake', uid: 226301, expiresAt: null }),
+      log: (line) => lines.push(String(line)),
+    });
+    try {
+      const res = await loginPost(await authedFormRequest(URL, { username: 'u', password: 'p' }));
+      assert.equal(res.status, 200, 'an unexpected error is a 200, not a 500');
+      assert.deepEqual(await res.json(), { outcome: 'browser_error' });
+    } finally {
+      setLoginDepsForTest(originalDeps);
+      store.setSetting = realSetSetting;
+    }
+    assert.ok(lines.some((l) => l.includes('login: unexpected (Error)')), 'the log carries the unexpected error name');
+    assert.ok(!lines.some((l) => l.includes('disk full')), 'the log never carries err.message');
+    // The lock is released: clear the attempt record (so the 30s gap does not
+    // throttle the second login), then a subsequent login proceeds, not busy.
+    // A dedicated performLogin returns `bad_credentials` deterministically.
+    store.deleteSetting(ATTEMPTS_KEY);
+    setLoginDepsForTest({
+      ...originalDeps,
+      performLogin: async () => ({ outcome: 'bad_credentials' }),
+    });
+    try {
+      const res2 = await loginPost(await authedFormRequest(URL, { username: 'u', password: 'p' }));
+      assert.equal(res2.status, 200);
+      assert.deepEqual(await res2.json(), { outcome: 'bad_credentials' }, 'the lock is released (not busy)');
+    } finally {
+      setLoginDepsForTest(originalDeps);
+    }
   });
 
   test('the performLogin call carries the fixed arguments (prompt 4.2 step 8)', async () => {
