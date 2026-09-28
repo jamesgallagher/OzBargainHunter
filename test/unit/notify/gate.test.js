@@ -602,15 +602,61 @@ test('A10: a failed send never leaks the credential or the error message (F3)', 
 test('F3: the outer catch logs the error name only, never the message', () =>
   withStore(async (store) => {
     store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
-    store.upsertProvider('matrix', '{}', true);
     seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
     const { factory } = fakeBrevo();
-    const matrixFactory = () => {
-      throw new Error('SENTINEL-MATRIX-ERRMSG');
+    // The outer catch is reached when the event read itself throws. A
+    // provider build throw is caught earlier, per provider (F5), so it no
+    // longer reaches the outer catch.
+    store.getUnnotifiedGateEvents = () => {
+      throw new Error('SENTINEL-OUTER-ERRMSG');
     };
     const logs = [];
-    await assert.doesNotReject(sweep(store, { brevo_smtp: factory, matrix: matrixFactory }, logs));
+    await assert.doesNotReject(sweep(store, { brevo_smtp: factory }, logs));
     assert.deepEqual(logs, ['gate-notify error (Error)'], 'the name only — the message is never logged');
+    for (const line of logs) assert.ok(!line.includes('SENTINEL-OUTER-ERRMSG'), 'a log line must not carry the message');
+  }));
+
+test('F5: a throwing other-provider factory does not stop the Brevo send', () =>
+  withStore(async (store) => {
+    store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    store.upsertProvider('matrix', JSON.stringify({ homeserver: 'http://127.0.0.1:2', room: '!r:example.com' }), true);
+    store.upsertProvider('ntfy', JSON.stringify({ url: 'http://127.0.0.1:2', topic: 'alerts' }), true);
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+    const matrixFactory = () => {
+      throw new Error('SENTINEL-MATRIX-BUILD');
+    };
+    const ntfyCalls = [];
+    const ntfyFactory = () => ({ kind: 'ntfy', send: async (n) => { ntfyCalls.push(n); } });
+    const { factory, calls } = fakeBrevo();
+    const logs = [];
+    await assert.doesNotReject(sweep(store, { brevo_smtp: factory, matrix: matrixFactory, ntfy: ntfyFactory }, logs));
+    assert.equal(calls.length, 1, 'Brevo was sent despite the other provider failing to build');
+    assert.equal(ntfyCalls.length, 1, 'the other working provider still fanned out');
+    assert.deepEqual(statuses(store), [{ id: 1, to_state: 'stopped', notified: 1, email_status: 'sent' }]);
+    assert.deepEqual(
+      logs,
+      ['gate-notify provider matrix build error (Error)', 'gate-notify event 1 stopped email=sent others=1/0'],
+    );
+    for (const line of logs) assert.ok(!line.includes('SENTINEL-MATRIX-BUILD'), 'a log line must not carry the message');
+    assert.equal(store.getProvider('matrix').consecutive_failures, 0, 'a build error does not advance the D55 counter');
+  }));
+
+test('F5: a corrupt config row in the real build does not stop the Brevo send', () =>
+  withStore(async (store) => {
+    store.upsertProvider('brevo_smtp', BREVO_ROW_CONFIG, true);
+    // No injected factory: the real mechanism build runs, and the corrupt
+    // config row makes JSON.parse throw a SyntaxError.
+    store.upsertProvider('matrix', '{not json', true);
+    seedEvent(store, { state: 'stopped', rule: 'B1' }, stoppedEvent());
+    const { factory, calls } = fakeBrevo();
+    const logs = [];
+    await assert.doesNotReject(sweep(store, { brevo_smtp: factory }, logs));
+    assert.equal(calls.length, 1, 'Brevo was sent despite the real build throwing');
+    assert.deepEqual(statuses(store), [{ id: 1, to_state: 'stopped', notified: 1, email_status: 'sent' }]);
+    assert.deepEqual(
+      logs,
+      ['gate-notify provider matrix build error (SyntaxError)', 'gate-notify event 1 stopped email=sent others=0/0'],
+    );
   }));
 
 // --- A5 (S4): two concurrent sweeps over the same store file deliver each
