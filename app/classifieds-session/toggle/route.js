@@ -9,10 +9,11 @@
  * route writes '1' when the field is present and '0' when it is not.
  *
  * Turning it on re-arms classifieds polling: it clears the stale expiry latch
- * (`classifieds_last_uid`) and the cached validators so the next eligible poll
- * runs a fresh check rather than being short-circuited by a stale 304 or a
- * latched-off session. Turning it off does not clear anything — a disabled poll
- * makes zero requests regardless.
+ * (`classifieds_last_uid` — only when it is '0', i.e. the session was latched
+ * as expired; a live non-zero uid survives) and the cached validators so the
+ * next eligible poll runs a fresh check rather than being short-circuited by
+ * a stale 304 or a latched-off session. Turning it off does not clear
+ * anything — a disabled poll makes zero requests regardless.
  *
  * X1: lives in its own segment (`/classifieds-session/toggle`) so it does not
  * collide with the `/classifieds-session` page in the build.
@@ -36,9 +37,12 @@ export async function POST(request) {
   const on = body.enabled !== undefined && body.enabled !== '' && body.enabled !== '0';
   store.setSetting(CLASSIFIEDS_ENABLED_KEY, on ? '1' : '0');
   if (on) {
-    // Re-arm: clear the stale expiry latch and cached validators so a fresh
-    // check runs on the next eligible poll.
-    store.deleteSetting('classifieds_last_uid');
+    // Re-arm: clear the stale expiry latch (only when it is '0' — a live
+    // non-zero uid survives) and the cached validators so a fresh check runs
+    // on the next eligible poll.
+    if (store.getSetting('classifieds_last_uid') === '0') {
+      store.deleteSetting('classifieds_last_uid');
+    }
     const classifiedsUrl = process.env.OZB_CLASSIFIEDS_URL ?? 'https://www.ozbargain.com.au/classified';
     store.setFeedState(classifiedsUrl, null, null);
   }
