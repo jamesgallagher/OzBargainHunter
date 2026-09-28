@@ -403,7 +403,7 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     assertHygiene(res.text);
   });
 
-  it('cools the gate on a rate limit at the login page and sends the gate email', async () => {
+  it('cools the gate on a rate limit at the login page and runs the gate-email sweep (tier 1 is policy-skipped)', async () => {
     resetState();
     const gateEvents = gateEventCount();
     const { res, server } = await withFixture('rate_limit_login_page', async (server) => ({
