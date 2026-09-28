@@ -455,7 +455,7 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     assertHygiene(res.text);
   });
 
-  it('reports a submit that never answers as a browser_error', async () => {
+  it('reports a submit that never answers as a timeout', async () => {
     resetState();
     const gateEvents = gateEventCount();
     const { res, server } = await withFixture('hang_submit', async (server) => ({
@@ -464,9 +464,8 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     }));
     assert.equal(res.status, 200);
     // Playwright's `waitForResponse` (30 s default) fires before the app's
-    // 45 s hard timeout, so a hang is caught as a browser error, not a
-    // clean timeout.
-    assert.deepEqual(res.json, { outcome: 'browser_error' });
+    // 45 s hard timeout; that step timeout is reported as a timeout.
+    assert.deepEqual(res.json, { outcome: 'timeout' });
     assert.deepEqual(
       loginSequence(server),
       [
