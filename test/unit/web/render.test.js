@@ -730,4 +730,38 @@ describe('render: screen 9 the sign-in wizard (chunk 6)', () => {
     assert.ok(html.includes('Prefer &quot;Sign in to OzBargain&quot; above. This option will be removed.'), 'the 4.6 help line');
     assert.match(html, /\/classifieds-session\/set/, 'the legacy form still posts to its own segment');
   });
+
+  test('S4: rendering screen 9 with a gate row and attempts leaves ozb_login_attempts, access_gate and gate_events unchanged', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-wizard-s4-'));
+    const store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    setStoreForTest(store);
+    try {
+      const sinceIso = new Date().toISOString();
+      const untilIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      // Seed a cooling gate row and a B6-locked attempts record so the render
+      // reads all three (the gate, the events, and the attempts).
+      store.applyGateTransition(
+        { ...defaultGate(), state: 'cooling', rule: 'B2', tier: 2, reason: 'rate limited', since: sinceIso, until_at: untilIso },
+        [],
+      );
+      store.setSetting('ozb_login_attempts', JSON.stringify([
+        { at: new Date(Date.now() - 120 * 1000).toISOString(), outcome: 'validation_error' },
+        { at: new Date(Date.now() - 60 * 1000).toISOString(), outcome: 'validation_error' },
+      ]));
+      // Capture the three values before the render.
+      const attemptsBefore = store.getSetting('ozb_login_attempts');
+      const rowBefore = JSON.stringify(store.getGate());
+      const eventsBefore = store.getGateEvents().length;
+      // Render screen 9 (it reads getGate(), getGateEvents() and getSetting(ozb_login_attempts)).
+      renderToStaticMarkup(await ClassifiedsSessionPage());
+      // A render is read-only: all three are byte-for-byte / count unchanged.
+      assert.equal(store.getSetting('ozb_login_attempts'), attemptsBefore, 'ozb_login_attempts is byte-for-byte unchanged by a render');
+      assert.equal(JSON.stringify(store.getGate()), rowBefore, 'access_gate is byte-for-byte unchanged by a render');
+      assert.equal(store.getGateEvents().length, eventsBefore, 'gate_events count is unchanged by a render');
+    } finally {
+      setStoreForTest(null);
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
