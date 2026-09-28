@@ -458,6 +458,143 @@ describe('route: /classifieds-session/login (faked performLogin)', () => {
     }
   });
 
+  test('every refusal leaves ozb_login_attempts byte-for-byte unchanged (S5)', async () => {
+    const now = Date.now();
+    const iso = (ms) => new Date(ms).toISOString();
+    const seed = (extra = []) =>
+      JSON.stringify([{ at: iso(now - 1000), outcome: 'validation_error' }, ...extra]);
+
+    // A pure refusal: set up the triggering state (including the record), capture
+    // the record, make the request, assert the record is byte-for-byte unchanged
+    // (a refusal must not write, re-serialize, or reorder the record).
+    async function refusal(label, setup) {
+      setup();
+      const before = store.getSetting(ATTEMPTS_KEY);
+      assert.ok(before !== null, `${label}: the record is seeded`);
+      await loginPost(await authedFormRequest(URL, { username: 'u', password: 'p' }));
+      assert.equal(store.getSetting(ATTEMPTS_KEY), before, `${label}: the attempt record is byte-for-byte unchanged`);
+    }
+
+    // unavailable: origin_not_allowed
+    await refusal('origin_not_allowed', () => {
+      process.env.OZB_CLASSIFIEDS_URL = 'https://evil.example.com/classified';
+      store.setSetting(ATTEMPTS_KEY, seed());
+    });
+    process.env.OZB_CLASSIFIEDS_URL = LOOPBACK_CLASSIFIEDS_URL;
+
+    // unavailable: dev_mode_live_origin
+    await refusal('dev_mode_live_origin', () => {
+      process.env.OZB_CLASSIFIEDS_URL = LIVE_CLASSIFIEDS_URL;
+      process.env.OZB_DEV_MOCK_TRANSPORT = '1';
+      process.env.NODE_ENV = 'development';
+      store.setSetting(ATTEMPTS_KEY, seed());
+    });
+    delete process.env.OZB_DEV_MOCK_TRANSPORT;
+    delete process.env.NODE_ENV;
+    process.env.OZB_CLASSIFIEDS_URL = LOOPBACK_CLASSIFIEDS_URL;
+
+    // gate_closed: stopped
+    await refusal('gate_closed (stopped)', () => {
+      store.setSetting(ATTEMPTS_KEY, seed());
+      store.mutateGate((row) => ({ gate: { ...row, state: 'stopped', min_resume_at: iso(now + 3600000) }, events: [] }));
+    });
+    store.mutateGate((row) => ({ gate: { ...row, state: 'open', min_resume_at: null }, events: [] }));
+
+    // gate_closed: cooling
+    await refusal('gate_closed (cooling)', () => {
+      store.setSetting(ATTEMPTS_KEY, seed());
+      store.mutateGate((row) => ({ gate: { ...row, state: 'cooling', until_at: iso(now + 3600000) }, events: [] }));
+    });
+    store.mutateGate((row) => ({ gate: { ...row, state: 'open', until_at: null }, events: [] }));
+
+    // locked (B6: two validation errors within 24 hours)
+    await refusal('locked (B6)', () => {
+      store.setSetting(ATTEMPTS_KEY, seed([{ at: iso(now - 2000), outcome: 'validation_error' }]));
+    });
+
+    // throttled (a pending attempt within the 30-second gap)
+    await refusal('throttled (30s gap)', () => {
+      store.setSetting(ATTEMPTS_KEY, JSON.stringify([{ at: iso(now - 10000), outcome: 'pending' }]));
+    });
+
+    // each 400 input-validation failure (input validation is step 1, before the record is read)
+    const validation400s = [
+      [{ username: '', password: 'p' }, 'empty username'],
+      [{ username: 'u', password: '' }, 'empty password'],
+      [{ username: 'x'.repeat(61), password: 'p' }, 'username too long'],
+      [{ username: 'user@example.com', password: 'p' }, 'email as username'],
+      [{ username: 'u', password: 'x'.repeat(257) }, 'password too long'],
+    ];
+    for (const [params, label] of validation400s) {
+      store.setSetting(ATTEMPTS_KEY, seed());
+      const before = store.getSetting(ATTEMPTS_KEY);
+      const res = await loginPost(await authedFormRequest(URL, params));
+      assert.equal(res.status, 400, `400 for ${label}`);
+      assert.equal(store.getSetting(ATTEMPTS_KEY), before, `${label}: the attempt record is byte-for-byte unchanged`);
+    }
+
+    // a non-string field (the direct-call 400; input validation is step 1)
+    {
+      store.setSetting(ATTEMPTS_KEY, seed());
+      const before = store.getSetting(ATTEMPTS_KEY);
+      const result = await handleLoginRequest({ body: { username: 42, password: 'p' }, store, config: {}, env: {}, now: new Date() });
+      assert.equal(result.inputError, 'Username and password are required.');
+      assert.equal(store.getSetting(ATTEMPTS_KEY), before, 'non-string field: the attempt record is byte-for-byte unchanged');
+    }
+
+    // busy: the refusal is the second request; the in-flight login writes a
+    // pending record, so we capture the record after that write (the refusal must
+    // not modify it). A dedicated performLogin signals in-flight via a local flag
+    // (the shared performLoginCalls array is incremented by concurrent tests, so it
+    // cannot be used to detect the first login). A concurrent test may have the
+    // gate closed (or the origin wrong), refusing the first login before it reaches
+    // performLogin; retry until one is actually in flight (holding the lock).
+    {
+      let releaseGate;
+      let firstInFlight = false;
+      const gate = new Promise((resolve) => { releaseGate = resolve; });
+      setLoginDepsForTest({
+        ...originalDeps,
+        performLogin: async () => {
+          firstInFlight = true;
+          await gate;
+          return { outcome: 'ok', cookie: 'PHPSESSID=fake', uid: 226301, expiresAt: null };
+        },
+      });
+      try {
+        // Reset the record to a clean state so the first login passes the throttle
+        // (no recent attempt) and B6 (no validation/bad_credentials). The preceding
+        // "throttled (30s gap)" section leaves a pending attempt 10s old, which the
+        // 30-second gap check would refuse before the first login reaches performLogin.
+        store.setSetting(ATTEMPTS_KEY, '[]');
+        let first;
+        for (let attempt = 0; attempt < 20 && !firstInFlight; attempt++) {
+          first = loginPost(await authedFormRequest(URL, { username: 'u', password: 'p' }));
+          for (let i = 0; i < 30 && !firstInFlight; i++) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        }
+        assert.ok(firstInFlight, 'the first login is in flight');
+        const before = store.getSetting(ATTEMPTS_KEY); // the in-flight login's pending record
+        const res = await loginPost(await authedFormRequest(URL, { username: 'u', password: 'p' }));
+        assert.equal(res.status, 200);
+        assert.deepEqual(await res.json(), { outcome: 'busy' });
+        assert.equal(store.getSetting(ATTEMPTS_KEY), before, 'busy: the refusal leaves the record byte-for-byte unchanged');
+        releaseGate();
+        await first; // let the in-flight login complete
+      } finally {
+        setLoginDepsForTest(originalDeps);
+      }
+      // Clean up the in-flight login's saved settings.
+      store.deleteSetting('ozb_account_cookie');
+      store.deleteSetting('ozb_account_cookie_set_at');
+      store.deleteSetting('ozb_account_cookie_expires_at');
+      store.deleteSetting('classifieds_last_uid');
+      store.deleteSetting('classifieds_last_confirmed_at');
+      store.setFeedState(LOOPBACK_CLASSIFIEDS_URL, null, null);
+    }
+  });
+
   test('the performLogin call carries the fixed arguments (prompt 4.2 step 8)', async () => {
     performLoginResult = { outcome: 'login_failed' };
     performLoginCalls.length = 0;
