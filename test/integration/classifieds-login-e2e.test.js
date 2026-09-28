@@ -182,15 +182,26 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     } catch {
       // a plain-text 401/403/400 response
     }
-    return { status: res.status, text, json };
+    return { status: res.status, text, json, headers: res.headers };
   }
 
-  /** The database bytes: the main file and the WAL, if present. */
-  function dbBytes() {
-    let bytes = readFileSync(temp.dbPath, 'utf8');
-    const wal = `${temp.dbPath}-wal`;
-    if (existsSync(wal)) bytes += readFileSync(wal, 'utf8');
+  /** The bytes of a database file and its WAL and SHM sidecars, if present. */
+  function dbFileBytes(path) {
+    let bytes = '';
+    for (const suffix of ['', '-wal', '-shm']) {
+      const p = path + suffix;
+      if (existsSync(p)) bytes += readFileSync(p, 'utf8');
+    }
     return bytes;
+  }
+
+  /**
+   * The database bytes: the main file, the WAL, and the SHM, for both the
+   * main store and the snapshot store (a deleted setting's bytes may linger
+   * in any of them).
+   */
+  function dbBytes() {
+    return dbFileBytes(temp.dbPath) + dbFileBytes(join(temp.dir, 'snapshot.db'));
   }
 
   /** The gate-event count, for a delta assertion across a scenario. */
@@ -210,13 +221,16 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
    * Assert the credential sentinel never reached a surface it must not. The
    * username and password are byte-checked in the response, the application
    * output, and the database in every scenario (the attempt record carries no
-   * credentials, so the database check is safe everywhere). The cookie is
+   * credentials, so the database check is safe everywhere); when `headers` is
+   * given they are also byte-checked in the response headers. The cookie is
    * byte-checked in the response and the application output in every
-   * scenario; in the database it is asserted present and only present in the
-   * `ok` outcome, and only its logical absence (the setting is null) in the
-   * others, since a deleted setting's bytes may linger in the WAL.
+   * scenario (and in the headers when given); in the database it is asserted
+   * present and only present in the `ok` outcome, and only its logical
+   * absence (the setting is null) in the others, since a deleted setting's
+   * bytes may linger in the WAL or SHM sidecar of either the main store or
+   * the snapshot store.
    */
-  function assertHygiene(text, { expectCookieInDb = false } = {}) {
+  function assertHygiene(text, { expectCookieInDb = false, headers = null } = {}) {
     const sources = [
       ['the response', text],
       ['the application output', app.output()],
@@ -228,6 +242,12 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     }
     assert.ok(!text.includes(SENTINEL_COOKIE), 'the cookie sentinel leaked into the response');
     assert.ok(!app.output().includes(SENTINEL_COOKIE), 'the cookie sentinel leaked into the application output');
+    if (headers) {
+      const headerDump = [...headers.entries()].map(([k, v]) => `${k}: ${v}`).join('\n');
+      assert.ok(!headerDump.includes(SENTINEL_USER), 'the username sentinel leaked into the response headers');
+      assert.ok(!headerDump.includes(SENTINEL_PASS), 'the password sentinel leaked into the response headers');
+      assert.ok(!headerDump.includes(SENTINEL_COOKIE), 'the cookie sentinel leaked into the response headers');
+    }
     if (expectCookieInDb) {
       assert.equal(
         temp.store.getSetting('ozb_account_cookie'),
@@ -276,13 +296,14 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
       [{ username: 'x', password: '' }, 'Username and password are required.'],
       [{ username: 'a'.repeat(61), password: 'x' }, 'Username is too long.'],
       [{ username: 'user@example.com', password: 'x' }, 'Use your OzBargain username, not your email address.'],
+      [{ username: `${SENTINEL_USER}@x`, password: 'x' }, 'Use your OzBargain username, not your email address.'],
       [{ username: 'x', password: 'p'.repeat(257) }, 'Password is too long.'],
     ];
     for (const [body, message] of cases) {
       const res = await postLogin({ ...body });
       assert.equal(res.status, 400, message);
       assert.equal(res.text, message);
-      assertHygiene(res.text);
+      assertHygiene(res.text, { headers: res.headers });
     }
     assert.equal(temp.store.getGate().state, 'open');
     assert.equal(gateEventCount(), gateEvents, 'no gate event');
