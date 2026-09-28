@@ -745,6 +745,8 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     assert.ok(count <= baseline, `the login browser is still running: ${count} chrome processes, baseline ${baseline}`);
     assert.equal(temp.store.getGate().state, 'open');
     assert.equal(gateEventCount(), gateEvents, 'no gate event');
-    assertHygiene(res.text);
+    // The login completed `ok`, so the session cookie is stored; assert it is
+    // present (the full name=value header) rather than absent.
+    assertHygiene(res.text, { expectCookieInDb: true });
   });
 });
