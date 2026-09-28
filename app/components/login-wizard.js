@@ -27,6 +27,7 @@
 import { useRouter } from 'next/navigation.js';
 import { useEffect, useRef, useState } from 'react';
 import { formatMelbourne } from '../../lib/time.js';
+import { unavailableReasonText } from '../../lib/web/login-unavailable.js';
 
 /** The three timed step estimates (prompt 4.6). Not live progress. */
 const PROGRESS_STEPS = ['Opening the browser', 'Signing in', 'Checking classifieds access'];
@@ -99,9 +100,13 @@ function messageFor(outcome, data, disabledReason) {
     case 'busy':
       message = 'A sign-in is already running.';
       break;
-    case 'unavailable':
-      message = disabledReason ?? '';
+    case 'unavailable': {
+      // Map the response's `data.reason` to the 4.5 text (the origin reasons
+      // are known only at submit time, so the `disabledReason` prop may be
+      // stale); fall back to the page's disabled reason for the gate/lock.
+      message = unavailableReasonText(data.reason) || disabledReason || '';
       break;
+    }
     default:
       message = 'Sign-in failed unexpectedly. Nothing was saved.';
   }

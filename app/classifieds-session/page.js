@@ -24,6 +24,7 @@ import { systemClock } from '../../lib/clock.js';
 import { viewGate } from '../../lib/gate/view.js';
 import { resolveLoginOrigin } from '../../lib/ozb-login/origin.js';
 import { readAttempts, loginLockView } from '../../lib/web/login-throttle.js';
+import { unavailableReasonText } from '../../lib/web/login-unavailable.js';
 import { formatMelbourne } from '../../lib/time.js';
 import AsyncForm from '../components/async-form.js';
 import SecretField from '../components/secret-field.js';
@@ -79,11 +80,8 @@ export default async function ClassifiedsSessionPage() {
     }.`;
   } else if (lock.locked) {
     disabledReason = `Sign-in is locked until ${formatMelbourne(lock.lockedUntil)} after repeated failed attempts (rule B6). Polling is unaffected.`;
-  } else if (!origin.ok && origin.reason === 'origin_not_allowed') {
-    disabledReason = 'Sign-in is unavailable: the classifieds URL is not an allowed OzBargain address.';
-  } else if (!origin.ok && origin.reason === 'dev_mode_live_origin') {
-    disabledReason =
-      'Sign-in is unavailable in dev mode while the classifieds URL points at the live site. Run the fixture server with --login.';
+  } else if (!origin.ok) {
+    disabledReason = unavailableReasonText(origin.reason);
   }
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
