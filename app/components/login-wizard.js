@@ -154,9 +154,15 @@ export default function LoginWizard({ disabledReason, pollingEnabled, csrfToken 
     timersRef.current.push(setTimeout(() => setStep(2), 10000));
 
     try {
+      // Send urlencoded, not multipart: the route's `parseBody` decodes
+      // urlencoded and JSON, not `multipart/form-data` (what a bare
+      // `fetch(FormData)` would send, and which it cannot parse). Building a
+      // `URLSearchParams` over the FormData yields the urlencoded body the
+      // route expects, with the hidden `_csrf` field intact.
       const response = await fetch('/classifieds-session/login', {
         method: 'POST',
-        body: formData,
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(formData).toString(),
         // Same-origin, credentials: 'same-origin' preserves the Access
         // session cookie, exactly as AsyncForm sends its forms.
         credentials: 'same-origin',
