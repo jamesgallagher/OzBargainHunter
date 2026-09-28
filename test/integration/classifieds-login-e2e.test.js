@@ -28,9 +28,10 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import '../support/browser.js'; // side effect: pins PLAYWRIGHT_BROWSERS_PATH
+import { collectPageErrors, launchBrowser, newAuthedContext } from '../support/browser.js';
 import { createFixtureServer } from '../../scripts/fixture-server.mjs';
 import { startJwksServer } from '../support/jwks.js';
 import { generateCsrfToken } from '../../lib/csrf.js';
@@ -75,6 +76,12 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
   let app;
   let token;
   let csrf;
+  // The UI scenario drives the real sign-in wizard in a real Chromium (W10).
+  let browser;
+  let context;
+  let page;
+  let collectors;
+  let nonLoopbackRequests;
 
   before(async () => {
     fixturePort = await freePort();
@@ -98,9 +105,19 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     app = await startAppServer({ env });
     token = await jwks.sign({ email: EMAIL }, { aud: AUD, iss: `https://${TEAM_DOMAIN}`, exp: '2h' });
     csrf = await generateCsrfToken(CSRF_SECRET);
+
+    // The UI scenario (W10) drives the real sign-in wizard in a real Chromium,
+    // authenticated the same way the app authenticates (the Access JWT in the
+    // assertion header), with a loopback-only route guard.
+    browser = await launchBrowser();
+    ({ context, nonLoopbackRequests } = await newAuthedContext(browser, { token, origin: app.origin }));
+    page = await context.newPage();
+    collectors = collectPageErrors(page);
   });
 
   after(async () => {
+    await context?.close();
+    await browser?.close();
     await app?.stop();
     temp?.close();
     await jwks.close();
@@ -568,6 +585,164 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
       ],
       'the page loaded; the session-cookie selection is what failed',
     );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('refuses a second login after a Cloudflare stop (gate_closed precedes the throttle)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { first, second, server } = await withFixture('challenge_login_page', async (server) => {
+      const first = await postLogin();
+      const second = await postLogin();
+      return { first, second, server };
+    });
+    // The first login hits the challenge and stops the gate (B1). The exact
+    // min_resume_at depends on the gate's (unclearable) event history, so it
+    // is not asserted to a fixed value here.
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.json, { outcome: 'cloudflare_block' });
+    const gate = temp.store.getGate();
+    assert.equal(gate.state, 'stopped');
+    assert.equal(gate.rule, 'B1');
+    assert.ok(gate.min_resume_at, 'the stopped gate has a min_resume_at');
+    // The second login is refused at the gate check (step 4), which precedes
+    // the throttle (step 5) and the browser (step 6): gate_closed with the
+    // gate's min_resume_at, and no second fixture hit.
+    assert.equal(second.status, 200);
+    assert.deepEqual(Object.keys(second.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(second.json.outcome, 'gate_closed');
+    assert.equal(second.json.retryAt, gate.min_resume_at, 'retryAt is the gate min_resume_at');
+    assert.deepEqual(
+      loginSequence(server),
+      [['GET', '/user/login', 403]],
+      'only the first login reached the fixture; the second was refused at the gate',
+    );
+    assert.equal(gateEventCount(), gateEvents + 1, 'one gate event (the first login only)');
+    assertHygiene(first.text, { headers: first.headers });
+    assertHygiene(second.text, { headers: second.headers });
+  });
+
+  it('throttles a second login within 30s of the first (throttled)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const t1 = Date.now();
+    const { first, second, server } = await withFixture('ok', async (server) => {
+      const first = await postLogin();
+      const second = await postLogin();
+      return { first, second, server };
+    });
+    assert.equal(first.status, 200);
+    assert.equal(first.json.outcome, 'ok');
+    // The second login is refused at the throttle (step 5): the most recent
+    // attempt (the first, now < 30s old) is within the 30s minimum gap.
+    assert.equal(second.status, 200);
+    assert.deepEqual(Object.keys(second.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(second.json.outcome, 'throttled');
+    assertNear(new Date(second.json.retryAt).getTime(), t1 + 30 * 1000, 'retryAt');
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 302],
+        ['GET', '/user/login', 302],
+        ['GET', '/user/226301', 200],
+        ['GET', '/classified', 200],
+      ],
+      'only the first login reached the fixture; the second was refused at the throttle',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    // The first login is `ok` and stores the cookie, so it is still present
+    // when the second is refused at the throttle.
+    assertHygiene(first.text, { headers: first.headers, expectCookieInDb: true });
+    assertHygiene(second.text, { headers: second.headers, expectCookieInDb: true });
+  });
+
+  it('locks sign-in after two validation errors in 24h (locked, B6)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const nowMs = Date.now();
+    const t1 = new Date(nowMs - 120000).toISOString();
+    const t2 = new Date(nowMs - 60000).toISOString();
+    temp.store.setSetting(
+      'ozb_login_attempts',
+      JSON.stringify([{ at: t1, outcome: 'validation_error' }, { at: t2, outcome: 'validation_error' }]),
+    );
+    // No fixture is needed: the login is refused at the throttle check
+    // (step 5, B6 outranks the throttle) before the browser (step 6).
+    const res = await postLogin();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(res.json.outcome, 'locked');
+    // The threshold-reaching attempt is the second validation_error (t2); the
+    // lock lasts until t2 + 24h.
+    assertNear(new Date(res.json.retryAt).getTime(), (nowMs - 60000) + 24 * 3600 * 1000, 'retryAt');
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text, { headers: res.headers });
+  });
+
+  it('signs in through the real wizard in a real browser (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      // The page has three submit buttons (the wizard "Sign in", the toggle
+      // "Save", the legacy set-cookie "Set session"); select by role + name.
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      const success = page.locator('.async-form-success');
+      await success.waitFor();
+      assert.match(
+        await success.innerText(),
+        /Signed in\. Classifieds session saved for uid 226301\./,
+      );
+      // The session is stored server-side; the inputs are cleared by the
+      // wizard's form.reset() and never restored.
+      assert.equal(temp.store.getSetting('ozb_account_cookie'), `PHPSESSID=${SENTINEL_COOKIE}`);
+      assert.equal(temp.store.getSetting('classifieds_last_uid'), '226301');
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  /**
+   * Count the Chromium processes on the machine (Linux only). The UI scenario's
+   * own Chromium is in both the baseline and the after count, so only the
+   * application's login Chromium is expected to leave; the delta approach
+   * asserts the app's browser is closed after the login completes.
+   */
+  function chromiumProcessCount() {
+    return new Promise((resolve) => {
+      execFile('pgrep', ['-c', '-f', 'chrome'], (err, stdout) => {
+        resolve(err ? 0 : Number.parseInt(String(stdout).trim(), 10) || 0);
+      });
+    });
+  }
+
+  it('closes the login browser after the login completes (Linux only)', { skip: process.platform !== 'linux' }, async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const baseline = await chromiumProcessCount();
+    const { res } = await withFixture('ok', async () => ({ res: await postLogin() }));
+    assert.equal(res.status, 200);
+    assert.equal(res.json.outcome, 'ok');
+    // The application's login Chromium is closed when the login completes;
+    // poll until the process count returns to the baseline (the UI scenario's
+    // own Chromium is in both counts, so only the app's browser is expected
+    // to leave).
+    let count = await chromiumProcessCount();
+    for (let i = 0; i < 20 && count > baseline; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      count = await chromiumProcessCount();
+    }
+    assert.ok(count <= baseline, `the login browser is still running: ${count} chrome processes, baseline ${baseline}`);
     assert.equal(temp.store.getGate().state, 'open');
     assert.equal(gateEventCount(), gateEvents, 'no gate event');
     assertHygiene(res.text);
