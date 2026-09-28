@@ -497,7 +497,7 @@ The following values are configurable without a code change or a rebuild. Exact 
 - Notification provider and its credentials
 - OzBargain account credential
 - Threshold defaults
-- Public URL (the base for the links in gate alerts and the Status screen; empty by default, which omits the link)
+- Public URL (the base for the Status link in gate alerts; empty by default, which gives a relative / link)
 
 ### 9.2 Editable in the UI
 
