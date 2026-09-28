@@ -712,6 +712,238 @@ describe('integration: POST /classifieds-session/login (end to end)', () => {
     });
   });
 
+  it('shows timed progress while the login request runs (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      // The fixture has no delay option, so a page-level route delays the
+      // login response ~1.5s; it takes precedence over the context guard and
+      // passes through to it via route.continue().
+      await page.route('**/classifieds-session/login', async (route) => {
+        await new Promise((r) => setTimeout(r, 1500));
+        await route.continue();
+      });
+      try {
+        await page.goto('/classifieds-session');
+        await page.locator('input[name="username"]').fill(SENTINEL_USER);
+        await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+        await page.getByRole('button', { name: 'Sign in' }).click();
+        const steps = page.locator('.login-wizard ol');
+        await steps.waitFor();
+        assert.equal(await steps.locator('li').count(), 3, 'three progress steps');
+        assert.equal(
+          await steps.locator('li[aria-current="step"]').count(),
+          1,
+          'exactly one step is current',
+        );
+        const pendingButton = page.getByRole('button', { name: 'Signing in…' });
+        await pendingButton.waitFor();
+        assert.ok(await pendingButton.isDisabled(), 'the button is disabled while pending');
+        // Wait for the login to complete before the next scenario: the route
+        // refuses a second login while one is running.
+        await page.locator('.async-form-success').waitFor();
+      } finally {
+        await page.unroute('**/classifieds-session/login');
+      }
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('clears the credential fields and stores nothing in browser storage (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await page.locator('.async-form-success').waitFor();
+      // The wizard clears both fields on every submit (form.reset()) and
+      // never restores them.
+      assert.equal(await page.locator('input[name="username"]').inputValue(), '');
+      assert.equal(await page.locator('input[name="password"]').inputValue(), '');
+      // Nothing is kept in browser storage: the theme bootstrap only reads
+      // localStorage, it never writes.
+      assert.deepEqual(
+        await page.evaluate(() => [localStorage.length, sessionStorage.length]),
+        [0, 0],
+        'nothing is stored in the browser',
+      );
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('shows the session status list after sign-in (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await page.locator('.async-form-success').waitFor();
+      // The refresh re-renders the status list with the stored session; wait
+      // for the text, not a sleep.
+      const status = page.locator('.status-details');
+      await status.getByText('Valid', { exact: true }).waitFor();
+      await status.getByText('226301', { exact: true }).waitFor();
+      // The Cookie expires row shows the stored expiry in Melbourne time, not
+      // the placeholder.
+      const cookieExpires = (await status.locator('dd').nth(3).innerText()).trim();
+      assert.notEqual(cookieExpires, '—', 'the cookie expiry is shown, not the placeholder');
+      // `[A-Za-z]{3,4}`: en-AU medium style spells September "Sept" (4 letters).
+      assert.match(cookieExpires, /\d{1,2} [A-Za-z]{3,4} \d{4}/, 'the cookie expiry is a Melbourne date');
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('fits a 375px phone in light and dark themes (UI)', async () => {
+    resetState();
+    await page.setViewportSize({ width: 375, height: 800 });
+    try {
+      await page.goto('/classifieds-session');
+      const card = page.locator('.login-wizard');
+      const backgroundByTheme = {};
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((t) => {
+          document.documentElement.dataset.theme = t;
+        }, theme);
+        backgroundByTheme[theme] = await card.evaluate((el) => getComputedStyle(el).backgroundColor);
+        const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+        assert.ok(
+          scrollWidth <= 375,
+          `the page fits a 375px phone in the ${theme} theme (scrollWidth ${scrollWidth})`,
+        );
+      }
+      assert.notEqual(
+        backgroundByTheme.light,
+        backgroundByTheme.dark,
+        'the wizard card background differs between the light and dark themes',
+      );
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content());
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+  });
+
+  it('offers to turn on classifieds polling after sign-in (UI)', async () => {
+    resetState();
+    // resetState does not clear the toggle, so start with it unset.
+    temp.store.deleteSetting('classifieds_enabled');
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      assert.equal(
+        await page.locator('.wizard-polling-off').count(),
+        0,
+        'no polling offer before a sign-in',
+      );
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await page.locator('.async-form-success').waitFor();
+      // The wizard offers to turn on polling (classifieds_enabled was unset).
+      const offer = page.locator('.wizard-polling-off');
+      await offer.waitFor();
+      assert.match(await offer.innerText(), /Classifieds polling is off\./);
+      await page.getByRole('button', { name: 'Turn on classifieds polling' }).click();
+      // The offer is gone after the refresh (polling is now enabled).
+      await offer.waitFor({ state: 'hidden' });
+      // The toggle wrote classifieds_enabled = '1' and preserved the live uid.
+      assert.equal(temp.store.getSetting('classifieds_enabled'), '1');
+      assert.equal(temp.store.getSetting('classifieds_last_uid'), '226301');
+      // The switch is checked on a fresh render. The checkbox is uncontrolled
+      // (`defaultChecked`), so the wizard's client-side refresh does not
+      // re-apply it; a full reload re-mounts it from the stored setting.
+      await page.reload();
+      assert.ok(await page.locator('#classifieds-enabled').isChecked(), 'the toggle switch is checked');
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('disables the wizard while the gate is stopped (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const minResumeAtIso = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    temp.store.mutateGate(() => ({
+      gate: {
+        ...OPEN_GATE_ROW,
+        state: 'stopped',
+        rule: 'B1',
+        reason: 'cloudflare_block on login',
+        since: new Date().toISOString(),
+        min_resume_at: minResumeAtIso,
+      },
+      events: [],
+    }));
+    await page.goto('/classifieds-session');
+    assert.ok(await page.locator('input[name="username"]').isDisabled(), 'the username input is disabled');
+    assert.ok(await page.locator('input[name="password"]').isDisabled(), 'the password input is disabled');
+    assert.ok(await page.getByRole('button', { name: 'Sign in' }).isDisabled(), 'the Sign in button is disabled');
+    const statusLine = page.locator('p.wizard-disabled');
+    await statusLine.waitFor();
+    // `[A-Za-z]{3,4}`: en-AU medium style spells September "Sept" (4 letters).
+    assert.match(
+      await statusLine.innerText(),
+      /OzBargain access is paused or stopped, so sign-in is unavailable until \d{1,2} [A-Za-z]{3,4} \d{4}/,
+      'the fixed reason line with the Melbourne resume time',
+    );
+    // Reset the gate to open for the next scenario.
+    temp.store.mutateGate(() => ({ gate: { ...OPEN_GATE_ROW }, events: [] }));
+    assert.equal(gateEventCount(), gateEvents, 'no gate event (row-only writes)');
+    collectors.assertNone();
+    assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+    assertHygiene(await page.content());
+  });
+
+  it('throttles a login when three attempts fall inside the 15-minute window (throttled)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const nowMs = Date.now();
+    const t1 = new Date(nowMs - 10 * 60000).toISOString();
+    const t2 = new Date(nowMs - 5 * 60000).toISOString();
+    const t3 = new Date(nowMs - 2 * 60000).toISOString();
+    temp.store.setSetting(
+      'ozb_login_attempts',
+      JSON.stringify([
+        { at: t1, outcome: 'bad_credentials' },
+        { at: t2, outcome: 'bad_credentials' },
+        { at: t3, outcome: 'bad_credentials' },
+      ]),
+    );
+    // No fixture: the login is refused at the throttle check (step 5) before
+    // the browser (step 6). B6 does not trigger (3 < 5) and the 30s gap
+    // passes (the last attempt is 2 minutes old).
+    const res = await postLogin();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(res.json.outcome, 'throttled');
+    // The 15-minute window is full (three attempts in the last 15 minutes);
+    // retryAt is the oldest in-window attempt + 15 minutes.
+    assertNear(new Date(res.json.retryAt).getTime(), nowMs - 10 * 60000 + 15 * 60000, 'retryAt');
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text, { headers: res.headers });
+  });
+
   /**
    * Count the Chromium processes on the machine (Linux only). The UI scenario's
    * own Chromium is in both the baseline and the after count, so only the
