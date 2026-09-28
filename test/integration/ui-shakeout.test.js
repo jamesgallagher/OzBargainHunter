@@ -223,4 +223,48 @@ describe('integration: browser UI and test-send shakeout', () => {
       findings: ['writes remain in the themed shell', 'stored credentials stay server-side', 'test send completed without browser or server errors'],
     })}`);
   });
+
+  it('J15 a stopped gate shows the red banner on every screen, themed and at 375px width', async () => {
+    const nowIso = new Date().toISOString();
+    const minResumeIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    temp.store.applyGateTransition(
+      { state: 'stopped', rule: 'B1', tier: 0, reason: 'Cloudflare block', since: nowIso, until_at: null, min_resume_at: minResumeIso, consecutive_b2: 0, failing_cycles: 0, b5_tier: 0, probe_used: 0, probe_granted_at: null },
+      [{ at: nowIso, from_state: 'cooling', to_state: 'stopped', rule: 'B1', tier: 0, reason: 'cloudflare block on deals feed', until_at: null, min_resume_at: minResumeIso }],
+    );
+    for (const path of ['/', '/rules', '/delivery']) {
+      const response = await page.goto(path);
+      assert.equal(response.status(), 200, `${path} should render`);
+      const banner = page.locator('.gate-banner[role="alert"]');
+      assert.equal(await banner.count(), 1, `${path}: exactly one gate banner`);
+      assert.equal(await banner.getAttribute('data-gate-state'), 'stopped', `${path}: the banner state`);
+      assert.match(await banner.innerText(), /OzBargain access is stopped/, `${path}: the banner title`);
+    }
+    async function bannerBorder() {
+      return page.evaluate(() => getComputedStyle(document.querySelector('.gate-banner')).borderLeftColor);
+    }
+    async function dangerColor() {
+      return page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.style.borderLeftColor = 'var(--danger)';
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).borderLeftColor;
+        probe.remove();
+        return color;
+      });
+    }
+    await page.goto('/');
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    assert.equal(await bannerBorder(), await dangerColor(), 'light: the banner border is --danger');
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+    assert.equal(await bannerBorder(), await dangerColor(), 'dark: the banner border is --danger');
+    await page.setViewportSize({ width: 375, height: 800 });
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    assert.ok(scrollWidth <= 375, `the 375px viewport does not overflow horizontally (scrollWidth ${scrollWidth})`);
+    temp.store.applyGateTransition(
+      { state: 'open', rule: null, tier: 0, reason: null, since: null, until_at: null, min_resume_at: null, consecutive_b2: 0, failing_cycles: 0, b5_tier: 0, probe_used: 0, probe_granted_at: null },
+      [],
+    );
+    await page.goto('/');
+    assert.equal(await page.locator('.gate-banner[role="alert"]').count(), 0, 'an open gate shows no banner');
+  });
 });

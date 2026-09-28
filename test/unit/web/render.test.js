@@ -21,6 +21,7 @@ import DeliveryPage from '../../../app/delivery/page.js';
 import ClassifiedsSessionPage from '../../../app/classifieds-session/page.js';
 import LocalTime from '../../../app/components/local-time.js';
 import { formatMelbourne } from '../../../lib/time.js';
+import { defaultGate } from '../../../lib/gate/rules.js';
 
 /**
  * One render test per screen (the nine screens of design 7.1, plus the status
@@ -372,5 +373,217 @@ describe('render: LocalTime server render matches the first client render', () =
     assert.equal(m[1], formatMelbourne(iso), 'server render text === formatMelbourne(iso)');
     // And it is the en-AU Melbourne wall clock, not the raw ISO instant.
     assert.equal(m[1], '19 Sept 2026, 4:20:00 pm');
+  });
+});
+
+// A7/A9: the gate banner on every screen (design 3.7, chunk 2). Each test
+// seeds the `access_gate` row directly (and, where the wording depends on
+// it, one `gate_events` row) and renders all nine screens inside `Layout`.
+// The layout and the status screen read the gate with the SYSTEM clock, so
+// any instant that must be in the future (a cooling `until_at`, a
+// `min_resume_at` before the resume is allowed) is computed relative to the
+// real now; fixed 2024-01-01 instants are safely in the past.
+describe('render: the gate banner on every screen (A7, A9)', () => {
+  async function renderEveryScreenWithGate(seedRow, seedEvents, markEmailStatus) {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-render-'));
+    const store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    setStoreForTest(store);
+    try {
+      const now = '2026-09-19T07:30:00Z';
+      store.insertRule({
+        id: 1,
+        type: 'match',
+        parameters: JSON.stringify({ term: 'weber' }),
+        state: 'enabled',
+        surfaces: 'deals',
+        cooldown_seconds: 86400,
+        pinned_slug: null,
+        created_at: now,
+        modified_at: now,
+      });
+      store.upsertProvider('matrix', JSON.stringify({ homeserver: 'https://matrix.example.com', room: '!r:example.com' }), true);
+      store.applyGateTransition(seedRow, seedEvents);
+      if (markEmailStatus) {
+        const ev = store.getGateEvents()[0];
+        store.setGateEventEmailStatus(ev.id, markEmailStatus);
+      }
+      const screens = {
+        status: await StatusPage(),
+        rules: RulesPage(),
+        'rule-create': await NewRulePage(),
+        'rule-edit': await EditRulePage({ params: { id: '1' } }),
+        alerts: AlertsPage(),
+        suppressions: SuppressionsPage(),
+        thresholds: await ThresholdsPage(),
+        delivery: await DeliveryPage(),
+        'classifieds-session': await ClassifiedsSessionPage(),
+      };
+      const out = {};
+      for (const [name, pageEl] of Object.entries(screens)) {
+        // The awaited page element goes straight into the layout — rendering
+        // it to a string first would make React escape the page markup.
+        out[name] = renderToStaticMarkup(createElement(Layout, null, pageEl));
+      }
+      return out;
+    } finally {
+      setStoreForTest(null);
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // The exact string `class="gate-banner"` (with the closing quote) matches
+  // only the banner div — the inner elements are `gate-banner-*`.
+  function assertExactlyOneBanner(html, screen) {
+    assert.equal(html.split('class="gate-banner"').length - 1, 1, `${screen}: exactly one .gate-banner`);
+  }
+
+  test('A7: a cooling gate shows the banner on every screen with the 4.6 wording', async () => {
+    // The cool-off must still be in the future on the SYSTEM clock, or the
+    // effective state reads as `probing`.
+    const sinceIso = new Date().toISOString();
+    const untilIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const out = await renderEveryScreenWithGate(
+      { ...defaultGate(), state: 'cooling', rule: 'B2', tier: 2, reason: 'rate limited', since: sinceIso, until_at: untilIso },
+      [],
+    );
+    for (const [name, html] of Object.entries(out)) {
+      assertExactlyOneBanner(html, name);
+      assert.match(html, /class="gate-banner" role="alert" data-gate-state="cooling"/, `${name}: the banner element`);
+      assert.ok(html.includes('OzBargain is being backed off'), `${name}: the banner title`);
+      assert.ok(html.includes(`No requests until ${formatMelbourne(untilIso)} (B2: rate limited, tier 2).`), `${name}: the banner detail`);
+      assert.match(html, /class="health-summary" data-health="attention"/, `${name}: the header health tone`);
+    }
+    assert.ok(out.status.includes(`Backing off — no requests until ${formatMelbourne(untilIso)}.`), 'the status screen line');
+  });
+
+  test('A7: a probing gate shows the resuming banner on every screen', async () => {
+    const out = await renderEveryScreenWithGate(
+      { ...defaultGate(), state: 'probing', rule: 'B5', tier: 0, reason: 'manual resume', since: '2026-09-19T07:30:00Z' },
+      [],
+    );
+    for (const [name, html] of Object.entries(out)) {
+      assertExactlyOneBanner(html, name);
+      assert.match(html, /class="gate-banner" role="alert" data-gate-state="probing"/, `${name}: the banner element`);
+      assert.ok(html.includes('OzBargain is being backed off'), `${name}: the banner title`);
+      assert.ok(html.includes('Resuming — one test request will be made at the next poll.'), `${name}: the banner detail`);
+      assert.match(html, /class="health-summary" data-health="attention"/, `${name}: the header health tone`);
+    }
+    assert.ok(out.status.includes('Resuming — one test request will be made at the next poll.'), 'the status screen line');
+  });
+
+  test('A7: a stopped gate before min_resume_at shows the banner, the panel and a disabled resume', async () => {
+    // The earliest resume must still be in the future on the SYSTEM clock,
+    // or the resume button would be enabled.
+    const sinceIso = new Date().toISOString();
+    const minResumeIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const out = await renderEveryScreenWithGate(
+      { ...defaultGate(), state: 'stopped', rule: 'B1', tier: 0, reason: 'Cloudflare block', since: sinceIso, min_resume_at: minResumeIso },
+      [{ at: sinceIso, from_state: 'cooling', to_state: 'stopped', rule: 'B1', tier: 0, reason: 'cloudflare block on deals feed', until_at: null, min_resume_at: minResumeIso }],
+    );
+    for (const [name, html] of Object.entries(out)) {
+      assertExactlyOneBanner(html, name);
+      assert.match(html, /class="gate-banner" role="alert" data-gate-state="stopped"/, `${name}: the banner element`);
+      assert.ok(html.includes('OzBargain access is stopped'), `${name}: the banner title`);
+      assert.ok(html.includes(`Cloudflare block at ${formatMelbourne(sinceIso)}. Manual resume available from ${formatMelbourne(minResumeIso)}.`), `${name}: the banner detail`);
+      assert.match(html, /class="health-summary" data-health="attention"/, `${name}: the header health tone`);
+    }
+    const status = out.status;
+    assert.ok(status.includes('<dt>State</dt><dd>stopped</dd>'), 'the panel state');
+    assert.ok(status.includes('<dt>Rule</dt><dd>B1</dd>'), 'the panel rule');
+    assert.ok(status.includes('<dt>Reason</dt><dd>Cloudflare block</dd>'), 'the panel reason');
+    assert.ok(status.includes(`<dt>Since</dt><dd>${formatMelbourne(sinceIso)}</dd>`), 'the panel since');
+    assert.ok(status.includes(`<dt>Earliest resume</dt><dd>${formatMelbourne(minResumeIso)}</dd>`), 'the panel earliest resume');
+    assert.ok(status.includes('<dt>Tier</dt><dd>0</dd>'), 'the panel tier');
+    assert.match(status, /class="data-table gate-events"/, 'the event table is present');
+    assert.ok(status.includes('cooling → stopped'), 'the event change cell');
+    assert.ok(status.includes(`<button type="submit" class="btn btn-primary" disabled="">Available from ${formatMelbourne(minResumeIso)}</button>`), 'the resume button is disabled with the min-resume instant');
+  });
+
+  test('A7: a stopped gate after min_resume_at enables the resume button', async () => {
+    const out = await renderEveryScreenWithGate(
+      { ...defaultGate(), state: 'stopped', rule: 'B1', tier: 0, reason: 'Cloudflare block', since: '2026-09-19T07:30:00Z', min_resume_at: '2024-01-01T00:00:00Z' },
+      [{ at: '2026-09-19T07:30:00Z', from_state: 'cooling', to_state: 'stopped', rule: 'B1', tier: 0, reason: 'cloudflare block on deals feed', until_at: null, min_resume_at: '2024-01-01T00:00:00Z' }],
+    );
+    for (const [name, html] of Object.entries(out)) {
+      assertExactlyOneBanner(html, name);
+      assert.ok(html.includes('OzBargain access is stopped'), `${name}: the banner title`);
+      assert.ok(html.includes('Cloudflare block at 19 Sept 2026, 5:30:00 pm. Manual resume is available now.'), `${name}: the banner detail`);
+    }
+    assert.match(out.status, /<button type="submit" class="btn btn-primary">Resume OzBargain access<\/button>/, 'the resume button is enabled');
+  });
+
+  test('A7: a notify-worthy event that could not be sent shows the email problem in the banner', async () => {
+    const out = await renderEveryScreenWithGate(
+      { ...defaultGate(), state: 'stopped', rule: 'B1', tier: 0, reason: 'Cloudflare block', since: '2026-09-19T07:30:00Z', min_resume_at: '2026-09-20T07:30:00Z' },
+      [{ at: '2026-09-19T07:30:00Z', from_state: 'cooling', to_state: 'stopped', rule: 'B1', tier: 0, reason: 'cloudflare block on deals feed', until_at: null, min_resume_at: '2026-09-20T07:30:00Z' }],
+      'not_configured',
+    );
+    for (const [name, html] of Object.entries(out)) {
+      assert.ok(html.includes('Email alert not sent — Brevo is not configured'), `${name}: the email problem line`);
+    }
+  });
+
+  test('A7: an open gate shows no banner on any screen', async () => {
+    const out = await renderEveryScreenWithGate(defaultGate(), []);
+    for (const [name, html] of Object.entries(out)) {
+      assert.doesNotMatch(html, /class="gate-banner"/, `${name}: no banner`);
+    }
+    assert.ok(out.status.includes('Access is open.'), 'the status screen line');
+  });
+
+  test('A9: rendering a stale cooling row (past until_at) does not touch the gate row or the event table', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-gate-render-a9-'));
+    const store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    setStoreForTest(store);
+    try {
+      const now = '2026-09-19T07:30:00Z';
+      store.insertRule({
+        id: 1,
+        type: 'match',
+        parameters: JSON.stringify({ term: 'weber' }),
+        state: 'enabled',
+        surfaces: 'deals',
+        cooldown_seconds: 86400,
+        pinned_slug: null,
+        created_at: now,
+        modified_at: now,
+      });
+      store.upsertProvider('matrix', JSON.stringify({ homeserver: 'https://matrix.example.com', room: '!r:example.com' }), true);
+      store.applyGateTransition(
+        { ...defaultGate(), state: 'cooling', rule: 'B2', tier: 2, reason: 'rate limited', since: now, until_at: '2024-01-01T00:00:00Z' },
+        [
+          { at: now, from_state: 'open', to_state: 'cooling', rule: 'B2', tier: 2, reason: 'rate limited on deals feed', until_at: '2026-09-19T08:30:00Z', min_resume_at: null },
+          { at: '2026-09-19T08:30:00Z', from_state: 'cooling', to_state: 'probing', rule: 'B2', tier: 2, reason: 'rate limited on deals feed', until_at: null, min_resume_at: null },
+          { at: '2026-09-19T08:31:00Z', from_state: 'probing', to_state: 'cooling', rule: 'B2', tier: 3, reason: 'transport error on deals feed', until_at: '2026-09-19T08:46:00Z', min_resume_at: null },
+        ],
+      );
+      const eventCountBefore = store.getGateEvents().length;
+      const rowBefore = JSON.stringify(store.getGate());
+      const screens = {
+        status: await StatusPage(),
+        rules: RulesPage(),
+        'rule-create': await NewRulePage(),
+        'rule-edit': await EditRulePage({ params: { id: '1' } }),
+        alerts: AlertsPage(),
+        suppressions: SuppressionsPage(),
+        thresholds: await ThresholdsPage(),
+        delivery: await DeliveryPage(),
+        'classifieds-session': await ClassifiedsSessionPage(),
+      };
+      const statusHtml = renderToStaticMarkup(createElement(Layout, null, screens.status));
+      for (const [name, pageEl] of Object.entries(screens)) {
+        renderToStaticMarkup(createElement(Layout, null, pageEl));
+      }
+      // The stale cooling row reads as probing (viewGate is read-only) — the
+      // banner says so, and nothing was written.
+      assert.ok(statusHtml.includes('Resuming — one test request will be made at the next poll.'), 'the stale cooling row renders as probing');
+      assert.equal(store.getGateEvents().length, eventCountBefore, 'the gate_events row count is unchanged by a render');
+      assert.equal(JSON.stringify(store.getGate()), rowBefore, 'the access_gate row is byte-for-byte unchanged by a render');
+    } finally {
+      setStoreForTest(null);
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
