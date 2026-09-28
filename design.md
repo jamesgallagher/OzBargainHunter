@@ -195,6 +195,10 @@ Acquisition is expected to break without warning, because the site owner tunes h
 - **A dead-man's switch is part of the product.** If no poll has succeeded for 30 minutes, send a notification. Repeat at a decaying rate: 30 minutes, 2 hours, 6 hours, then daily. **While the gate is closed the dead-man is suppressed** — the back-off itself is the alert; nothing is sent and no dead-man state is written until the gate reopens.
 - **The container health check reflects acquisition health, not process liveness.** `/healthz` reports `backing_off` (503) while the gate is not open, carrying the gate's state; once open, it reports unhealthy when the last successful poll is older than three poll intervals.
 - **Every gate transition writes exactly one `gate_events` row** (not yet notified, email status null). The event's `reason` is a short fixed string (`<class> on <surface>`); no event, log line or failure body carries a response body, URL query, cookie or header.
+- **A gate alert is delivered through Brevo SMTP always, whether or not it is selected.** The email is the backstop channel (6.7), so it is sent directly on every notify-worthy event. The other selected providers receive the same alert through the normal fan-out (6.1); Brevo is excluded from that fan-out so it is never double-sent when it is selected too.
+- **Which events notify is a fixed policy.** A `stopped` transition always notifies. A `cooling` transition notifies from tier 2 up, never at tier 1. A lazy or manual resume does not notify on its own; a successful resume (`probing → open`) notifies only when an earlier event in the same episode was notified (not policy-skipped).
+- **Each event's delivery outcome is one of five `email_status` values**: `sent`, `failed`, `not_configured` (no Brevo row), `disabled` (Brevo row present but disabled), or `skipped` (policy skip — nothing is sent, email or fan-out). A `failed` send advances the shared D55 counter (6.7); the fifth consecutive failure disables Brevo.
+- **Delivery is claim-deduped and never throws.** Each event is claimed by an atomic `notified = 0 → 1` flip before it is sent, so two concurrent sweeps deliver each event exactly once. The accepted trade-off: a crash after the claim but before the send loses that one alert (it is not retried); a crash before the claim leaves the event for the next sweep. A failure on one event marks it `failed` and the sweep continues with the next; the outer catch logs the error name only (a message can carry a credential or a response body, a name cannot).
 - **The last N failed response bodies are retained** (truncated) so the actual failure can be inspected rather than guessed from a log line.
 - **Degrade rather than die.** If `/feed` fails while `/deals/feed` succeeds, the rules that need only new deals continue, and the UI states plainly that front-page detection is unavailable.
 - **On a permanent block, the application stops.** It does not adopt bypass tooling, rotate User-Agents or introduce proxies.
@@ -327,6 +331,8 @@ Delivery is **provider-abstract and multi-select**. All providers implement one 
 
 **Providers are a choice, not a ladder.** The user selects any combination of configured providers, and **every alert is delivered through every selected provider**. There is no priority order and no fallback chain: if email and Matrix are both selected, one alert produces both. Configuration is a precondition for selection — a provider that is selected but not configured is not a provider.
 
+**Gate notifications are an operational exception to the selection rule.** A gate alert (3.7) is always sent through Brevo SMTP whether or not it is selected — it is the backstop channel (6.7) — and is additionally fanned out to the other selected providers. Brevo is excluded from that fan-out so it is never double-sent when it is selected too.
+
 ### 6.2 Providers
 
 - **Email.**
@@ -403,7 +409,7 @@ This exists because of the failure that matters most: **an alerting tool that ha
 
 The UI contains the following screens. Nothing else.
 
-1. **Status** — acquisition health first: last successful poll, last response class, current backoff state, and a visible last-checked timestamp on every page of the application.
+1. **Status** — acquisition health first: last successful poll, last response class, current backoff state, and a visible last-checked timestamp on every page of the application. It also carries the **OzBargain access panel** (3.7): the gate state, rule, reason, since, until / earliest-resume, tier, and the recent gate events with their email status. When the gate is `stopped` it shows a **Resume** control — disabled until `min_resume_at`, then "Resume OzBargain access".
 2. **Rules list** — every rule with: enabled / muted / snoozed state; match counts over 7 and 30 days; last-fired time; cooldown; optional pinned slug; and **which surfaces it applies to** (deals, classifieds, or both — fixed to deals-only for threshold rules and not editable).
 3. **Rule create, edit and delete** — full CRUD. Term text, matching mode, cooldown, surfaces.
 4. **Rule state control** — enable, mute, snooze, re-enable.
@@ -412,6 +418,8 @@ The UI contains the following screens. Nothing else.
 7. **Threshold configuration** — editable.
 8. **Delivery configuration** — provider selection, credentials, and a test-send button.
 9. **Classifieds session status** — cookie validity, when it was last confirmed working, and somewhere to supply a fresh one.
+
+**A red gate banner appears on every screen while the gate is closed** (`cooling`, `probing`, or `stopped`): fixed text with the rule's plain meaning and Melbourne times, an "Email alert not sent" line when the alert did not go out, and a link to the Status screen. It carries no response body, URL query, cookie or header.
 
 ### 7.2 Behaviour requirements
 
@@ -489,6 +497,7 @@ The following values are configurable without a code change or a rebuild. Exact 
 - Notification provider and its credentials
 - OzBargain account credential
 - Threshold defaults
+- Public URL (the base for the links in gate alerts and the Status screen; empty by default, which omits the link)
 
 ### 9.2 Editable in the UI
 
