@@ -13,16 +13,20 @@
 #                 to the application
 #   5. publish  — ghcr.io, ONLY on main, and ONLY if 1-4 passed
 #
-# Why the publish condition is load-bearing: branch protection is unavailable on
-# this account (a private repository on a personal plan), so there is no merge
-# gate. **The deployment is the gate**: `:latest` is what production runs, and
-# the only thing standing between a broken commit and the Unraid host is that
-# this workflow refuses to publish unless lint, tests, the build and the smoke
-# test all passed.
+# Branch protection on main requires the checks lint, test, build and smoke by
+# job name (D64), so renaming or merging those jobs must be matched in the
+# protection settings. The publish condition stays the deployment gate:
+# `:latest` is what production runs, and this workflow refuses to publish
+# unless lint, tests, the build and the smoke test all passed.
 name: ci
 
+# Pushes run only on main (the publish path); every other branch is checked
+# through its pull request. Triggering on every push as well ran the whole
+# workflow twice per PR push — the push run and the pull_request run have
+# different refs, so the concurrency group below could not cancel either.
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Keyed on the branch (the git ref) with cancel-in-progress: two rapid pushes to
