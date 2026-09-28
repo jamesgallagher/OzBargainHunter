@@ -587,3 +587,181 @@ describe('render: the gate banner on every screen (A7, A9)', () => {
     }
   });
 });
+
+// Chunk 6 (prompt 4.5/4.6): the sign-in wizard on screen 9. The wizard is
+// enabled when the gate is open and disabled with the exact 4.5 wording for
+// each disabled reason; the `Cookie expires` row and the retitled legacy
+// paste form are part of the screen. Rendering is read-only (prompt 7):
+// every render asserts the gate row, the event table and the settings are
+// untouched.
+describe('render: screen 9 the sign-in wizard (chunk 6)', () => {
+  async function renderScreen9({ gateRow, gateEvents = [], settings = {}, env = {} } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-wizard-render-'));
+    const store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    setStoreForTest(store);
+    const savedEnv = {};
+    for (const [key, value] of Object.entries(env)) {
+      savedEnv[key] = process.env[key];
+      process.env[key] = value;
+    }
+    try {
+      if (gateRow) store.applyGateTransition(gateRow, gateEvents);
+      for (const [key, value] of Object.entries(settings)) store.setSetting(key, value);
+      const rowBefore = JSON.stringify(store.getGate());
+      const eventsBefore = store.getGateEvents().length;
+      const settingsBefore = JSON.stringify(store.getSettings());
+      const html = renderToStaticMarkup(await ClassifiedsSessionPage());
+      // The page reads getGate(), getGateEvents() and getSetting() — it
+      // never applies lazy gate transitions or writes anything (prompt 7).
+      assert.equal(JSON.stringify(store.getGate()), rowBefore, 'the access_gate row is byte-for-byte unchanged by a render');
+      assert.equal(store.getGateEvents().length, eventsBefore, 'the gate_events row count is unchanged by a render');
+      assert.equal(JSON.stringify(store.getSettings()), settingsBefore, 'no setting is written by a render');
+      return html;
+    } finally {
+      setStoreForTest(null);
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+      for (const [key, saved] of Object.entries(savedEnv)) {
+        if (saved === undefined) delete process.env[key];
+        else process.env[key] = saved;
+      }
+    }
+  }
+
+  function assertWizardDisabled(html) {
+    assert.match(html, /class="wizard-disabled"/, 'the disabled reason is shown');
+    assert.match(html, /id="login-username"[^>]*disabled/, 'the username field is disabled');
+    assert.match(html, /id="login-password"[^>]*disabled/, 'the password field is disabled');
+    assert.match(html, /<button class="btn btn-primary" type="submit" disabled="">Sign in<\/button>/, 'the sign-in button is disabled');
+  }
+
+  test('the wizard is enabled when the gate is open, with the title and the help line', async () => {
+    const html = await renderScreen9();
+    assert.match(html, /<h2 class="card-title">Sign in to OzBargain<\/h2>/, 'the wizard title');
+    assert.ok(html.includes('Your username and password are used once to sign in and are never stored. Only the session cookie is kept.'), 'the wizard help line');
+    assert.doesNotMatch(html, /class="wizard-disabled"/, 'no disabled reason');
+    assert.doesNotMatch(html, /id="login-username"[^>]*disabled/, 'the username field is enabled');
+    assert.doesNotMatch(html, /id="login-password"[^>]*disabled/, 'the password field is enabled');
+    assert.match(html, /<button class="btn btn-primary" type="submit">Sign in<\/button>/, 'the sign-in button is enabled');
+  });
+
+  test('a cooling gate disables the wizard with the 4.5 wording (the cool-off end)', async () => {
+    const sinceIso = new Date().toISOString();
+    const untilIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const html = await renderScreen9({
+      gateRow: { ...defaultGate(), state: 'cooling', rule: 'B2', tier: 2, reason: 'rate limited', since: sinceIso, until_at: untilIso },
+    });
+    assertWizardDisabled(html);
+    assert.ok(html.includes(`OzBargain access is paused or stopped, so sign-in is unavailable until ${formatMelbourne(untilIso)}.`), 'the exact 4.5 wording with the cool-off end');
+  });
+
+  test('a stopped gate disables the wizard with the 4.5 wording (the earliest resume)', async () => {
+    const sinceIso = new Date().toISOString();
+    const minResumeIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const html = await renderScreen9({
+      gateRow: { ...defaultGate(), state: 'stopped', rule: 'B1', tier: 0, reason: 'Cloudflare block', since: sinceIso, min_resume_at: minResumeIso },
+    });
+    assertWizardDisabled(html);
+    assert.ok(html.includes(`OzBargain access is paused or stopped, so sign-in is unavailable until ${formatMelbourne(minResumeIso)}.`), 'the exact 4.5 wording with the earliest resume');
+  });
+
+  test('a stopped gate with no resume instant says "until access is resumed"', async () => {
+    const html = await renderScreen9({
+      gateRow: { ...defaultGate(), state: 'stopped', rule: 'B1', tier: 0, reason: 'Cloudflare block', since: new Date().toISOString() },
+    });
+    assertWizardDisabled(html);
+    assert.ok(html.includes('OzBargain access is paused or stopped, so sign-in is unavailable until access is resumed.'), 'the 4.5 wording without a time');
+  });
+
+  test('a B6-locked account disables the wizard with the 4.5 wording', async () => {
+    const recentAt = new Date(Date.now() - 60 * 1000).toISOString();
+    const olderAt = new Date(Date.now() - 120 * 1000).toISOString();
+    const lockedUntil = new Date(Date.parse(recentAt) + 24 * 60 * 60 * 1000).toISOString();
+    const html = await renderScreen9({
+      settings: {
+        ozb_login_attempts: JSON.stringify([
+          { at: olderAt, outcome: 'validation_error' },
+          { at: recentAt, outcome: 'validation_error' },
+        ]),
+      },
+    });
+    assertWizardDisabled(html);
+    assert.ok(
+      html.includes(`Sign-in is locked until ${formatMelbourne(lockedUntil)} after repeated failed attempts (rule B6). Polling is unaffected.`),
+      'the exact 4.5 B6 wording',
+    );
+  });
+
+  test('an unallowed classifieds URL disables the wizard with the 4.5 wording', async () => {
+    const html = await renderScreen9({ env: { OZB_CLASSIFIEDS_URL: 'https://evil.example.com/classified' } });
+    assertWizardDisabled(html);
+    assert.ok(html.includes('Sign-in is unavailable: the classifieds URL is not an allowed OzBargain address.'), 'the exact 4.5 origin wording');
+  });
+
+  test('the live origin in dev mode disables the wizard with the 4.5 wording', async () => {
+    const html = await renderScreen9({
+      env: {
+        OZB_CLASSIFIEDS_URL: 'https://www.ozbargain.com.au/classified',
+        OZB_DEV_MOCK_TRANSPORT: '1',
+        NODE_ENV: 'development',
+      },
+    });
+    assertWizardDisabled(html);
+    assert.ok(
+      html.includes('Sign-in is unavailable in dev mode while the classifieds URL points at the live site. Run the fixture server with --login.'),
+      'the exact 4.5 dev-mode wording',
+    );
+  });
+
+  test('the Cookie expires row shows the stored expiry, or an em dash when absent', async () => {
+    const withExpiry = await renderScreen9({ settings: { ozb_account_cookie_expires_at: '2026-10-19T00:00:00.000Z' } });
+    assert.match(withExpiry, /<dt>Cookie expires<\/dt>/, 'the row label');
+    assert.match(withExpiry, /<time class="local-time-value" dateTime="2026-10-19T00:00:00.000Z"/, 'the expiry renders as a LocalTime with the ISO instant');
+
+    const without = await renderScreen9();
+    const m = without.match(/<dt>Cookie expires<\/dt><dd>(.*?)<\/dd>/);
+    assert.ok(m, 'the row is present without the setting');
+    assert.equal(m[1], '—', 'an absent expiry renders an em dash');
+  });
+
+  test('the paste form is retitled legacy with the 4.6 help line', async () => {
+    const html = await renderScreen9();
+    assert.match(html, /<h2 class="card-title">Paste a session cookie \(legacy\)<\/h2>/, 'the new title');
+    assert.ok(html.includes('Prefer &quot;Sign in to OzBargain&quot; above. This option will be removed.'), 'the 4.6 help line');
+    assert.match(html, /\/classifieds-session\/set/, 'the legacy form still posts to its own segment');
+  });
+
+  test('S4: rendering screen 9 with a gate row and attempts leaves ozb_login_attempts, access_gate and gate_events unchanged', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-wizard-s4-'));
+    const store = openStore({ path: join(dir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    setStoreForTest(store);
+    try {
+      const sinceIso = new Date().toISOString();
+      const untilIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      // Seed a cooling gate row and a B6-locked attempts record so the render
+      // reads all three (the gate, the events, and the attempts).
+      store.applyGateTransition(
+        { ...defaultGate(), state: 'cooling', rule: 'B2', tier: 2, reason: 'rate limited', since: sinceIso, until_at: untilIso },
+        [],
+      );
+      store.setSetting('ozb_login_attempts', JSON.stringify([
+        { at: new Date(Date.now() - 120 * 1000).toISOString(), outcome: 'validation_error' },
+        { at: new Date(Date.now() - 60 * 1000).toISOString(), outcome: 'validation_error' },
+      ]));
+      // Capture the three values before the render.
+      const attemptsBefore = store.getSetting('ozb_login_attempts');
+      const rowBefore = JSON.stringify(store.getGate());
+      const eventsBefore = store.getGateEvents().length;
+      // Render screen 9 (it reads getGate(), getGateEvents() and getSetting(ozb_login_attempts)).
+      renderToStaticMarkup(await ClassifiedsSessionPage());
+      // A render is read-only: all three are byte-for-byte / count unchanged.
+      assert.equal(store.getSetting('ozb_login_attempts'), attemptsBefore, 'ozb_login_attempts is byte-for-byte unchanged by a render');
+      assert.equal(JSON.stringify(store.getGate()), rowBefore, 'access_gate is byte-for-byte unchanged by a render');
+      assert.equal(store.getGateEvents().length, eventsBefore, 'gate_events count is unchanged by a render');
+    } finally {
+      setStoreForTest(null);
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,0 +1,984 @@
+/**
+ * The `POST /classifieds-session/login` route, end to end (card AC 5, chunk 6).
+ *
+ * One real application process (the built standalone server) drives one real
+ * Chromium against a loopback fixture that plays the OzBargain login page.
+ * Every outcome the route can return is exercised against the shared database
+ * the application reads and writes, and the credential sentinel — a username,
+ * a password, and a session cookie that stand in for the user's real
+ * secrets — is asserted absent from every surface it must not reach: the
+ * response, the application's own output, and the database bytes. The
+ * sentinel cookie is additionally asserted present, and only present, in the
+ * `ok` outcome, where it is the stored session.
+ *
+ * The scenarios run in a fixed order against one application instance. The
+ * fixture is a dedicated server per scenario, bound to the same loopback
+ * port: the previous scenario's fixture is closed before the next is bound,
+ * so the application's fixed `OZB_CLASSIFIEDS_URL` always points at the
+ * scenario's fixture. The gate, the failures table, and the login-attempt and
+ * session settings are reset between scenarios so each outcome is judged on
+ * its own; the gate-event table is not clearable, so its assertions are the
+ * delta across a scenario and the most recent event's fields.
+ *
+ * Time assertions compare against the real clock at assertion time with a
+ * tolerance, not the test store's fixed clock: the application's throttle,
+ * gate, and cookie-expiry math all run on `systemClock()` over the shared
+ * database.
+ */
+
+import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { collectPageErrors, launchBrowser, newAuthedContext } from '../support/browser.js';
+import { createFixtureServer } from '../../scripts/fixture-server.mjs';
+import { startJwksServer } from '../support/jwks.js';
+import { generateCsrfToken } from '../../lib/csrf.js';
+import { openTempStore } from '../support/integration.js';
+import { ensureBuild, freePort, startAppServer } from '../support/app-server.js';
+
+const SENTINEL_USER = 'SENTINEL_USER_5d1c';
+const SENTINEL_PASS = 'SENTINEL_PASS_8e2f';
+const SENTINEL_COOKIE = 'SENTINEL_COOKIE_3a9b';
+const TEAM_DOMAIN = 'login-e2e.cloudflareaccess.com';
+const AUD = 'login-e2e-aud';
+const EMAIL = 'james@example.com';
+const HEALTHCHECK_SECRET = 'login-e2e-healthcheck-secret';
+const CSRF_SECRET = 'login-e2e-csrf-secret';
+// A private copy of the store's default gate row: it is not exported, and the
+// reset writes it verbatim.
+const OPEN_GATE_ROW = {
+  id: 1,
+  state: 'open',
+  rule: null,
+  tier: 0,
+  reason: null,
+  since: null,
+  until_at: null,
+  min_resume_at: null,
+  consecutive_b2: 0,
+  failing_cycles: 0,
+  b5_tier: 0,
+  probe_used: 0,
+  probe_granted_at: null,
+};
+// The fixture's PHPSESSID Max-Age, 90 days, in ms.
+const COOKIE_MAX_AGE_MS = 7_776_000 * 1000;
+// The application and the test process are separate processes on the real
+// clock; a generous tolerance absorbs their skew.
+const TIME_TOLERANCE_MS = 60_000;
+
+describe('integration: POST /classifieds-session/login (end to end)', () => {
+  let fixturePort;
+  let jwks;
+  let temp;
+  let app;
+  let token;
+  let csrf;
+  // The UI scenario drives the real sign-in wizard in a real Chromium (W10).
+  let browser;
+  let context;
+  let page;
+  let collectors;
+  let nonLoopbackRequests;
+
+  before(async () => {
+    fixturePort = await freePort();
+    jwks = await startJwksServer({ kid: 'login-e2e' });
+    temp = openTempStore('ozb-login-e2e-');
+
+    const env = {
+      OZB_DB_PATH: temp.dbPath,
+      OZB_SNAPSHOT_PATH: join(temp.dir, 'snapshot.db'),
+      OZB_HEALTHCHECK_SECRET: HEALTHCHECK_SECRET,
+      OZB_CSRF_SECRET: CSRF_SECRET,
+      CF_ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
+      CF_ACCESS_AUD: AUD,
+      CF_JWKS_URL: jwks.url,
+      OZB_CLASSIFIEDS_URL: `http://127.0.0.1:${fixturePort}/classified`,
+      OZB_PUBLIC_URL: 'http://127.0.0.1:1',
+      OZB_POLL_INTERVAL_SECONDS: '300',
+    };
+
+    await ensureBuild();
+    app = await startAppServer({ env });
+    token = await jwks.sign({ email: EMAIL }, { aud: AUD, iss: `https://${TEAM_DOMAIN}`, exp: '2h' });
+    csrf = await generateCsrfToken(CSRF_SECRET);
+
+    // The UI scenario (W10) drives the real sign-in wizard in a real Chromium,
+    // authenticated the same way the app authenticates (the Access JWT in the
+    // assertion header), with a loopback-only route guard.
+    browser = await launchBrowser();
+    ({ context, nonLoopbackRequests } = await newAuthedContext(browser, { token, origin: app.origin }));
+    page = await context.newPage();
+    collectors = collectPageErrors(page);
+  });
+
+  after(async () => {
+    await context?.close();
+    await browser?.close();
+    await app?.stop();
+    temp?.close();
+    await jwks.close();
+  });
+
+  /**
+   * Reset the shared database to a clean slate for the next scenario: the
+   * login-attempt record (the application's throttle and B6 math run on the
+   * real clock, so a stale record would leak across scenarios), the session
+   * settings, the failures table, and the gate row.
+   */
+  function resetState() {
+    temp.store.deleteSetting('ozb_login_attempts');
+    temp.store.deleteSetting('ozb_account_cookie');
+    temp.store.deleteSetting('ozb_account_cookie_set_at');
+    temp.store.deleteSetting('ozb_account_cookie_expires_at');
+    temp.store.deleteSetting('classifieds_last_uid');
+    temp.store.deleteSetting('classifieds_last_confirmed_at');
+    temp.store.clearFailures();
+    temp.store.mutateGate(() => ({ gate: { ...OPEN_GATE_ROW }, events: [] }));
+  }
+
+  /**
+   * Run `fn` against a dedicated fixture for `scenario`, bound to the fixed
+   * loopback port. The previous scenario's fixture is closed before this one
+   * binds, so the application's fixed `OZB_CLASSIFIEDS_URL` always reaches
+   * the current scenario's fixture.
+   */
+  async function withFixture(scenario, fn) {
+    const login = { username: SENTINEL_USER, password: SENTINEL_PASS, scenario };
+    if (scenario === 'ok') login.sessionCookieValue = SENTINEL_COOKIE;
+    const server = createFixtureServer({ login, port: fixturePort });
+    await server.start();
+    try {
+      return await fn(server);
+    } finally {
+      await server.close();
+    }
+  }
+
+  /**
+   * The login requests a fixture served, in order: method, path, status.
+   * Timeline (non-login) entries carry no `scenario` field, so filtering on
+   * it isolates the login flow.
+   */
+  function loginSequence(server) {
+    return server.requests
+      .filter((e) => e.scenario !== undefined)
+      .map((e) => [e.method, e.url, e.status]);
+  }
+
+  /**
+   * Drive the route the way the UI does: a urlencoded body with the CSRF
+   * token in a `_csrf` field and the Access JWT in the assertion header.
+   * Returns the status, the raw text, and the parsed JSON (null for the
+   * plain-text 401/403/400 responses).
+   */
+  async function postLogin({
+    username = SENTINEL_USER,
+    password = SENTINEL_PASS,
+    jwt = token,
+    csrfToken = csrf,
+  } = {}) {
+    const body = new URLSearchParams();
+    body.set('username', username);
+    body.set('password', password);
+    if (csrfToken) body.set('_csrf', csrfToken);
+    const headers = { 'content-type': 'application/x-www-form-urlencoded' };
+    if (jwt) headers['Cf-Access-Jwt-Assertion'] = jwt;
+    const res = await fetch(`${app.origin}/classifieds-session/login`, {
+      method: 'POST',
+      headers,
+      body: body.toString(),
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // a plain-text 401/403/400 response
+    }
+    return { status: res.status, text, json, headers: res.headers };
+  }
+
+  /** The bytes of a database file and its WAL and SHM sidecars, if present. */
+  function dbFileBytes(path) {
+    let bytes = '';
+    for (const suffix of ['', '-wal', '-shm']) {
+      const p = path + suffix;
+      if (existsSync(p)) bytes += readFileSync(p, 'utf8');
+    }
+    return bytes;
+  }
+
+  /**
+   * The database bytes: the main file, the WAL, and the SHM, for both the
+   * main store and the snapshot store (a deleted setting's bytes may linger
+   * in any of them).
+   */
+  function dbBytes() {
+    return dbFileBytes(temp.dbPath) + dbFileBytes(join(temp.dir, 'snapshot.db'));
+  }
+
+  /** The gate-event count, for a delta assertion across a scenario. */
+  function gateEventCount() {
+    return temp.store.getGateEvents({ limit: 1000 }).length;
+  }
+
+  /** Assert two real-clock instants agree within the tolerance. */
+  function assertNear(actualMs, expectedMs, what) {
+    assert.ok(
+      Math.abs(actualMs - expectedMs) <= TIME_TOLERANCE_MS,
+      `${what}: expected ${new Date(expectedMs).toISOString()} ± ${TIME_TOLERANCE_MS}ms, got ${new Date(actualMs).toISOString()}`,
+    );
+  }
+
+  /**
+   * Assert the credential sentinel never reached a surface it must not. The
+   * username and password are byte-checked in the response, the application
+   * output, and the database in every scenario (the attempt record carries no
+   * credentials, so the database check is safe everywhere); when `headers` is
+   * given they are also byte-checked in the response headers. The cookie is
+   * byte-checked in the response and the application output in every
+   * scenario (and in the headers when given); in the database it is asserted
+   * present and only present in the `ok` outcome, and only its logical
+   * absence (the setting is null) in the others, since a deleted setting's
+   * bytes may linger in the WAL or SHM sidecar of either the main store or
+   * the snapshot store.
+   */
+  function assertHygiene(text, { expectCookieInDb = false, headers = null } = {}) {
+    const sources = [
+      ['the response', text],
+      ['the application output', app.output()],
+      ['the database', dbBytes()],
+    ];
+    for (const [name, content] of sources) {
+      assert.ok(!content.includes(SENTINEL_USER), `the username sentinel leaked into ${name}`);
+      assert.ok(!content.includes(SENTINEL_PASS), `the password sentinel leaked into ${name}`);
+    }
+    assert.ok(!text.includes(SENTINEL_COOKIE), 'the cookie sentinel leaked into the response');
+    assert.ok(!app.output().includes(SENTINEL_COOKIE), 'the cookie sentinel leaked into the application output');
+    if (headers) {
+      const headerDump = [...headers.entries()].map(([k, v]) => `${k}: ${v}`).join('\n');
+      assert.ok(!headerDump.includes(SENTINEL_USER), 'the username sentinel leaked into the response headers');
+      assert.ok(!headerDump.includes(SENTINEL_PASS), 'the password sentinel leaked into the response headers');
+      assert.ok(!headerDump.includes(SENTINEL_COOKIE), 'the cookie sentinel leaked into the response headers');
+    }
+    if (expectCookieInDb) {
+      assert.equal(
+        temp.store.getSetting('ozb_account_cookie'),
+        `PHPSESSID=${SENTINEL_COOKIE}`,
+        'the session cookie is stored under ozb_account_cookie (the full name=value header)',
+      );
+      assert.ok(dbBytes().includes(SENTINEL_COOKIE), 'the stored cookie is visible in the database');
+    } else {
+      assert.equal(
+        temp.store.getSetting('ozb_account_cookie'),
+        null,
+        'no session cookie is stored',
+      );
+    }
+  }
+
+  it('rejects an unauthenticated request with 401 before the CSRF check', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const res = await postLogin({ jwt: null });
+    assert.equal(res.status, 401);
+    // The middleware rejects before the route's CSRF check; the body is JSON.
+    assert.deepEqual(res.json, { error: 'unauthorized' });
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('rejects an authenticated request with no CSRF token with 403', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const res = await postLogin({ csrfToken: null });
+    assert.equal(res.status, 403);
+    assert.equal(res.text, 'csrf');
+    assert.equal(res.json, null);
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('rejects invalid input with 400 before the browser is launched', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const cases = [
+      [{ username: '', password: 'x' }, 'Username and password are required.'],
+      [{ username: 'x', password: '' }, 'Username and password are required.'],
+      [{ username: 'a'.repeat(61), password: 'x' }, 'Username is too long.'],
+      [{ username: 'user@example.com', password: 'x' }, 'Use your OzBargain username, not your email address.'],
+      [{ username: `${SENTINEL_USER}@x`, password: 'x' }, 'Use your OzBargain username, not your email address.'],
+      [{ username: 'x', password: 'p'.repeat(257) }, 'Password is too long.'],
+    ];
+    for (const [body, message] of cases) {
+      const res = await postLogin({ ...body });
+      assert.equal(res.status, 400, message);
+      assert.equal(res.text, message);
+      assertHygiene(res.text, { headers: res.headers });
+    }
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+  });
+
+  it('logs in end to end and stores the session (outcome ok)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('ok', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.json).sort(), ['expiresAt', 'outcome', 'uid']);
+    assert.equal(res.json.outcome, 'ok');
+    assert.equal(res.json.uid, 226301);
+    assertNear(new Date(res.json.expiresAt).getTime(), Date.now() + COOKIE_MAX_AGE_MS, 'expiresAt');
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 302],
+        ['GET', '/user/login', 302],
+        ['GET', '/user/226301', 200],
+        ['GET', '/classified', 200],
+      ],
+      'the login flow walked the form, the submit, the profile, and the classifieds page',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assert.equal(temp.store.getFailures().length, 0, 'no failures row');
+    assert.equal(temp.store.getSetting('ozb_account_cookie'), `PHPSESSID=${SENTINEL_COOKIE}`);
+    assert.equal(temp.store.getSetting('classifieds_last_uid'), '226301');
+    assert.ok(temp.store.getSetting('ozb_account_cookie_set_at'), 'the cookie-set timestamp is stored');
+    assert.ok(temp.store.getSetting('classifieds_last_confirmed_at'), 'the confirmation timestamp is stored');
+    const expiresAtSetting = temp.store.getSetting('ozb_account_cookie_expires_at');
+    assert.ok(expiresAtSetting, 'the cookie expiry is stored');
+    assertNear(
+      new Date(expiresAtSetting).getTime(),
+      Date.now() + COOKIE_MAX_AGE_MS,
+      'ozb_account_cookie_expires_at',
+    );
+    assertHygiene(res.text, { expectCookieInDb: true });
+  });
+
+  it('reports a wrong password as bad_credentials without feeding the gate', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('ok', async (server) => ({
+      res: await postLogin({ password: 'SENTINEL_WRONG_PASS' }),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'bad_credentials' });
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 200],
+      ],
+      'the form loaded and the submit answered an in-page error',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assert.equal(temp.store.getFailures().length, 0, 'no failures row');
+    assertHygiene(res.text);
+  });
+
+  it('reports a token-invalid submit as validation_error without feeding the gate', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('validation_error', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'validation_error' });
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 200],
+      ],
+      'the form loaded and the submit answered an in-page error',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('stops the gate on a challenge at the login page and sends the gate email', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('challenge_login_page', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'cloudflare_block' });
+    assert.deepEqual(
+      loginSequence(server),
+      [['GET', '/user/login', 403]],
+      'the login page itself was the challenge',
+    );
+    const gate = temp.store.getGate();
+    assert.equal(gate.state, 'stopped');
+    assert.equal(gate.rule, 'B1');
+    assertNear(new Date(gate.min_resume_at).getTime(), Date.now() + 24 * 3600 * 1000, 'min_resume_at');
+    assert.equal(gateEventCount(), gateEvents + 1, 'one gate event');
+    const event = temp.store.getGateEvents({ limit: 1000 })[0];
+    assert.equal(event.rule, 'B1');
+    assert.equal(event.to_state, 'stopped');
+    assert.equal(event.email_status, 'not_configured', 'the gate email ran with no provider configured');
+    const failures = temp.store.getFailures();
+    assert.equal(failures.length, 1, 'one failures row');
+    assert.equal(failures[0].response_class, 'cloudflare_block');
+    assert.match(failures[0].body, /login: Cloudflare challenge at login_form/);
+    assertHygiene(res.text);
+  });
+
+  it('cools the gate on a rate limit at the login page and runs the gate-email sweep (tier 1 is policy-skipped)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('rate_limit_login_page', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'rate_limited' });
+    assert.deepEqual(
+      loginSequence(server),
+      [['GET', '/user/login', 429]],
+      'the login page itself was the rate limit',
+    );
+    const gate = temp.store.getGate();
+    assert.equal(gate.state, 'cooling');
+    assert.equal(gate.rule, 'B2');
+    assert.equal(gate.tier, 1);
+    assertNear(new Date(gate.until_at).getTime(), Date.now() + 900 * 1000, 'until_at');
+    assert.equal(gateEventCount(), gateEvents + 1, 'one gate event');
+    const event = temp.store.getGateEvents({ limit: 1000 })[0];
+    // A cool (B2) is transient and auto-resolving, so `shouldNotify` is false
+    // and the email is skipped (unlike a B1 stop, which is always notified).
+    assert.equal(event.email_status, 'skipped', 'a cool is not notifiable, so the email is skipped');
+    assert.equal(temp.store.getFailures().length, 0, 'no failures row');
+    assertHygiene(res.text);
+  });
+
+  it('refuses a login while the gate is stopped, with the resume time (gate_closed)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const minResumeAtIso = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    temp.store.mutateGate(() => ({
+      gate: {
+        ...OPEN_GATE_ROW,
+        state: 'stopped',
+        rule: 'B1',
+        reason: 'cloudflare_block on login',
+        since: new Date().toISOString(),
+        min_resume_at: minResumeAtIso,
+      },
+      events: [],
+    }));
+    const res = await postLogin();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(res.json.outcome, 'gate_closed');
+    assert.equal(res.json.retryAt, minResumeAtIso, 'retryAt is the gate min_resume_at');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event (a row-only write)');
+    assertHygiene(res.text);
+  });
+
+  it('reports a submit that never answers as a timeout', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('hang_submit', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    // Playwright's `waitForResponse` (30 s default) fires before the app's
+    // 45 s hard timeout; that step timeout is reported as a timeout.
+    assert.deepEqual(res.json, { outcome: 'timeout' });
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 0],
+      ],
+      'the form loaded and the submit never answered',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assert.equal(temp.store.getFailures().length, 0, 'no failures row');
+    assertHygiene(res.text);
+  });
+
+  it('reports a logged-in session that cannot see the classifieds page as not_entitled', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('not_entitled', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'not_entitled' });
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 302],
+        ['GET', '/user/login', 302],
+        ['GET', '/user/226301', 200],
+        ['GET', '/classified', 403],
+      ],
+      'the login succeeded but the classifieds page refused the session',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('reports a 500 on the submit as transient', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('server_error_submit', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'transient' });
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 500],
+      ],
+      'the form loaded and the submit answered a server error',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('reports a successful login with no usable session cookie as login_failed', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { res, server } = await withFixture('no_session_cookie', async (server) => ({
+      res: await postLogin(),
+      server,
+    }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { outcome: 'login_failed' });
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 302],
+        ['GET', '/user/login', 302],
+        ['GET', '/user/226301', 200],
+        ['GET', '/classified', 200],
+      ],
+      'the page loaded; the session-cookie selection is what failed',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text);
+  });
+
+  it('refuses a second login after a Cloudflare stop (gate_closed precedes the throttle)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const { first, second, server } = await withFixture('challenge_login_page', async (server) => {
+      const first = await postLogin();
+      const second = await postLogin();
+      return { first, second, server };
+    });
+    // The first login hits the challenge and stops the gate (B1). The exact
+    // min_resume_at depends on the gate's (unclearable) event history, so it
+    // is not asserted to a fixed value here.
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.json, { outcome: 'cloudflare_block' });
+    const gate = temp.store.getGate();
+    assert.equal(gate.state, 'stopped');
+    assert.equal(gate.rule, 'B1');
+    assert.ok(gate.min_resume_at, 'the stopped gate has a min_resume_at');
+    // The second login is refused at the gate check (step 4), which precedes
+    // the throttle (step 5) and the browser (step 6): gate_closed with the
+    // gate's min_resume_at, and no second fixture hit.
+    assert.equal(second.status, 200);
+    assert.deepEqual(Object.keys(second.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(second.json.outcome, 'gate_closed');
+    assert.equal(second.json.retryAt, gate.min_resume_at, 'retryAt is the gate min_resume_at');
+    assert.deepEqual(
+      loginSequence(server),
+      [['GET', '/user/login', 403]],
+      'only the first login reached the fixture; the second was refused at the gate',
+    );
+    assert.equal(gateEventCount(), gateEvents + 1, 'one gate event (the first login only)');
+    assertHygiene(first.text, { headers: first.headers });
+    assertHygiene(second.text, { headers: second.headers });
+  });
+
+  it('throttles a second login within 30s of the first (throttled)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const t1 = Date.now();
+    const { first, second, server } = await withFixture('ok', async (server) => {
+      const first = await postLogin();
+      const second = await postLogin();
+      return { first, second, server };
+    });
+    assert.equal(first.status, 200);
+    assert.equal(first.json.outcome, 'ok');
+    // The second login is refused at the throttle (step 5): the most recent
+    // attempt (the first, now < 30s old) is within the 30s minimum gap.
+    assert.equal(second.status, 200);
+    assert.deepEqual(Object.keys(second.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(second.json.outcome, 'throttled');
+    assertNear(new Date(second.json.retryAt).getTime(), t1 + 30 * 1000, 'retryAt');
+    assert.deepEqual(
+      loginSequence(server),
+      [
+        ['GET', '/user/login', 200],
+        ['POST', '/user/login', 302],
+        ['GET', '/user/login', 302],
+        ['GET', '/user/226301', 200],
+        ['GET', '/classified', 200],
+      ],
+      'only the first login reached the fixture; the second was refused at the throttle',
+    );
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    // The first login is `ok` and stores the cookie, so it is still present
+    // when the second is refused at the throttle.
+    assertHygiene(first.text, { headers: first.headers, expectCookieInDb: true });
+    assertHygiene(second.text, { headers: second.headers, expectCookieInDb: true });
+  });
+
+  it('locks sign-in after two validation errors in 24h (locked, B6)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const nowMs = Date.now();
+    const t1 = new Date(nowMs - 120000).toISOString();
+    const t2 = new Date(nowMs - 60000).toISOString();
+    temp.store.setSetting(
+      'ozb_login_attempts',
+      JSON.stringify([{ at: t1, outcome: 'validation_error' }, { at: t2, outcome: 'validation_error' }]),
+    );
+    // No fixture is needed: the login is refused at the throttle check
+    // (step 5, B6 outranks the throttle) before the browser (step 6).
+    const res = await postLogin();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(res.json.outcome, 'locked');
+    // The threshold-reaching attempt is the second validation_error (t2); the
+    // lock lasts until t2 + 24h.
+    assertNear(new Date(res.json.retryAt).getTime(), (nowMs - 60000) + 24 * 3600 * 1000, 'retryAt');
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text, { headers: res.headers });
+  });
+
+  it('signs in through the real wizard in a real browser (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      // The page has three submit buttons (the wizard "Sign in", the toggle
+      // "Save", the legacy set-cookie "Set session"); select by role + name.
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      const success = page.locator('.async-form-success');
+      await success.waitFor();
+      assert.match(
+        await success.innerText(),
+        /Signed in\. Classifieds session saved for uid 226301\./,
+      );
+      // The session is stored server-side; the inputs are cleared by the
+      // wizard's form.reset() and never restored.
+      assert.equal(temp.store.getSetting('ozb_account_cookie'), `PHPSESSID=${SENTINEL_COOKIE}`);
+      assert.equal(temp.store.getSetting('classifieds_last_uid'), '226301');
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('shows timed progress while the login request runs (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      // The fixture has no delay option, so a page-level route delays the
+      // login response ~1.5s; it takes precedence over the context guard and
+      // passes through to it via route.continue().
+      await page.route('**/classifieds-session/login', async (route) => {
+        await new Promise((r) => setTimeout(r, 1500));
+        await route.continue();
+      });
+      try {
+        await page.goto('/classifieds-session');
+        await page.locator('input[name="username"]').fill(SENTINEL_USER);
+        await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+        await page.getByRole('button', { name: 'Sign in' }).click();
+        const steps = page.locator('.login-wizard ol');
+        await steps.waitFor();
+        assert.equal(await steps.locator('li').count(), 3, 'three progress steps');
+        assert.equal(
+          await steps.locator('li[aria-current="step"]').count(),
+          1,
+          'exactly one step is current',
+        );
+        const pendingButton = page.getByRole('button', { name: 'Signing in…' });
+        await pendingButton.waitFor();
+        assert.ok(await pendingButton.isDisabled(), 'the button is disabled while pending');
+        // Wait for the login to complete before the next scenario: the route
+        // refuses a second login while one is running.
+        await page.locator('.async-form-success').waitFor();
+      } finally {
+        await page.unroute('**/classifieds-session/login');
+      }
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('clears the credential fields and stores nothing in browser storage (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await page.locator('.async-form-success').waitFor();
+      // The wizard clears both fields on every submit (form.reset()) and
+      // never restores them.
+      assert.equal(await page.locator('input[name="username"]').inputValue(), '');
+      assert.equal(await page.locator('input[name="password"]').inputValue(), '');
+      // Nothing is kept in browser storage: the theme bootstrap only reads
+      // localStorage, it never writes.
+      assert.deepEqual(
+        await page.evaluate(() => [localStorage.length, sessionStorage.length]),
+        [0, 0],
+        'nothing is stored in the browser',
+      );
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('shows the session status list after sign-in (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await page.locator('.async-form-success').waitFor();
+      // The refresh re-renders the status list with the stored session; wait
+      // for the text, not a sleep.
+      const status = page.locator('.status-details');
+      await status.getByText('Valid', { exact: true }).waitFor();
+      await status.getByText('226301', { exact: true }).waitFor();
+      // The Cookie expires row shows the stored expiry in Melbourne time, not
+      // the placeholder.
+      const cookieExpires = (await status.locator('dd').nth(3).innerText()).trim();
+      assert.notEqual(cookieExpires, '—', 'the cookie expiry is shown, not the placeholder');
+      // `[A-Za-z]{3,4}`: en-AU medium style spells September "Sept" (4 letters).
+      assert.match(cookieExpires, /\d{1,2} [A-Za-z]{3,4} \d{4}/, 'the cookie expiry is a Melbourne date');
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('fits a 375px phone in light and dark themes (UI)', async () => {
+    resetState();
+    await page.setViewportSize({ width: 375, height: 800 });
+    try {
+      await page.goto('/classifieds-session');
+      const card = page.locator('.login-wizard');
+      const backgroundByTheme = {};
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((t) => {
+          document.documentElement.dataset.theme = t;
+        }, theme);
+        backgroundByTheme[theme] = await card.evaluate((el) => getComputedStyle(el).backgroundColor);
+        const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+        assert.ok(
+          scrollWidth <= 375,
+          `the page fits a 375px phone in the ${theme} theme (scrollWidth ${scrollWidth})`,
+        );
+      }
+      assert.notEqual(
+        backgroundByTheme.light,
+        backgroundByTheme.dark,
+        'the wizard card background differs between the light and dark themes',
+      );
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content());
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+  });
+
+  it('offers to turn on classifieds polling after sign-in (UI)', async () => {
+    resetState();
+    // resetState does not clear the toggle, so start with it unset.
+    temp.store.deleteSetting('classifieds_enabled');
+    const gateEvents = gateEventCount();
+    await withFixture('ok', async () => {
+      await page.goto('/classifieds-session');
+      assert.equal(
+        await page.locator('.wizard-polling-off').count(),
+        0,
+        'no polling offer before a sign-in',
+      );
+      await page.locator('input[name="username"]').fill(SENTINEL_USER);
+      await page.locator('input[name="password"]').fill(SENTINEL_PASS);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await page.locator('.async-form-success').waitFor();
+      // The wizard offers to turn on polling (classifieds_enabled was unset).
+      const offer = page.locator('.wizard-polling-off');
+      await offer.waitFor();
+      assert.match(await offer.innerText(), /Classifieds polling is off\./);
+      await page.getByRole('button', { name: 'Turn on classifieds polling' }).click();
+      // The offer is gone after the refresh (polling is now enabled).
+      await offer.waitFor({ state: 'hidden' });
+      // The toggle wrote classifieds_enabled = '1' and preserved the live uid.
+      assert.equal(temp.store.getSetting('classifieds_enabled'), '1');
+      assert.equal(temp.store.getSetting('classifieds_last_uid'), '226301');
+      // The switch is checked on a fresh render. The checkbox is uncontrolled
+      // (`defaultChecked`), so the wizard's client-side refresh does not
+      // re-apply it; a full reload re-mounts it from the stored setting.
+      await page.reload();
+      assert.ok(await page.locator('#classifieds-enabled').isChecked(), 'the toggle switch is checked');
+      assert.equal(temp.store.getGate().state, 'open');
+      assert.equal(gateEventCount(), gateEvents, 'no gate event');
+      collectors.assertNone();
+      assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+      assertHygiene(await page.content(), { expectCookieInDb: true });
+    });
+  });
+
+  it('disables the wizard while the gate is stopped (UI)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const minResumeAtIso = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    temp.store.mutateGate(() => ({
+      gate: {
+        ...OPEN_GATE_ROW,
+        state: 'stopped',
+        rule: 'B1',
+        reason: 'cloudflare_block on login',
+        since: new Date().toISOString(),
+        min_resume_at: minResumeAtIso,
+      },
+      events: [],
+    }));
+    await page.goto('/classifieds-session');
+    assert.ok(await page.locator('input[name="username"]').isDisabled(), 'the username input is disabled');
+    assert.ok(await page.locator('input[name="password"]').isDisabled(), 'the password input is disabled');
+    assert.ok(await page.getByRole('button', { name: 'Sign in' }).isDisabled(), 'the Sign in button is disabled');
+    const statusLine = page.locator('p.wizard-disabled');
+    await statusLine.waitFor();
+    // `[A-Za-z]{3,4}`: en-AU medium style spells September "Sept" (4 letters).
+    assert.match(
+      await statusLine.innerText(),
+      /OzBargain access is paused or stopped, so sign-in is unavailable until \d{1,2} [A-Za-z]{3,4} \d{4}/,
+      'the fixed reason line with the Melbourne resume time',
+    );
+    // Reset the gate to open for the next scenario.
+    temp.store.mutateGate(() => ({ gate: { ...OPEN_GATE_ROW }, events: [] }));
+    assert.equal(gateEventCount(), gateEvents, 'no gate event (row-only writes)');
+    collectors.assertNone();
+    assert.deepEqual(nonLoopbackRequests, [], 'no non-loopback request was made');
+    assertHygiene(await page.content());
+  });
+
+  it('throttles a login when three attempts fall inside the 15-minute window (throttled)', async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const nowMs = Date.now();
+    const t1 = new Date(nowMs - 10 * 60000).toISOString();
+    const t2 = new Date(nowMs - 5 * 60000).toISOString();
+    const t3 = new Date(nowMs - 2 * 60000).toISOString();
+    temp.store.setSetting(
+      'ozb_login_attempts',
+      JSON.stringify([
+        { at: t1, outcome: 'bad_credentials' },
+        { at: t2, outcome: 'bad_credentials' },
+        { at: t3, outcome: 'bad_credentials' },
+      ]),
+    );
+    // No fixture: the login is refused at the throttle check (step 5) before
+    // the browser (step 6). B6 does not trigger (3 < 5) and the 30s gap
+    // passes (the last attempt is 2 minutes old).
+    const res = await postLogin();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.json).sort(), ['outcome', 'retryAt']);
+    assert.equal(res.json.outcome, 'throttled');
+    // The 15-minute window is full (three attempts in the last 15 minutes);
+    // retryAt is the oldest in-window attempt + 15 minutes.
+    assertNear(new Date(res.json.retryAt).getTime(), nowMs - 10 * 60000 + 15 * 60000, 'retryAt');
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    assertHygiene(res.text, { headers: res.headers });
+  });
+
+  /**
+   * Count the Chromium processes on the machine (Linux only). The UI scenario's
+   * own Chromium is in both the baseline and the after count, so only the
+   * application's login Chromium is expected to leave; the delta approach
+   * asserts the app's browser is closed after the login completes.
+   */
+  function chromiumProcessCount() {
+    return new Promise((resolve) => {
+      execFile('pgrep', ['-c', '-f', 'chrome'], (err, stdout) => {
+        resolve(err ? 0 : Number.parseInt(String(stdout).trim(), 10) || 0);
+      });
+    });
+  }
+
+  it('closes the login browser after the login completes (Linux only)', { skip: process.platform !== 'linux' }, async () => {
+    resetState();
+    const gateEvents = gateEventCount();
+    const baseline = await chromiumProcessCount();
+    const { res } = await withFixture('ok', async () => ({ res: await postLogin() }));
+    assert.equal(res.status, 200);
+    assert.equal(res.json.outcome, 'ok');
+    // The application's login Chromium is closed when the login completes;
+    // poll until the process count returns to the baseline (the UI scenario's
+    // own Chromium is in both counts, so only the app's browser is expected
+    // to leave).
+    let count = await chromiumProcessCount();
+    for (let i = 0; i < 20 && count > baseline; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      count = await chromiumProcessCount();
+    }
+    assert.ok(count <= baseline, `the login browser is still running: ${count} chrome processes, baseline ${baseline}`);
+    assert.equal(temp.store.getGate().state, 'open');
+    assert.equal(gateEventCount(), gateEvents, 'no gate event');
+    // The login completed `ok`, so the session cookie is stored; assert it is
+    // present (the full name=value header) rather than absent.
+    assertHygiene(res.text, { expectCookieInDb: true });
+  });
+});

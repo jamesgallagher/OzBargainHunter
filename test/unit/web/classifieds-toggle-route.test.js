@@ -91,9 +91,10 @@ describe('route: /classifieds-session/toggle re-gates and applies its change', (
   });
 
   test('a valid JWT + CSRF enabling re-arms the session and persists the setting', async () => {
-    // Seed a stale expiry latch and a cached validator so the re-arm is
-    // observable (the store is shared across tests).
-    store.setSetting('classifieds_last_uid', '226301');
+    // Seed the stale expiry latch ('0' = latched as expired) and a cached
+    // validator so the re-arm is observable (the store is shared across
+    // tests).
+    store.setSetting('classifieds_last_uid', '0');
     store.setFeedState(CLASSIFIEDS_URL, '"some-etag"', 'some-modified');
 
     const res = await togglePost(await authedFormRequest('https://app.example.com/classifieds-session/toggle', { enabled: '1' }));
@@ -104,6 +105,18 @@ describe('route: /classifieds-session/toggle re-gates and applies its change', (
     assert.equal(store.getSetting('classifieds_last_uid'), null, 'the stale expiry latch is cleared');
     const feedState = store.getFeedState(CLASSIFIEDS_URL);
     assert.equal(feedState.etag, null, 'the cached validator is re-armed (etag cleared)');
+  });
+
+  test('a live non-zero uid survives a turn-on (only the expiry latch is cleared)', async () => {
+    store.setSetting('classifieds_last_uid', '226301');
+    store.setFeedState(CLASSIFIEDS_URL, '"some-etag"', 'some-modified');
+
+    const res = await togglePost(await authedFormRequest('https://app.example.com/classifieds-session/toggle', { enabled: '1' }));
+    assert.equal(res.status, 200);
+    assert.equal(store.getSetting('classifieds_enabled'), '1');
+    assert.equal(store.getSetting('classifieds_last_uid'), '226301', 'a live uid survives a turn-on');
+    const feedState = store.getFeedState(CLASSIFIEDS_URL);
+    assert.equal(feedState.etag, null, 'the cached validator is still re-armed (etag cleared)');
   });
 
   test('a valid JWT + CSRF unchecking writes the setting off and clears nothing', async () => {

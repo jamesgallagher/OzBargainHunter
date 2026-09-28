@@ -358,6 +358,59 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.browsers[0].isConnected(), false);
   });
 
+  it('a waitForResponse TimeoutError is a timeout, not a browser_error', async (t) => {
+    const ctx = await runScenario('ok', {
+      launchBrowser: async () => {
+        // A fake page that gets through the form and fills the fields, then
+        // lets the submit's `waitForResponse` time out on its own (Playwright's
+        // default 30 s timeout) — before the hard timeout — with a
+        // `TimeoutError`.
+        const fakeResponse = {
+          status: () => 200,
+          headers: () => ({}),
+          text: async () => '',
+        };
+        let evaluateCalls = 0;
+        const page = {
+          goto: async () => fakeResponse,
+          // Call 1 is the challenge-title check (classifyStep); call 2 is the
+          // form-present check.
+          evaluate: async () => {
+            evaluateCalls += 1;
+            return evaluateCalls === 2;
+          },
+          locator: () => ({
+            fill: async () => {},
+            first: () => ({ click: async () => {} }),
+            click: async () => {},
+          }),
+          waitForResponse: async () => {
+            const err = new Error('Timeout 30000ms exceeded.');
+            err.name = 'TimeoutError';
+            throw err;
+          },
+          waitForLoadState: async () => {},
+        };
+        const context = {
+          route: async () => {},
+          newPage: async () => page,
+        };
+        return {
+          version: () => '123.0.0.0',
+          newContext: async () => context,
+          close: async () => {},
+          isConnected: () => false,
+        };
+      },
+    });
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'timeout');
+    assert.ok(
+      ctx.logLines.some((l) => l.includes('timeout (TimeoutError)')),
+      'the log names the timeout and the error name',
+    );
+  });
+
   it('a throwing log sink still produces a resolved outcome, with the browser closed', async (t) => {
     const ctx = await runScenario('ok', {
       log: () => {

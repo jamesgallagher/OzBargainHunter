@@ -1,21 +1,34 @@
 /**
- * Screen 9 — Classifieds session status (design 7.1). Validity, when it was
- * last confirmed working, and somewhere to supply a fresh session cookie. This
- * is where the expired-session latch is cleared, by hand.
+ * Screen 9 — Classifieds session status (design 7.1, prompt 4.5). Validity,
+ * when it was last confirmed working, when the stored cookie expires, the
+ * sign-in wizard (the only way the app logs in — it never logs in on its
+ * own), and the legacy paste-cookie form (chunk 7 removes it).
  *
  * X12: displays "when it was last confirmed working" (the
  * `classifieds_last_confirmed_at` setting, persisted by the classifieds
  * acquisition module on the worker side). The set-cookie form posts to
- * `/classifieds-session/set` (its own segment, so it does not collide with
- * this page in the build) and is CSRF-gated.
+ * `/classifieds-session/set` and the toggle to `/classifieds-session/toggle`
+ * (their own segments, so they do not collide with this page in the build);
+ * both are CSRF-gated.
+ *
+ * Rendering is read-only (prompt 7): the gate is read with `getGate()` and
+ * projected with the pure `viewGate` — never `createGate().read()`/`isOpen()`,
+ * which apply lazy transitions and write.
  *
  * Server component.
  */
 
 import { getStore } from '../../lib/web/db.js';
 import { generateCsrfToken } from '../../lib/csrf.js';
+import { systemClock } from '../../lib/clock.js';
+import { viewGate } from '../../lib/gate/view.js';
+import { resolveLoginOrigin } from '../../lib/ozb-login/origin.js';
+import { readAttempts, loginLockView } from '../../lib/web/login-throttle.js';
+import { unavailableReasonText } from '../../lib/web/login-unavailable.js';
+import { formatMelbourne } from '../../lib/time.js';
 import AsyncForm from '../components/async-form.js';
 import SecretField from '../components/secret-field.js';
+import LoginWizard from '../components/login-wizard.js';
 import LocalTime from '../components/local-time.js';
 import { Badge, PageHeader, Subnav } from '../components/ui.js';
 
@@ -24,9 +37,11 @@ const settingsLinks = [{ label: 'Thresholds', href: '/thresholds' }, { label: 'D
 
 const LAST_UID_KEY = 'classifieds_last_uid';
 const LAST_CONFIRMED_KEY = 'classifieds_last_confirmed_at';
+const COOKIE_EXPIRES_KEY = 'ozb_account_cookie_expires_at';
 // The global enable/disable gate key (worker-owned module owns the same
 // string; the server tree must not import from lib/acquire/).
 const CLASSIFIEDS_ENABLED_KEY = 'classifieds_enabled';
+const ATTEMPTS_KEY = 'ozb_login_attempts';
 
 /**
  * The classifieds session page.
@@ -41,9 +56,33 @@ export default async function ClassifiedsSessionPage() {
       ? { label: 'Expired', tone: 'danger' }
       : { label: 'Valid', tone: 'success' };
   const lastConfirmed = store.getSetting(LAST_CONFIRMED_KEY);
+  const cookieExpires = store.getSetting(COOKIE_EXPIRES_KEY);
   // The global enable/disable gate: absent (null) means disabled.
   const enabledRaw = store.getSetting(CLASSIFIEDS_ENABLED_KEY);
   const enabledOn = enabledRaw === null ? false : enabledRaw === '1';
+
+  // Read-only gate/lock/origin projections (prompt 4.5): `getGate()` + the
+  // pure `viewGate`, never the writing `createGate().read()`/`isOpen()`.
+  const now = systemClock().now();
+  const gateView = viewGate(store.getGate(), store.getGateEvents({ limit: 50 }), now);
+  const lock = loginLockView(readAttempts(store.getSetting(ATTEMPTS_KEY)), now);
+  const origin = resolveLoginOrigin({
+    classifiedsUrl: process.env.OZB_CLASSIFIEDS_URL ?? 'https://www.ozbargain.com.au/classified',
+    env: process.env,
+  });
+
+  // The wizard's disabled reason: the first that applies (prompt 4.5).
+  let disabledReason = '';
+  if (gateView.closed) {
+    const time = gateView.untilAt ?? gateView.minResumeAt;
+    disabledReason = `OzBargain access is paused or stopped, so sign-in is unavailable until ${
+      time ? formatMelbourne(time) : 'access is resumed'
+    }.`;
+  } else if (lock.locked) {
+    disabledReason = `Sign-in is locked until ${formatMelbourne(lock.lockedUntil)} after repeated failed attempts (rule B6). Polling is unaffected.`;
+  } else if (!origin.ok) {
+    disabledReason = unavailableReasonText(origin.reason);
+  }
 
   // Mint an unbound CSRF token (production relies on the token TTL, m3).
   const secret = process.env.OZB_CSRF_SECRET ?? '';
@@ -60,7 +99,10 @@ export default async function ClassifiedsSessionPage() {
         <dd>{uid ?? '—'}</dd>
         <dt>Last confirmed working</dt>
         <dd>{lastConfirmed ? <LocalTime iso={lastConfirmed} /> : '—'}</dd>
+        <dt>Cookie expires</dt>
+        <dd>{cookieExpires ? <LocalTime iso={cookieExpires} /> : '—'}</dd>
       </dl>
+      <LoginWizard disabledReason={disabledReason} pollingEnabled={enabledOn} csrfToken={token} />
       <div className="card form-card settings-card">
       <AsyncForm action="/classifieds-session/toggle" successMessage="Classifieds polling preference saved.">
         <input type="hidden" name="_csrf" value={token} />
@@ -72,6 +114,8 @@ export default async function ClassifiedsSessionPage() {
       </AsyncForm>
       </div>
       <div className="card form-card settings-card">
+        <h2 className="card-title">Paste a session cookie (legacy)</h2>
+        <p className="help">Prefer &quot;Sign in to OzBargain&quot; above. This option will be removed.</p>
       <AsyncForm action="/classifieds-session/set" resetOnSuccess successMessage="Session cookie updated; validity is confirmed on the next classifieds poll.">
         <input type="hidden" name="_csrf" value={token} />
         <div className="field"><label htmlFor="session-cookie">Session cookie</label>
