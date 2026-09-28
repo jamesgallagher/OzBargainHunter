@@ -239,7 +239,15 @@ export default function LoginWizard({ disabledReason, pollingEnabled, csrfToken 
         </button>
       </form>
       <div className="async-form-status" aria-live="polite">
-        {pending ? <span className="async-form-pending">{PROGRESS_STEPS[step]}</span> : null}
+        {pending ? (
+          <ol className="async-form-pending">
+            {PROGRESS_STEPS.map((label, i) => (
+              <li key={label} aria-current={i === step ? 'step' : undefined}>
+                {label}
+              </li>
+            ))}
+          </ol>
+        ) : null}
         {!pending && result ? (
           <span
             className={result.tone === 'success' ? 'async-form-success' : 'async-form-error'}
