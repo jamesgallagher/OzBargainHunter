@@ -260,6 +260,18 @@ async function main() {
     console.log(`smoke: a static asset with no session is not a 200 (${staticRes.status})`);
     await staticRes.text();
 
+    // The public directory must be in the image: the favicon, the banner and
+    // the icon route are served from it, and `next build`'s standalone output
+    // does not copy it. An authenticated request to each must be a 200.
+    for (const path of ['/favicon.ico', '/banner-raw.png', '/logo.svg', '/icon.svg']) {
+      const publicRes = await fetch(`${base}${path}`, { headers: { 'Cf-Access-Jwt-Assertion': token } });
+      if (publicRes.status !== 200) {
+        await fail(`an authenticated request to ${path} was answered ${publicRes.status} (the image is missing public/)`);
+      }
+      await publicRes.text();
+    }
+    console.log('smoke: the image serves the favicon, the banner and the icon files from public/');
+
     // 4. The browser: the image's Chromium headless shell must launch as the
     //    unprivileged node user, with Playwright's defaults only — no extra
     //    launch arguments, no chromiumSandbox override — and prove it can

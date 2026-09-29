@@ -104,6 +104,11 @@ RUN node node_modules/playwright/cli.js install --with-deps --only-shell chromiu
 # and the snapshot both live on /data (10.6).
 COPY --from=builder --chown=node:node /app/.next/standalone/ ./
 COPY --from=builder --chown=node:node /app/.next/static/ ./.next/static/
+# The public directory: `next build`'s standalone output does not copy it,
+# so the server's `publicDir` must be carried forward by hand. The favicon,
+# the banner and the icon route (which reads public/logo.svg) all 404 or 500
+# without it.
+COPY --from=builder --chown=node:node /app/public/ ./public/
 COPY --from=builder --chown=node:node /app/lib/ ./lib/
 COPY --from=builder --chown=node:node /app/worker/ ./worker/
 COPY --from=builder --chown=node:node /app/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
