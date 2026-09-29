@@ -124,7 +124,7 @@ export function resolveKey(requestUrl) {
  *   `scenario` is one of `ok`, `validation_error`, `challenge_login_page`,
  *   `challenge_submit`, `challenge_classified`, `rate_limit_login_page`,
  *   `server_error_submit`, `not_entitled`, `hang_submit`, `no_session_cookie`,
- *   `slow_redirect`, `flood`.
+ *   `slow_redirect`, `no_content_submit`, `stuck_after_redirect`, `flood`.
  * @returns {object} the server handle
  */
 export function createFixtureServer({
@@ -269,6 +269,13 @@ export function createFixtureServer({
       if (login.scenario === 'slow_redirect') {
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
+      if (login.scenario === 'stuck_after_redirect') {
+        // The redirect target never answers: the document never commits, so
+        // the module's 15 s commit limit must end the attempt before the
+        // hard timeout.
+        recordLogin(req, 0);
+        return;
+      }
       recordLogin(req, 302);
       res.writeHead(302, { Location: `/user/${session.uid}` });
       res.end();
@@ -305,6 +312,15 @@ export function createFixtureServer({
     if (scenario === 'hang_submit') {
       // The POST never answers; the hard timeout is what ends the attempt.
       recordLogin(req, 0);
+      return;
+    }
+    if (scenario === 'no_content_submit') {
+      // A POST that commits no new document: 204 with no body. The module
+      // must classify it at once (transient, post=204) without waiting for a
+      // document that will never commit.
+      recordLogin(req, 204);
+      res.writeHead(204);
+      res.end();
       return;
     }
     if (scenario === 'server_error_submit') {

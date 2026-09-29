@@ -102,6 +102,7 @@ async function runScenario(scenario, opts = {}) {
       logLines,
       server,
       clock,
+      startedAt,
       elapsedMs: Date.now() - startedAt,
       calls,
       browsers,
@@ -319,6 +320,16 @@ describe('integration: performLogin (prompt section 5)', () => {
   });
 
   it('hang_submit: a hung submit ends on the hard timeout, with the browser closed', async (t) => {
+    // The armed commit wait must handle its own failure: when the hard
+    // timeout closes the browser, its `waitForEvent` rejects, and the
+    // `.then(ok, fail)` in the module turns that into a resolution. Without
+    // it, the web process gets an unhandled rejection.
+    let unhandledRejection = null;
+    const onUnhandledRejection = (err) => {
+      unhandledRejection = err;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    t.after(() => process.off('unhandledRejection', onUnhandledRejection));
     const ctx = await runScenario('hang_submit', { timeoutMs: 3000 });
     t.after(() => ctx.close());
     assert.equal(ctx.result.outcome, 'timeout');
@@ -327,6 +338,41 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(seq[seq.length - 1][2], 0, 'the last fixture entry is the hung POST (status 0)');
     assert.equal(ctx.browsers[0].isConnected(), false);
     assertFinalLine(ctx, 'timeout', 'timeout', '-', '/user/login');
+    assert.equal(unhandledRejection, null, 'no unhandled rejection (the armed commit wait handled its own failure)');
+  });
+
+  it('no_content_submit: a 204 that commits no document is a transient classified at once', async (t) => {
+    const ctx = await runScenario('no_content_submit');
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'transient');
+    assert.equal(ctx.gate.read().state, 'open');
+    assert.equal(ctx.store.getGateEvents().length, 0);
+    assertFinalLine(ctx, 'transient', 'transient_submit', '204', '/user/login');
+    // The attempt must not wait out the 15 s commit limit: it resolves well
+    // under it after the POST.
+    const postEntry = ctx.server.requests.find((e) => e.method === 'POST' && e.url === '/user/login');
+    assert.ok(postEntry, 'the POST was recorded');
+    const msAfterPost = ctx.elapsedMs - (Date.parse(postEntry.at) - ctx.startedAt);
+    assert.ok(msAfterPost < 5000, `resolved well under the 15 s commit wait (got ${msAfterPost} ms after the POST)`);
+  });
+
+  it('stuck_after_redirect: a redirect that never commits ends as no_document at the 15 s limit', async (t) => {
+    const ctx = await runScenario('stuck_after_redirect', { timeoutMs: 20_000 });
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'transient');
+    assert.equal(ctx.gate.read().state, 'open');
+    assert.equal(ctx.store.getGateEvents().length, 0);
+    assert.deepStrictEqual(loginSequence(ctx.server), [
+      ['GET', '/user/login', 200],
+      ['POST', '/user/login', 302],
+      ['GET', '/user/login', 0],
+    ]);
+    const line = ctx.logLines.find((l) => l.startsWith('login: outcome=transient '));
+    assert.ok(line, 'the final transient log line is present');
+    const match = line.match(/^login: outcome=transient reason=no_document post=302 landed=\S+ blockedRequests=\d+$/);
+    assert.ok(match, `final log line format (got: ${line})`);
+    assert.ok(ctx.elapsedMs >= 15000, `the 15 s commit limit fired (got ${ctx.elapsedMs} ms)`);
+    assert.ok(ctx.elapsedMs < 19000, `resolved before the 20 s hard timeout (got ${ctx.elapsedMs} ms)`);
   });
 
   it('a timeout during launch: the late browser is closed and no request is made', async (t) => {
