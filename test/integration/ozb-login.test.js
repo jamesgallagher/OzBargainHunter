@@ -159,20 +159,24 @@ function assertChallenge(ctx, stepName) {
 
 /**
  * Assert the final log line (the one `finish()` writes) has the full format
- * `login: outcome=<outcome> reason=<reason> post=<post> landed=<landed> blockedRequests=<n>`
- * and return the blocked-request count.
+ * `login: outcome=<outcome> reason=<reason> post=<post> landed=<landed> blockedRequests=<n>`,
+ * plus the `classified=` probe suffix when the probe ran, and return the
+ * blocked-request count.
  * @param {object} ctx the scenario context
  * @param {string} outcome the expected outcome
  * @param {string} reason the expected reason code
  * @param {string} post the expected POST status (a number, or `-`)
  * @param {string} landed the expected landing path (or `-`)
+ * @param {string} [classified] the expected probe suffix, e.g.
+ *   `script:number,vars:number,listings:25,anon:no`
  * @returns {number} the blocked-request count
  */
-function assertFinalLine(ctx, outcome, reason, post, landed) {
+function assertFinalLine(ctx, outcome, reason, post, landed, classified = null) {
   const line = ctx.logLines.find((l) => l.startsWith(`login: outcome=${outcome} `));
   assert.ok(line, `the final ${outcome} log line is present`);
+  const suffix = classified ? ` classified=${classified}` : '';
   const match = line.match(
-    new RegExp(`^login: outcome=${outcome} reason=${reason} post=${post} landed=${landed} blockedRequests=(\\d+)$`),
+    new RegExp(`^login: outcome=${outcome} reason=${reason} post=${post} landed=${landed} blockedRequests=(\\d+)${suffix}$`),
   );
   assert.ok(match, `final log line format (got: ${line})`);
   return Number(match[1]);
@@ -209,7 +213,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.calls.length, 1);
     assert.deepStrictEqual(ctx.calls[0], { headless: true, args: LAUNCH_ARGS });
     assert.equal(ctx.browsers[0].isConnected(), false);
-    const blocked = assertFinalLine(ctx, 'ok', 'ok', '302', '/classified');
+    const blocked = assertFinalLine(ctx, 'ok', 'ok', '302', '/classified', 'script:number,vars:number,listings:25,anon:no');
     assert.ok(blocked >= 1, `blockedRequests >= 1 (got ${blocked})`);
   });
 
@@ -220,7 +224,30 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.result.uid, 226301);
     assert.match(ctx.result.cookie, /PHPSESSID=SENTINEL_COOKIE_3a9b/);
     assert.ok(!ctx.result.cookie.includes('ozbuserhash'));
-    assertFinalLine(ctx, 'ok', 'ok', '302', '/classified');
+    assertFinalLine(ctx, 'ok', 'ok', '302', '/classified', 'script:number,vars:number,listings:25,anon:no');
+  });
+
+  it('classified_vars_rewritten: a later script that stringifies the runtime uid still reads ok from the script source', async (t) => {
+    const ctx = await runScenario('classified_vars_rewritten');
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'ok');
+    assert.equal(ctx.result.uid, 226301);
+    assertFinalLine(ctx, 'ok', 'ok', '302', '/classified', 'script:number,vars:string,listings:25,anon:no');
+  });
+
+  it('classified_vars_scoped: a const OzB_vars (no globalThis property) still reads ok from the script source', async (t) => {
+    const ctx = await runScenario('classified_vars_scoped');
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'ok');
+    assert.equal(ctx.result.uid, 226301);
+    assertFinalLine(ctx, 'ok', 'ok', '302', '/classified', 'script:number,vars:absent,listings:25,anon:no');
+  });
+
+  it('classified_anonymous: a 200 anonymous /classified after a good login is a login_failed with the probe logged', async (t) => {
+    const ctx = await runScenario('classified_anonymous');
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'login_failed');
+    assertFinalLine(ctx, 'login_failed', 'classified_uid_zero', '302', '/classified', 'script:zero,vars:zero,listings:25,anon:yes');
   });
 
   it('flood: a Drupal flood-control message is a login_failed with reason post200_flood', async (t) => {
@@ -415,11 +442,12 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['GET', '/classified', 200],
     ]);
     assert.equal(ctx.gate.read().state, 'open');
-    // The final line carries the cookie names (never values) after blockedRequests.
+    // The final line carries the probe suffix, then the cookie names (never
+    // values) after blockedRequests.
     const line = ctx.logLines.find((l) => l.startsWith('login: outcome=login_failed '));
     assert.ok(line, 'the final login_failed log line is present');
     const match = line.match(
-      /^login: outcome=login_failed reason=no_session_cookie post=302 landed=\/classified blockedRequests=(\d+) cookies=(.+)$/,
+      /^login: outcome=login_failed reason=no_session_cookie post=302 landed=\/classified blockedRequests=(\d+) classified=script:number,vars:number,listings:25,anon:no cookies=(.+)$/,
     );
     assert.ok(match, `final log line format (got: ${line})`);
     assert.ok(match[2].includes('SSESS_fixture'), 'the cookies= names include SSESS_fixture');
@@ -587,6 +615,9 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['ok', { preStopGate: true }],
       ['slow_redirect'],
       ['flood'],
+      ['classified_vars_rewritten'],
+      ['classified_vars_scoped'],
+      ['classified_anonymous'],
     ];
     let okResult;
     for (const [scenario, opts = {}] of scenarios) {

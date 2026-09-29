@@ -50,11 +50,14 @@ def unpinned_freebie() -> None:
 
 
 def anonymous_session() -> None:
-    """The same page as served to a logged-out client: OzB_vars.uid drops to 0.
+    """The same page as served to a logged-out client: OzB_vars.uid drops to 0,
+    and the account menu offers the login link instead of the account link.
     This is the authoritative expired-session signal (design 3.6)."""
     page = HTTP.joinpath("classifieds-page.html").read_text(encoding="utf-8")
     anon = page.replace('"uid":226301', '"uid":0', 1)
     assert anon != page, "uid replacement matched nothing"
+    anon = anon.replace('<a href="/user/226301">My Account</a>', '<a href="/user/login">Log in</a>', 1)
+    assert 'href="/user/login"' in anon, "login link replacement matched nothing"
     write("classifieds-page-anon.html", anon.encode("utf-8"))
 
 
