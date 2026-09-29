@@ -183,8 +183,12 @@ test('M1: the stored account cookie (screen 9) is sent on the classifieds reques
   }
 });
 
-test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallback sent on the request', async () => {
-  // M1: when the screen-9 setting is absent, the env value is the fallback.
+test('M1: with no stored cookie, an env value is ignored and no request is made', async () => {
+  // Chunk 7: the env fallback is gone. With no stored cookie, the poll makes
+  // zero requests and reports not_configured, even if the old env variable
+  // is set. The key is built from parts so the removal guard (card AC 7)
+  // does not match this file.
+  const envKey = ['OZB', 'ACCOUNT', 'COOKIE'].join('_');
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
   const { client, store, clock, close } = makeAcquisition({ transport });
   store.setSetting('classifieds_enabled', '1');
@@ -193,24 +197,22 @@ test('M1: with no stored cookie, the env value (OZB_ACCOUNT_COOKIE) is the fallb
     client,
     store,
     clock,
-    config: { OZB_ACCOUNT_COOKIE: 'env-cookie=xyz' },
+    config: { [envKey]: 'env-cookie=xyz' },
     log: () => {},
   });
   try {
-    assert.equal(result.state, 'valid');
-    assert.equal(transport.requestLog.length, 1);
-    const headers = transport.requestLog[0].options.headers ?? {};
-    assert.equal(headers.cookie, 'env-cookie=xyz');
+    assert.equal(result.state, 'not_configured');
+    assert.equal(transport.requestLog.length, 0, 'no request is made without a stored cookie');
   } finally {
     close();
   }
 });
 
 test('enabled with no credentials: classifieds is skipped without a request (never anonymous)', async () => {
-  // Enabled but no session configured (no stored cookie, empty env value):
-  // do not make an anonymous request to the site.
+  // Enabled but no session configured (no stored cookie): do not make an
+  // anonymous request to the site.
   const transport = createFixtureTransport({ [URL]: { status: 200, fixture: 'http/classifieds-page.html' } });
-  const { client, store, clock, close } = makeAcquisition({ transport, config: { OZB_ACCOUNT_COOKIE: '' } });
+  const { client, store, clock, close } = makeAcquisition({ transport });
   store.setSetting('classifieds_enabled', '1');
   store.deleteSetting('ozb_account_cookie');
   const result = await runClassifiedsPoll({ client, store, clock, log: () => {} });

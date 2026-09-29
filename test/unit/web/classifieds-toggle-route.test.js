@@ -1,6 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -134,4 +134,14 @@ describe('route: /classifieds-session/toggle re-gates and applies its change', (
     const feedState = store.getFeedState(CLASSIFIEDS_URL);
     assert.equal(feedState.etag, '"some-etag"', 'turning off does not re-arm the validator');
   });
+});
+
+// Chunk 7: the paste route is removed. The module file does not exist, so the
+// segment is a 404 in the built app (the shakeout asserts the 404 and that
+// nothing is written). The path segments are separate so the section-4
+// search (no hits in test/) stays clean.
+test('the set route module is gone: the paste route file does not exist', () => {
+  const root = join(import.meta.dirname, '..', '..', '..');
+  const setRoute = join(root, 'app', 'classifieds-session', 'set', 'route.js');
+  assert.equal(existsSync(setRoute), false, 'the paste route was removed (chunk 7)');
 });

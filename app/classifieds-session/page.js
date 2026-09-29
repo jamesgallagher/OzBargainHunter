@@ -1,15 +1,15 @@
 /**
  * Screen 9 — Classifieds session status (design 7.1, prompt 4.5). Validity,
- * when it was last confirmed working, when the stored cookie expires, the
- * sign-in wizard (the only way the app logs in — it never logs in on its
- * own), and the legacy paste-cookie form (chunk 7 removes it).
+ * when it was last confirmed working, when the stored cookie expires, and
+ * the sign-in wizard (the only way the app logs in — it never logs in on
+ * its own). The session is supplied only through the sign-in wizard; the
+ * legacy paste form is removed (chunk 7).
  *
  * X12: displays "when it was last confirmed working" (the
  * `classifieds_last_confirmed_at` setting, persisted by the classifieds
- * acquisition module on the worker side). The set-cookie form posts to
- * `/classifieds-session/set` and the toggle to `/classifieds-session/toggle`
- * (their own segments, so they do not collide with this page in the build);
- * both are CSRF-gated.
+ * acquisition module on the worker side). The toggle posts to
+ * `/classifieds-session/toggle` (its own segment, so it does not collide
+ * with this page in the build); it is CSRF-gated.
  *
  * Rendering is read-only (prompt 7): the gate is read with `getGate()` and
  * projected with the pure `viewGate` — never `createGate().read()`/`isOpen()`,
@@ -27,7 +27,6 @@ import { readAttempts, loginLockView } from '../../lib/web/login-throttle.js';
 import { unavailableReasonText } from '../../lib/web/login-unavailable.js';
 import { formatMelbourne } from '../../lib/time.js';
 import AsyncForm from '../components/async-form.js';
-import SecretField from '../components/secret-field.js';
 import LoginWizard from '../components/login-wizard.js';
 import LocalTime from '../components/local-time.js';
 import { Badge, PageHeader, Subnav } from '../components/ui.js';
@@ -111,18 +110,6 @@ export default async function ClassifiedsSessionPage() {
           <span><strong>Enable classifieds polling</strong><small>Poll the classifieds page with the stored session cookie. Disabled by default.</small></span>
         </label>
         <button className="btn btn-primary" type="submit">Save</button>
-      </AsyncForm>
-      </div>
-      <div className="card form-card settings-card">
-        <h2 className="card-title">Paste a session cookie (legacy)</h2>
-        <p className="help">Prefer &quot;Sign in to OzBargain&quot; above. This option will be removed.</p>
-      <AsyncForm action="/classifieds-session/set" resetOnSuccess successMessage="Session cookie updated; validity is confirmed on the next classifieds poll.">
-        <input type="hidden" name="_csrf" value={token} />
-        <div className="field"><label htmlFor="session-cookie">Session cookie</label>
-          <SecretField id="session-cookie" name="cookie" placeholder="OzBargain session cookie" />
-          <span className="help">The cookie is stored server-side and is never displayed again.</span>
-        </div>
-        <button className="btn btn-primary" type="submit">Set session</button>
       </AsyncForm>
       </div>
     </section>
