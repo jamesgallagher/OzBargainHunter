@@ -124,7 +124,8 @@ export function resolveKey(requestUrl) {
  *   `scenario` is one of `ok`, `validation_error`, `challenge_login_page`,
  *   `challenge_submit`, `challenge_classified`, `rate_limit_login_page`,
  *   `server_error_submit`, `not_entitled`, `hang_submit`, `no_session_cookie`,
- *   `slow_redirect`, `no_content_submit`, `stuck_after_redirect`, `flood`.
+ *   `slow_redirect`, `no_content_submit`, `stuck_after_redirect`, `flood`,
+ *   `classified_anonymous`, `classified_vars_rewritten`, `classified_vars_scoped`.
  * @returns {object} the server handle
  */
 export function createFixtureServer({
@@ -431,6 +432,27 @@ export function createFixtureServer({
     }
     recordLogin(req, 200);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    if (scenario === 'classified_anonymous') {
+      // A good login, but /classified answers the anonymous page (uid 0):
+      // the browser's session was not honoured on this request.
+      res.end(fixtureBody('http/derived/classifieds-page-anon.html'));
+      return;
+    }
+    if (scenario === 'classified_vars_rewritten') {
+      // The logged-in page, plus a later inline script that rewrites the
+      // runtime uid to a string (the script source keeps the integer).
+      res.end(
+        fixtureBody('http/classifieds-page.html') +
+          '\n<script>OzB_vars.uid = String(OzB_vars.uid);</script>',
+      );
+      return;
+    }
+    if (scenario === 'classified_vars_scoped') {
+      // The logged-in page with the session object declared `const`, so it
+      // is a global lexical binding and not a `globalThis` property.
+      res.end(fixtureBody('http/classifieds-page.html').replace('OzB_vars=', 'const OzB_vars=', 1));
+      return;
+    }
     res.end(fixtureBody('http/classifieds-page.html'));
   }
 
