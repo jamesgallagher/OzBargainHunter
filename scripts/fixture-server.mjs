@@ -123,7 +123,8 @@ export function resolveKey(requestUrl) {
  *   the timeline; when absent, behaviour is byte-for-byte unchanged.
  *   `scenario` is one of `ok`, `validation_error`, `challenge_login_page`,
  *   `challenge_submit`, `challenge_classified`, `rate_limit_login_page`,
- *   `server_error_submit`, `not_entitled`, `hang_submit`, `no_session_cookie`.
+ *   `server_error_submit`, `not_entitled`, `hang_submit`, `no_session_cookie`,
+ *   `slow_redirect`, `flood`.
  * @returns {object} the server handle
  */
 export function createFixtureServer({
@@ -239,7 +240,9 @@ export function createFixtureServer({
     const message =
       kind === 'validation'
         ? 'Validation error, please try again. If this error persists, please contact the site administrator.'
-        : 'Sorry. Unrecognised username or password.';
+        : kind === 'flood'
+          ? 'Sorry, there have been more than 5 failed login attempts for this account. It is temporarily blocked.'
+          : 'Sorry. Unrecognised username or password.';
     recordLogin(req, 200);
     const html = fixtureBody('http/derived/user-login.html')
       .replaceAll('{{FORM_TOKEN}}', '')
@@ -260,6 +263,12 @@ export function createFixtureServer({
     }
     const session = resolveLoginSession(req);
     if (session && session.loggedIn) {
+      // The `slow_redirect` scenario delays the logged-in redirect, so a
+      // client that does not wait for the resulting document to commit reads
+      // the uid from the old login document (a false `login_failed`).
+      if (login.scenario === 'slow_redirect') {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
       recordLogin(req, 302);
       res.writeHead(302, { Location: `/user/${session.uid}` });
       res.end();
@@ -303,6 +312,12 @@ export function createFixtureServer({
       res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end('internal error');
       return;
+    }
+    if (scenario === 'flood') {
+      // Drupal's flood control: after too many failed attempts the account is
+      // temporarily blocked, and the POST answers 200 with the form re-rendered
+      // and a `.messages.error` carrying the flood text.
+      return serveLoginError(req, res, 'flood');
     }
     const fields = parseUrlEncoded(await readBody(req, res));
     const session = resolveLoginSession(req);

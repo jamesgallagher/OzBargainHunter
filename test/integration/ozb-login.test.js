@@ -57,7 +57,7 @@ const rejectingLaunch = async () => {
  */
 async function runScenario(scenario, opts = {}) {
   const login = { username: SENTINEL_USER, password: SENTINEL_PASS, scenario };
-  if (scenario === 'ok') login.sessionCookieValue = SENTINEL_COOKIE;
+  if (scenario === 'ok' || scenario === 'slow_redirect') login.sessionCookieValue = SENTINEL_COOKIE;
   const server = createFixtureServer({ login });
   await server.start();
   const temp = openTempStore();
@@ -156,6 +156,27 @@ function assertChallenge(ctx, stepName) {
   assert.equal(failures[0].body, `login: Cloudflare challenge at ${stepName}`);
 }
 
+/**
+ * Assert the final log line (the one `finish()` writes) has the full format
+ * `login: outcome=<outcome> reason=<reason> post=<post> landed=<landed> blockedRequests=<n>`
+ * and return the blocked-request count.
+ * @param {object} ctx the scenario context
+ * @param {string} outcome the expected outcome
+ * @param {string} reason the expected reason code
+ * @param {string} post the expected POST status (a number, or `-`)
+ * @param {string} landed the expected landing path (or `-`)
+ * @returns {number} the blocked-request count
+ */
+function assertFinalLine(ctx, outcome, reason, post, landed) {
+  const line = ctx.logLines.find((l) => l.startsWith(`login: outcome=${outcome} `));
+  assert.ok(line, `the final ${outcome} log line is present`);
+  const match = line.match(
+    new RegExp(`^login: outcome=${outcome} reason=${reason} post=${post} landed=${landed} blockedRequests=(\\d+)$`),
+  );
+  assert.ok(match, `final log line format (got: ${line})`);
+  return Number(match[1]);
+}
+
 describe('integration: performLogin (prompt section 5)', () => {
   it('ok: the full flow returns the session cookie and the exact request sequence', async (t) => {
     const ctx = await runScenario('ok');
@@ -187,11 +208,25 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.calls.length, 1);
     assert.deepStrictEqual(ctx.calls[0], { headless: true, args: LAUNCH_ARGS });
     assert.equal(ctx.browsers[0].isConnected(), false);
-    const finalLine = ctx.logLines.find((l) => l.startsWith('login: outcome=ok'));
-    assert.ok(finalLine, 'the final ok log line is present');
-    const match = finalLine.match(/^login: outcome=ok blockedRequests=(\d+)$/);
-    assert.ok(match, `final log line format: ${finalLine}`);
-    assert.ok(Number(match[1]) >= 1, `blockedRequests >= 1 (got ${match[1]})`);
+    const blocked = assertFinalLine(ctx, 'ok', 'ok', '302', '/classified');
+    assert.ok(blocked >= 1, `blockedRequests >= 1 (got ${blocked})`);
+  });
+
+  it('slow_redirect: a delayed logged-in redirect still resolves ok (waits for the document to commit)', async (t) => {
+    const ctx = await runScenario('slow_redirect');
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'ok');
+    assert.equal(ctx.result.uid, 226301);
+    assert.match(ctx.result.cookie, /PHPSESSID=SENTINEL_COOKIE_3a9b/);
+    assert.ok(!ctx.result.cookie.includes('ozbuserhash'));
+    assertFinalLine(ctx, 'ok', 'ok', '302', '/classified');
+  });
+
+  it('flood: a Drupal flood-control message is a login_failed with reason post200_flood', async (t) => {
+    const ctx = await runScenario('flood');
+    t.after(() => ctx.close());
+    assert.equal(ctx.result.outcome, 'login_failed');
+    assertFinalLine(ctx, 'login_failed', 'post200_flood', '200', '/user/login');
   });
 
   it('bad_credentials: a wrong password is a bad_credentials with no /classified request', async (t) => {
@@ -201,6 +236,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.ok(!loginSequence(ctx.server).some((r) => r[1] === '/classified'), 'no /classified request');
     assert.equal(ctx.gate.read().state, 'open');
     assert.equal(ctx.store.getGateEvents().length, 0);
+    assertFinalLine(ctx, 'bad_credentials', 'bad_credentials', '200', '/user/login');
   });
 
   it('validation_error: a broken form token is a validation_error', async (t) => {
@@ -209,6 +245,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.result.outcome, 'validation_error');
     assert.equal(ctx.gate.read().state, 'open');
     assert.equal(ctx.store.getGateEvents().length, 0);
+    assertFinalLine(ctx, 'validation_error', 'validation_error', '200', '/user/login');
   });
 
   it('not_entitled: a 403 on /classified is a not_entitled that does not touch the gate', async (t) => {
@@ -220,6 +257,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(classified[2], 403);
     assert.equal(ctx.gate.read().state, 'open');
     assert.equal(ctx.store.getGateEvents().length, 0);
+    assertFinalLine(ctx, 'not_entitled', 'not_entitled', '302', '/classified');
   });
 
   it('challenge_login_page: a challenge on the form stops the gate and records one failure', async (t) => {
@@ -227,6 +265,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     t.after(() => ctx.close());
     assertChallenge(ctx, 'login_form');
     assert.deepStrictEqual(loginSequence(ctx.server), [['GET', '/user/login', 403]]);
+    assertFinalLine(ctx, 'cloudflare_block', 'cloudflare_block', '-', '/user/login');
   });
 
   it('challenge_submit: a challenge on the submit stops the gate, with no request after it', async (t) => {
@@ -237,6 +276,7 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['GET', '/user/login', 200],
       ['POST', '/user/login', 403],
     ]);
+    assertFinalLine(ctx, 'cloudflare_block', 'cloudflare_block', '403', '/user/login');
   });
 
   it('challenge_classified: a challenge on /classified stops the gate', async (t) => {
@@ -250,6 +290,7 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['GET', '/user/226301', 200],
       ['GET', '/classified', 403],
     ]);
+    assertFinalLine(ctx, 'cloudflare_block', 'cloudflare_block', '302', '/classified');
   });
 
   it('rate_limit_login_page: a 429 on the form cools the gate (B2) with no failures row', async (t) => {
@@ -265,6 +306,7 @@ describe('integration: performLogin (prompt section 5)', () => {
       `until_at ~ now + 900s (got ${row.until_at})`,
     );
     assert.equal(ctx.store.getFailures().length, 0);
+    assertFinalLine(ctx, 'rate_limited', 'rate_limited', '-', '/user/login');
   });
 
   it('server_error_submit: a 500 on the submit is a transient that leaves the gate unchanged', async (t) => {
@@ -273,6 +315,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.result.outcome, 'transient');
     assert.equal(ctx.gate.read().state, 'open');
     assert.equal(ctx.store.getGateEvents().length, 0);
+    assertFinalLine(ctx, 'transient', 'transient_submit', '500', '/user/login');
   });
 
   it('hang_submit: a hung submit ends on the hard timeout, with the browser closed', async (t) => {
@@ -283,6 +326,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     const seq = loginSequence(ctx.server);
     assert.equal(seq[seq.length - 1][2], 0, 'the last fixture entry is the hung POST (status 0)');
     assert.equal(ctx.browsers[0].isConnected(), false);
+    assertFinalLine(ctx, 'timeout', 'timeout', '-', '/user/login');
   });
 
   it('a timeout during launch: the late browser is closed and no request is made', async (t) => {
@@ -325,6 +369,15 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['GET', '/classified', 200],
     ]);
     assert.equal(ctx.gate.read().state, 'open');
+    // The final line carries the cookie names (never values) after blockedRequests.
+    const line = ctx.logLines.find((l) => l.startsWith('login: outcome=login_failed '));
+    assert.ok(line, 'the final login_failed log line is present');
+    const match = line.match(
+      /^login: outcome=login_failed reason=no_session_cookie post=302 landed=\/classified blockedRequests=(\d+) cookies=(.+)$/,
+    );
+    assert.ok(match, `final log line format (got: ${line})`);
+    assert.ok(match[2].includes('SSESS_fixture'), 'the cookies= names include SSESS_fixture');
+    assert.ok(!match[2].includes('='), 'the cookies= carries names only, never values');
   });
 
   it('gate closed before the call: a gate_closed with the browser never launched', async (t) => {
@@ -334,6 +387,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     assert.equal(ctx.calls.length, 0, 'launchBrowser was never called');
     assert.equal(ctx.browsers.length, 0);
     assert.equal(ctx.gate.read().state, 'stopped');
+    assertFinalLine(ctx, 'gate_closed', 'gate_closed', '-', '-');
   });
 
   it('launchBrowser rejects: a browser_error, with nothing thrown out', async (t) => {
@@ -345,6 +399,7 @@ describe('integration: performLogin (prompt section 5)', () => {
     t.after(() => ctx.close());
     assert.equal(ctx.result.outcome, 'browser_error');
     assert.ok(ctx.logLines.some((l) => l.includes('browser_error')), 'the log names the browser_error');
+    assertFinalLine(ctx, 'browser_error', 'browser_error', '-', '-');
   });
 
   it('a forced exception is a browser_error, with the browser closed', async (t) => {
@@ -389,6 +444,7 @@ describe('integration: performLogin (prompt section 5)', () => {
             err.name = 'TimeoutError';
             throw err;
           },
+          waitForEvent: async () => {},
           waitForLoadState: async () => {},
         };
         const context = {
@@ -409,6 +465,7 @@ describe('integration: performLogin (prompt section 5)', () => {
       ctx.logLines.some((l) => l.includes('timeout (TimeoutError)')),
       'the log names the timeout and the error name',
     );
+    assertFinalLine(ctx, 'timeout', 'timeout', '-', '-');
   });
 
   it('a throwing log sink still produces a resolved outcome, with the browser closed', async (t) => {
@@ -482,6 +539,8 @@ describe('integration: performLogin (prompt section 5)', () => {
       ['ok', { pause: forcedPause }],
       ['ok', { launchBrowser: rejectingLaunch }],
       ['ok', { preStopGate: true }],
+      ['slow_redirect'],
+      ['flood'],
     ];
     let okResult;
     for (const [scenario, opts = {}] of scenarios) {
@@ -498,7 +557,13 @@ describe('integration: performLogin (prompt section 5)', () => {
           }
           assert.ok(!logStr.includes(SENTINEL_COOKIE), `cookie sentinel in log (${scenario})`);
           assert.ok(!bytes.includes(SENTINEL_COOKIE), `cookie sentinel in database (${scenario})`);
-          if (scenario === 'ok' && Object.keys(opts).length === 0) {
+          // The log never carries the uid digits, and no log line carries a
+          // query string (a `?`).
+          assert.ok(!logStr.includes('226301'), `uid digits in log (${scenario})`);
+          for (const line of c.logLines) {
+            assert.ok(!line.includes('?'), `a query string in a log line (${scenario})`);
+          }
+          if ((scenario === 'ok' || scenario === 'slow_redirect') && Object.keys(opts).length === 0) {
             assert.ok(resultStr.includes(SENTINEL_COOKIE), 'the ok result carries the cookie sentinel');
             okResult = c.result;
           } else {
