@@ -420,7 +420,7 @@ The UI contains the following screens. Nothing else.
 6. **Near-miss and suppression log** — how close the top deals came to firing on each poll, plus suppressed reposts and expired deals.
 7. **Threshold configuration** — editable.
 8. **Delivery configuration** — provider selection, credentials, and a test-send button.
-9. **Classifieds session** — the session state (uid, when it was last confirmed working, or not yet confirmed, and when the stored cookie expires), the **sign-in wizard** (a username and password form; the credentials are used once over the wire and never stored, D10b; timed step estimates — estimates only, not live progress — while the browser login runs; a fixed message per outcome that never echoes the submitted credentials), a control to turn classifieds polling on after a sign-in, and the **legacy paste form** ("Paste a session cookie (legacy)", kept below the wizard until chunk 7 removes it). The wizard is disabled, with a fixed reason line, in four states: the gate closed — "OzBargain access is paused or stopped, so sign-in is unavailable until <Melbourne time, or 'access is resumed'>."; the B6 lock — "Sign-in is locked until <Melbourne time> after repeated failed attempts (rule B6). Polling is unaffected."; the classifieds URL not an allowed OzBargain address — "Sign-in is unavailable: the classifieds URL is not an allowed OzBargain address."; and dev mode with the classifieds URL pointing at the live site — "Sign-in is unavailable in dev mode while the classifieds URL points at the live site. Run the fixture server with --login."
+9. **Classifieds session** — the session state (uid, when it was last confirmed working, or not yet confirmed, and when the stored cookie expires), the **sign-in wizard** (a username and password form; the credentials are used once over the wire and never stored, D10b; timed step estimates — estimates only, not live progress — while the browser login runs; a fixed message per outcome that never echoes the submitted credentials), and a control to turn classifieds polling on after a sign-in. The wizard is disabled, with a fixed reason line, in four states: the gate closed — "OzBargain access is paused or stopped, so sign-in is unavailable until <Melbourne time, or 'access is resumed'>."; the B6 lock — "Sign-in is locked until <Melbourne time> after repeated failed attempts (rule B6). Polling is unaffected."; the classifieds URL not an allowed OzBargain address — "Sign-in is unavailable: the classifieds URL is not an allowed OzBargain address."; and dev mode with the classifieds URL pointing at the live site — "Sign-in is unavailable in dev mode while the classifieds URL points at the live site. Run the fixture server with --login."
 
 **A red gate banner appears on every screen while the gate is closed** (`cooling`, `probing`, or `stopped`): fixed text with the rule's plain meaning and Melbourne times, an "Email alert not sent" line when the alert did not go out, and a link to the Status screen. It carries no response body, URL query, cookie or header.
 
@@ -498,9 +498,10 @@ The following values are configurable without a code change or a rebuild. Exact 
 - Poll interval, classifieds
 - Database path
 - Notification provider and its credentials
-- OzBargain account credential
 - Threshold defaults
 - Public URL (the base for the Status link in gate alerts; empty by default, which gives a relative / link)
+
+The classifieds session is supplied only through the screen-9 sign-in wizard and stored as the `ozb_account_cookie` setting.
 
 ### 9.2 Editable in the UI
 
@@ -651,7 +652,7 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 
 **Owner: James — decision required**
 
-- **O21. The classifieds login conflicts with the deny list.** 3.6 says the application performs the login itself (D13). 3.4 says `/user/login` is on the hard-coded deny list and is *"never requested by any part of the application, including future features"*. Both are normative and they cannot both hold. Screen 9 in 7.1 already contemplates the third path — the user supplying a session cookie — which requires no request to `/user/login` at all. **Until this is resolved, v1 acquires the classifieds session from a cookie supplied through the UI**, and the self-login is not built. Resolving it means either removing `/user/login` from the deny list on the grounds that authenticating as yourself is not crawling, or standing down D13.
+- **O21. The classifieds login conflicts with the deny list — closed.** Resolved by the scoped exception (feature card decision 1, 3.4): `/user/login` stays denied in the shared poll client; only the login module (`lib/ozb-login/`), driving a real browser, may visit it, and only when a person submits the login wizard.
 
 **Owner: design/implementation — to be resolved by research or probe**
 
@@ -662,7 +663,7 @@ Each is unresolved and has an owner. Nothing in this list may be assumed.
 - **O16. Registry retention policy** — bounded growth of per-commit tags.
 - **O17. Dependency and image scanning** in CI.
 - **O19. Classifieds access for a newly created account.** The evidence that an account unlocks the section came from an established account. Whether a brand-new account has the same access is unverified, and the dedicated account will be new.
-- **O20. Classifieds session lifetime**, which determines how often the session must be renewed by hand.
+- **O20. Classifieds session lifetime**, which determines how often the session must be renewed. The cookie advertises a `Max-Age` of 90 days (`PHPSESSID`, measured 26 September 2026); the server may end the session sooner, the expiry latch detects that, and the fix is a new sign-in through the wizard.
 
 **Deliberately left to implementation** (recorded so their absence is not mistaken for an oversight): the UI's routes and endpoint shapes, and coverage expectations.
 

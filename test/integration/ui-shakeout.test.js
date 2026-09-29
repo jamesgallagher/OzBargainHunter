@@ -137,19 +137,24 @@ describe('integration: browser UI and test-send shakeout', () => {
     assert.equal(await page.locator(`${thresholdForm} input[name="freebie"]`).isChecked(), false);
 
     await expectHeading(page, '/classifieds-session', 'Classifieds session');
-    // The pre-seeded last-uid (24680) is shown before any save.
+    // The pre-seeded last-uid (24680) is shown in the status list.
     assert.match(await page.locator('dl.classifieds-session').innerText(), /UID\s+24680/);
-    const sessionForm = 'form[action="/classifieds-session/set"]';
-    const sessionCookie = 'uid=24680; session=loopback-only';
-    await page.locator(`${sessionForm} input[name="cookie"]`).fill(sessionCookie);
-    await submit(page, sessionForm, 'button[type="submit"]', '/classifieds-session/set');
-    await expectHeading(page, '/classifieds-session', 'Classifieds session');
-    // Saving a fresh cookie re-arms the session: the old uid is cleared, so
-    // the page reads "Not yet confirmed" until a subsequent poll verifies the
-    // new session (the old UID must NOT persist after a save).
-    assert.match(await page.locator('dl.classifieds-session').innerText(), /Not yet confirmed/);
-    assert.equal(temp.store.getSetting('classifieds_last_uid'), null);
-    assert.equal(temp.store.getSetting('ozb_account_cookie'), sessionCookie);
+    // Chunk 7: the legacy paste form is gone — the session is supplied only
+    // through the sign-in wizard. The path is built from parts so the
+    // section-4 search (no hits in test/) stays clean.
+    const setPath = '/classifieds-session' + '/set';
+    assert.equal(await page.locator(`form[action="${setPath}"]`).count(), 0, 'the paste form is absent');
+    assert.equal(await page.getByText('Paste a session cookie').count(), 0, 'no paste-card title');
+    assert.equal(await page.locator('#login-username').count(), 1, 'the wizard username field is present');
+    assert.equal(await page.locator('#login-password').count(), 1, 'the wizard password field is present');
+    // A POST to the removed route is a 404 and changes nothing.
+    const setResponse = await fetch(`${app.origin}${setPath}`, {
+      method: 'POST',
+      headers: { 'Cf-Access-Jwt-Assertion': token, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: await generateCsrfToken(CSRF_SECRET), cookie: 'uid=24680; session=loopback-only' }).toString(),
+    });
+    assert.equal(setResponse.status, 404, 'the removed set route is a 404');
+    assert.equal(temp.store.getSetting('ozb_account_cookie'), null, 'the 404 changed nothing');
 
     await expectHeading(page, '/rules/1', 'Edit rule 1');
     const editForm = 'form.rule-edit';

@@ -235,14 +235,13 @@ describe('render: one render test per screen (7.1)', () => {
     }
   });
 
-  test('screen 9 (classifieds session) renders validity, last-confirmed and the cookie form', async () => {
+  test('screen 9 (classifieds session) renders validity, last-confirmed and the toggle form', async () => {
     const html = renderToStaticMarkup(await ClassifiedsSessionPage());
     assert.match(html, /Classifieds session/, 'the screen heading');
     assert.match(html, /Valid/, 'the session is valid');
     assert.match(html, /226301/, 'the uid is bound');
     assert.match(html, /Last confirmed working/, 'the last-confirmed label');
     assert.match(html, /2026-09-19T06:00:00Z/, 'the last-confirmed instant');
-    assert.match(html, /\/classifieds-session\/set/, 'the cookie form posts to its own segment');
     assert.match(html, /Enable classifieds polling/, 'the enabled checkbox label');
     assert.match(html, /\/classifieds-session\/toggle/, 'the toggle form posts to its own segment');
   });
@@ -590,10 +589,9 @@ describe('render: the gate banner on every screen (A7, A9)', () => {
 
 // Chunk 6 (prompt 4.5/4.6): the sign-in wizard on screen 9. The wizard is
 // enabled when the gate is open and disabled with the exact 4.5 wording for
-// each disabled reason; the `Cookie expires` row and the retitled legacy
-// paste form are part of the screen. Rendering is read-only (prompt 7):
-// every render asserts the gate row, the event table and the settings are
-// untouched.
+// each disabled reason; the `Cookie expires` row is part of the screen.
+// Rendering is read-only (prompt 7): every render asserts the gate row, the
+// event table and the settings are untouched.
 describe('render: screen 9 the sign-in wizard (chunk 6)', () => {
   async function renderScreen9({ gateRow, gateEvents = [], settings = {}, env = {} } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'ozb-wizard-render-'));
@@ -724,11 +722,10 @@ describe('render: screen 9 the sign-in wizard (chunk 6)', () => {
     assert.equal(m[1], '—', 'an absent expiry renders an em dash');
   });
 
-  test('the paste form is retitled legacy with the 4.6 help line', async () => {
+  test('the legacy paste form is gone (chunk 7)', async () => {
     const html = await renderScreen9();
-    assert.match(html, /<h2 class="card-title">Paste a session cookie \(legacy\)<\/h2>/, 'the new title');
-    assert.ok(html.includes('Prefer &quot;Sign in to OzBargain&quot; above. This option will be removed.'), 'the 4.6 help line');
-    assert.match(html, /\/classifieds-session\/set/, 'the legacy form still posts to its own segment');
+    assert.doesNotMatch(html, /Paste a session cookie/, 'the paste card is gone');
+    assert.doesNotMatch(html, /\/classifieds-session\/set/, 'no form posts to the removed segment');
   });
 
   test('S4: rendering screen 9 with a gate row and attempts leaves ozb_login_attempts, access_gate and gate_events unchanged', async () => {

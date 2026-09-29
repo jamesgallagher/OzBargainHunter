@@ -88,9 +88,8 @@ test('the template uses the canonical public icon URL', () => {
 test('every Mask=true Config element is empty in the repository template (message never echoes content)', () => {
   const masked = configElements(xml).filter((c) => c.attrs.Mask === 'true');
   // The template ships with its masked fields intentionally empty: health check
-  // secret, CSRF secret, the account cookie, the matrix token and the ntfy
-  // token.
-  assert.ok(masked.length >= 5, `expected at least 5 masked Config elements, got ${masked.length}`);
+  // secret, CSRF secret, the matrix token and the ntfy token.
+  assert.ok(masked.length >= 4, `expected at least 4 masked Config elements, got ${masked.length}`);
   const nonEmpty = masked.filter((c) => c.content !== '');
   // The failure message reports only the field name and the count — never the
   // (empty) content — so a regression can never leak a value.

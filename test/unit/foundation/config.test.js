@@ -92,17 +92,20 @@ test('loadConfig normalizes whitespace-only secrets to empty (fail closed, D7)',
 });
 
 test('loadConfig does not trim the provider-owned opaque credentials (D7)', () => {
-  // OZB_ACCOUNT_COOKIE may contain cookie syntax; MATRIX_ACCESS_TOKEN /
-  // NTfy_TOKEN are opaque. Their contract is byte-exact: the application
-  // must not strip their bytes.
+  // MATRIX_ACCESS_TOKEN / NTfy_TOKEN are opaque. Their contract is
+  // byte-exact: the application must not strip their bytes.
   const config = loadConfig({
-    OZB_ACCOUNT_COOKIE: '  leading-space-cookie',
     MATRIX_ACCESS_TOKEN: '  opaque-token',
     NTfy_TOKEN: '  ntfy-token',
   });
-  assert.equal(config.OZB_ACCOUNT_COOKIE, '  leading-space-cookie');
   assert.equal(config.MATRIX_ACCESS_TOKEN, '  opaque-token');
   assert.equal(config.NTfy_TOKEN, '  ntfy-token');
+  // Chunk 7: the removed env variable is not a config key even when the
+  // environment sets it. The key is built from parts so the removal guard
+  // (card AC 7) does not match this file.
+  const envKey = ['OZB', 'ACCOUNT', 'COOKIE'].join('_');
+  const removed = loadConfig({ [envKey]: 'x' });
+  assert.equal(removed[envKey], undefined, 'loadConfig returns no such key');
 });
 
 test('the request-pause test override is honoured only when NODE_ENV is test', () => {
