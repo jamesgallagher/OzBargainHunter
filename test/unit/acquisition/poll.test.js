@@ -369,9 +369,11 @@ test('a fully-failed cycle after a success leaves last_success_at intact and acc
     // and /healthz depend on it). It is preserved from the baseline.
     assert.ok(state.last_success_at, 'last_success_at must not be NULL after a failed cycle');
     assert.equal(state.last_success_at, baseline);
-    assert.equal(result.failures, 4);
+    // The freebies feed's failure does not count (F2): a fully-failed cycle
+    // records 3 failures (deals page 0, deals page 1, front), not 4.
+    assert.equal(result.failures, 3);
     assert.equal(state.last_response_class, 'transient');
-    assert.equal(state.consecutive_failures, 4);
+    assert.equal(state.consecutive_failures, 3);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -396,14 +398,15 @@ test('two consecutive failed cycles accumulate consecutive_failures and grow the
   await runDealPoll({ client: makeClient(t2, clock, store), store, clock, log: () => {} });
   const s2 = store.getPollState();
   try {
-    // Each all-failed cycle fails 4 URLs. The counter is accumulated across
-    // cycles from the stored value (design 3.5 "three consecutive failures"),
-    // not reset every cycle: 4 after the first, 8 after the second. The
-    // backoff is a real delay (2^n), not the per-cycle URL count.
-    assert.equal(s1.consecutive_failures, 4);
-    assert.equal(s1.backoff_seconds, 16); // 2^4
-    assert.equal(s2.consecutive_failures, 8);
-    assert.equal(s2.backoff_seconds, 256); // 2^8
+    // Each all-failed cycle fails 3 URLs (the freebies feed's failure does
+    // not count, F2). The counter is accumulated across cycles from the
+    // stored value (design 3.5 "three consecutive failures"), not reset
+    // every cycle: 3 after the first, 6 after the second. The backoff is a
+    // real delay (2^n), not the per-cycle URL count.
+    assert.equal(s1.consecutive_failures, 3);
+    assert.equal(s1.backoff_seconds, 8); // 2^3
+    assert.equal(s2.consecutive_failures, 6);
+    assert.equal(s2.backoff_seconds, 64); // 2^6
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -537,15 +540,16 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   const dir = mkdtempSync(join(tmpdir(), 'ozb-c2-'));
   const clock = fixedClock(POLL_1_AT);
   const store = openStore({ path: join(dir, 'test.db'), clock });
-  // A stub client that fails every request with a transport error (all four
-  // URLs, so each cycle records 4 failures). It does not advance the clock
-  // (the real client's own backoff would overflow a fixed clock over 80
-  // failures), so this isolates the poll.js/store clamp.
+  // A stub client that fails every request with a transport error (the three
+  // non-freebies URLs count; the freebies feed's failure does not, F2, so
+  // each cycle records 3 failures). It does not advance the clock (the real
+  // client's own backoff would overflow a fixed clock over 60 failures), so
+  // this isolates the poll.js/store clamp.
   const stubClient = { blocked: false, async request() { throw new Error('transport down'); } };
   // An always-open gate isolates the poll_state counter and its clamp from
-  // the gate: every one of the 20 cycles fetches all four URLs (4 failures
-  // each, 80 total). Gate behaviour over repeated failing cycles is covered
-  // by G5.
+  // the gate: every one of the 20 cycles fetches all four URLs (3 failures
+  // each, 60 total; the freebies feed's failure does not count, F2). Gate
+  // behaviour over repeated failing cycles is covered by G5.
   const openGate = {
     mode: () => 'open',
     isOpen: () => true,
@@ -563,10 +567,10 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   }
   try {
     const s = store.getPollState();
-    // 20 failing cycles × 4 URLs = 80 failures, accumulated in the
+    // 20 failing cycles × 3 counting URLs = 60 failures, accumulated in the
     // poll_state counter (isolated from the gate by the always-open stub
     // gate above).
-    assert.equal(s.consecutive_failures, 80);
+    assert.equal(s.consecutive_failures, 60);
     // The exponent is clamped, so the stored backoff stays a safe integer
     // (2 * 2^11 = 4096) and never leaves the safe-integer range.
     assert.ok(Number.isSafeInteger(s.backoff_seconds), `backoff_seconds ${s.backoff_seconds} is not a safe integer`);
@@ -1000,8 +1004,13 @@ test('the freebies feed goes through the gate and conditional GET: a 200 stores 
   const t1 = createFixtureTransport(routes1);
   const c1 = createOzbClient({ transport: t1, store, clock, random: seededRandom(1), log: () => {}, gate });
   await runDealPoll({ client: c1, store, clock, log: () => {}, gate });
-  // The freebies 200 was fed to the gate under the freebies surface.
-  assert.ok(gateCalls.some((r) => r.surface === 'freebies' && r.class === 'ok'), 'the freebies 200 must be recorded to the gate under the freebies surface');
+  // The freebies 200 is fed to the gate under the deals-cycle surface
+  // (review round 1 F1: the gate's surface is 'deals' for all four
+  // deal-cycle URLs, so a 403 on any of them stops the gate). The two deals
+  // pages and the freebies feed 200 (three 'ok' calls); the front feed 304
+  // (one 'not_modified' call).
+  assert.equal(gateCalls.filter((r) => r.surface === 'deals' && r.class === 'ok').length, 3, 'the freebies 200 and the two deals pages are recorded to the gate under the deals surface');
+  assert.equal(gateCalls.filter((r) => r.surface === 'deals' && r.class === 'not_modified').length, 1, 'the front feed 304 is recorded to the gate under the deals surface');
   // The validators are stored for the freebies URL.
   const feedState = store.getFeedState(FREEBIES);
   assert.equal(feedState.etag, '"freebie-etag"');
@@ -1027,7 +1036,7 @@ test('the freebies feed goes through the gate and conditional GET: a 200 stores 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('a 500 or timeout on the freebies feed leaves deals and front processing and failure accounting exactly as a front-feed failure would', async () => {
+test('a 500 or timeout on the freebies feed degrades without driving the poller into backoff, while a front-feed failure still counts', async () => {
   const runScenario = async (routes) => {
     const dir = mkdtempSync(join(tmpdir(), 'ozb-freebie-500-'));
     const clock = fixedClock(POLL_1_AT);
@@ -1065,26 +1074,28 @@ test('a 500 or timeout on the freebies feed leaves deals and front processing an
   assert.equal(a.deals, 60);
   assert.equal(b.deals, 60);
   assert.equal(c.deals, 60);
-  // Each records exactly one failure (the failing freebies feed, or the
-  // failing front feed in B).
-  assert.equal(a.result.failures, 1);
-  assert.equal(b.result.failures, 1);
-  assert.equal(c.result.failures, 1);
+  // A and C (the freebies feed) record a failures row (transient /
+  // transport_error) but do NOT add to the cycle's failure counter (review
+  // round 1 F2: the freebies feed degrades without certifying a failing
+  // poll). B (the front feed) still counts as a failure.
+  assert.equal(a.result.failures, 0, 'a freebies 500 does not add to the cycle failure counter');
+  assert.equal(b.result.failures, 1, 'a front-feed 500 still adds to the cycle failure counter');
+  assert.equal(c.result.failures, 0, 'a freebies timeout does not add to the cycle failure counter');
   // A and B: the failure is classed transient (500); C: a timeout is
   // classed transport_error.
   assert.equal(a.failures[0].response_class, 'transient');
   assert.equal(b.failures[0].response_class, 'transient');
   assert.equal(c.failures[0].response_class, 'transport_error');
-  // All three record the same failure accounting: one failure, counter 1,
-  // backoff 2^1 = 2, last_success_at advanced (a deals feed was reached). A
-  // freebies failure degrades exactly like a front-feed failure — it does
-  // not certify a failing cycle.
-  assert.equal(a.state.consecutive_failures, 1);
+  // A and C: the freebies failure does not drive the poller into backoff
+  // (counter 0, backoff 0), but last_success_at still advances (a deals
+  // feed was reached). B: the front-feed failure counts (counter 1,
+  // backoff 2^1 = 2).
+  assert.equal(a.state.consecutive_failures, 0, 'a freebies 500 does not drive the poller into backoff');
   assert.equal(b.state.consecutive_failures, 1);
-  assert.equal(c.state.consecutive_failures, 1);
-  assert.equal(a.state.backoff_seconds, 2);
+  assert.equal(c.state.consecutive_failures, 0, 'a freebies timeout does not drive the poller into backoff');
+  assert.equal(a.state.backoff_seconds, 0);
   assert.equal(b.state.backoff_seconds, 2);
-  assert.equal(c.state.backoff_seconds, 2);
+  assert.equal(c.state.backoff_seconds, 0);
   assert.ok(a.state.last_success_at);
   assert.ok(b.state.last_success_at);
   assert.ok(c.state.last_success_at);
@@ -1131,4 +1142,78 @@ test('a 304 on the freebies feed alone does not certify a failing cycle: the cou
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- Review round 1 F2: a broken freebies feed degrades without driving the
+// poller into backoff ---
+
+test('F2: deals pages 200 and freebies 500 repeated over 3 cycles: consecutiveFailures stays 0, backoffSeconds stays 0, last_success_at advances', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-f2-500-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 500, body: 'boom' },
+  };
+  let prevSuccessAt = null;
+  for (let i = 0; i < 3; i += 1) {
+    await clock.advance(5 * 60 * 1000);
+    await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+    const state = store.getPollState();
+    assert.equal(state.consecutive_failures, 0, `cycle ${i + 1}: consecutiveFailures stays 0`);
+    assert.equal(state.backoff_seconds, 0, `cycle ${i + 1}: backoffSeconds stays 0`);
+    assert.ok(state.last_success_at, `cycle ${i + 1}: last_success_at is set`);
+    assert.ok(prevSuccessAt === null || state.last_success_at > prevSuccessAt, `cycle ${i + 1}: last_success_at advances`);
+    prevSuccessAt = state.last_success_at;
+  }
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('F2: deals pages 200 and freebies unparseable repeated over 3 cycles: consecutiveFailures stays 0, backoffSeconds stays 0, last_success_at advances', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-f2-unparseable-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 200, body: 'not xml' },
+  };
+  let prevSuccessAt = null;
+  for (let i = 0; i < 3; i += 1) {
+    await clock.advance(5 * 60 * 1000);
+    await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+    const state = store.getPollState();
+    assert.equal(state.consecutive_failures, 0, `cycle ${i + 1}: consecutiveFailures stays 0`);
+    assert.equal(state.backoff_seconds, 0, `cycle ${i + 1}: backoffSeconds stays 0`);
+    assert.ok(state.last_success_at, `cycle ${i + 1}: last_success_at is set`);
+    assert.ok(prevSuccessAt === null || state.last_success_at > prevSuccessAt, `cycle ${i + 1}: last_success_at advances`);
+    prevSuccessAt = state.last_success_at;
+  }
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('F2: deals page 0 failing and freebies 200: the counter still increments (freebies must not launder a failing cycle)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-f2-launder-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 200, fixture: 'http/freebies_feed.xml' },
+  };
+  await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+  const state = store.getPollState();
+  // The deals page 0 failure counts (1 failure), even though the freebies
+  // feed 200s. Freebies must not launder a failing cycle (the existing 304
+  // rule applied to 200 as well).
+  assert.equal(state.consecutive_failures, 1, 'the deals page 0 failure increments the counter');
+  assert.equal(state.backoff_seconds, 2, 'the backoff is 2^1 = 2');
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
 });

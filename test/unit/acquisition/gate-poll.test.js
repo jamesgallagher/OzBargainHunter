@@ -640,4 +640,66 @@ describe('gate: end-to-end (design 3.7)', () => {
       }
     }
   });
+
+  // --- Review round 1 F1: the gate's surface is 'deals' for all four
+  // deal-cycle URLs, so a 403 (OzBargain permission-denied) on any of them
+  // stops the gate (B4). ---
+
+  test('F1: a 403 (OzBargain permission-denied) on the front feed stops the gate (B4) and the freebies feed is not requested', async () => {
+    const env = makeEnv({});
+    try {
+      env.routes[P0] = { status: 200, fixture: 'http/r0.xml' };
+      env.routes[P1] = { status: 200, fixture: 'http/r1.xml' };
+      // The front feed 403 (OzBargain permission-denied shape: a 403 whose
+      // body is not a Cloudflare block marker).
+      env.routes[FRONT] = { status: 403, body: 'forbidden' };
+      // The freebies feed is intentionally NOT in the routes: if the poller
+      // requests it after the gate closes, the fixture transport throws and
+      // the transport-call count below catches it.
+      const callsBefore = env.transport.calls;
+      await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
+      const g = env.store.getGate();
+      assert.equal(g.state, 'stopped', 'the front feed 403 stops the gate');
+      assert.equal(g.rule, 'B4');
+      // The gate closed on the front feed 403: the freebies feed (the fourth
+      // URL) was not requested.
+      assert.equal(env.transport.calls, callsBefore + 3, 'the freebies feed is not requested after the front feed 403');
+    } finally {
+      env.close();
+    }
+  });
+
+  test('F1: a 403 (OzBargain permission-denied) on the freebies feed stops the gate (B4)', async () => {
+    const env = makeEnv({});
+    try {
+      env.routes[P0] = { status: 200, fixture: 'http/r0.xml' };
+      env.routes[P1] = { status: 200, fixture: 'http/r1.xml' };
+      env.routes[FRONT] = { status: 200, fixture: 'http/feed_feed.xml' };
+      // The freebies feed 403 (OzBargain permission-denied shape).
+      env.routes[FREEBIES] = { status: 403, body: 'forbidden' };
+      await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
+      const g = env.store.getGate();
+      assert.equal(g.state, 'stopped', 'the freebies feed 403 stops the gate');
+      assert.equal(g.rule, 'B4');
+      assert.equal(g.min_resume_at, env.clock.now().toISOString(), 'B4 allows an immediate resume');
+    } finally {
+      env.close();
+    }
+  });
+
+  test('F1: a 403 on /feed (the front feed) alone stops the gate (regression guard)', async () => {
+    const env = makeEnv({});
+    try {
+      env.routes[P0] = { status: 200, fixture: 'http/r0.xml' };
+      env.routes[P1] = { status: 200, fixture: 'http/r1.xml' };
+      env.routes[FRONT] = { status: 403, body: 'forbidden' };
+      await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
+      const g = env.store.getGate();
+      assert.equal(g.state, 'stopped', 'the /feed 403 stops the gate (regression guard)');
+      assert.equal(g.rule, 'B4');
+      assert.equal(g.min_resume_at, env.clock.now().toISOString(), 'B4 allows an immediate resume');
+    } finally {
+      env.close();
+    }
+  });
 });
