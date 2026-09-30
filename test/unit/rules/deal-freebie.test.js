@@ -440,4 +440,58 @@ describe('deal freebie: compose', () => {
     assert.ok(n.body.includes('[VIC] Free Anti-Theft Number Plate Screws Delivered'), 'the body carries the title');
     assert.ok(!n.body.includes('Merchant:'), 'no merchant line when there is no merchant_url');
   });
+
+  it('a deal_freebie with a relative or malformed merchant_url composes without a host line, and a rule alert in the same batch is still delivered', () => {
+    const relativeAlert = {
+      kind: 'deal_freebie',
+      rule_id: FREEBIE_RULE_ID,
+      ruleLabel: 'freebie',
+      node_id: 977001,
+      title: 'Free Thing One',
+      url: 'https://www.ozbargain.com.au/node/977001',
+      merchant_url: '/goto/123',
+      priority: 'normal',
+      tags: ['freebie', 'deal'],
+      isFrontPage: false,
+      pollAt: POLL_1_AT,
+    };
+    const malformedAlert = {
+      kind: 'deal_freebie',
+      rule_id: FREEBIE_RULE_ID,
+      ruleLabel: 'freebie',
+      node_id: 977002,
+      title: 'Free Thing Two',
+      url: 'https://www.ozbargain.com.au/node/977002',
+      merchant_url: 'not a url',
+      priority: 'normal',
+      tags: ['freebie', 'deal'],
+      isFrontPage: false,
+      pollAt: POLL_1_AT,
+    };
+    const ruleAlert = {
+      kind: 'rule',
+      rule_id: 1,
+      ruleLabel: 'shared',
+      node_id: 977003,
+      title: 'Rule Thing Three',
+      url: 'https://www.ozbargain.com.au/node/977003',
+      netVotes: 5,
+      rate: null,
+      matchedTerm: 'shared',
+      priority: 'normal',
+      isFrontPage: false,
+      tags: ['match', 'shared'],
+      pollAt: POLL_1_AT,
+    };
+    const notifications = groupAndCompose([relativeAlert, malformedAlert, ruleAlert]);
+    // Both deal_freebies compose without a host line (no merchant line).
+    const freebieNs = notifications.filter((n) => n.kind === 'deal_freebie');
+    assert.equal(freebieNs.length, 2, 'both deal_freebies compose');
+    for (const n of freebieNs) {
+      assert.ok(!n.body.includes('Merchant:'), 'no merchant line for a relative/malformed merchant_url');
+    }
+    // The rule alert in the same batch is still delivered.
+    const ruleN = notifications.find((n) => n.nodeIds.includes(977003));
+    assert.ok(ruleN, 'the rule alert is still delivered');
+  });
 });
