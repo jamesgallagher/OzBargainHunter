@@ -52,10 +52,10 @@ describe('integration: real worker alert reaches the loopback sink', () => {
       intervalMs: 50,
       what: 'one worker alert',
     }).catch(withLog);
-    // Let one more full poll cycle (three URLs) complete, so a duplicate alert
+    // Let one more full poll cycle (four URLs) complete, so a duplicate alert
     // would have had its chance to arrive, rather than sleeping a fixed time.
     const seen = fixture.requests.length;
-    await waitFor(() => fixture.requests.length >= seen + 3, {
+    await waitFor(() => fixture.requests.length >= seen + 4, {
       timeoutMs: 20_000,
       intervalMs: 50,
       what: 'one more full poll cycle after the alert',

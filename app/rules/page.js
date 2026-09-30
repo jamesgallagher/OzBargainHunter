@@ -9,6 +9,7 @@
  */
 
 import { getStore } from '../../lib/web/db.js';
+import { FREEBIE_SETTING_KEY, DEAL_FREEBIE_SETTING_KEY } from '../../lib/notify/freebie.js';
 import {
   PageHeader,
   DataTable,
@@ -31,6 +32,13 @@ export default function RulesPage() {
   const rules = store.getRules();
   const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Freebie alerts are not rules (D49): a read-only line under the header
+  // reflects the two freebie settings and links to Settings.
+  const dealFreebieRaw = store.getSetting(DEAL_FREEBIE_SETTING_KEY);
+  const dealFreebieOn = dealFreebieRaw === null ? true : dealFreebieRaw === '1';
+  const classifiedsFreebieRaw = store.getSetting(FREEBIE_SETTING_KEY);
+  const classifiedsFreebieOn = classifiedsFreebieRaw === null ? true : classifiedsFreebieRaw === '1';
 
   const columns = ['Rule', 'Type', 'State', 'Surfaces', '7d', '30d', 'Last fired', 'Cooldown'];
 
@@ -67,6 +75,10 @@ export default function RulesPage() {
         description="Match and threshold rules that trigger alerts."
         action={<Link className="btn btn-primary" href="/rules/new">New rule</Link>}
       />
+      <p className="hint">
+        Freebie alerts: Deals {dealFreebieOn ? 'on' : 'off'} · Classifieds {classifiedsFreebieOn ? 'on' : 'off'} —{' '}
+        <Link href="/thresholds">change in Settings</Link>
+      </p>
 
       {rules.length > 0 ? (
         <div className="card">

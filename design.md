@@ -379,9 +379,9 @@ Grouping across rules into a single notification is prohibited: it would leave t
 
 ### 6.6 Freebie notifications
 
-A configuration option, **"Always notify on freebie"**, lives in the notification settings and **defaults to on**.
+Freebies are not a rule; they are their own notification class, and there are two independent surfaces. Each is toggled by its own setting, both of which **default to on** (absent means on; `"1"` on, `"0"` off). The two settings are independent and are saved from their own forms.
 
-When enabled, **every new classified listing of type *Freebie* produces a notification immediately, without needing to match any rule.** Freebies are not a rule; they are their own notification class.
+**Classified freebies — "Always notify on freebie" (`always_notify_freebie`).** When enabled, **every new classified listing of type *Freebie* produces a notification immediately, without needing to match any rule.**
 
 - **Pinned listings are excluded, even when they are freebies.** A pinned freebie never notifies.
 - **Wanted listings are excluded**, as everywhere else (5.1).
@@ -390,6 +390,17 @@ When enabled, **every new classified listing of type *Freebie* produces a notifi
 - Priority is normal. Only front-page alerts outrank it (6.3).
 - **De-duplication applies unchanged**: a listing notifies once, keyed on its node ID (5.2), and the cold-start seeding rule (5.4) suppresses the initial batch rather than announcing every freebie already on the board at first run.
 - Expiry is respected: an already-expired freebie is not announced (5.3).
+
+**Deal freebies — "Always notify on deal freebie" (`always_notify_deal_freebie`).** When enabled, **every deal OzBargain lists under its *Freebies* feed (`/freebies/feed`) produces a notification immediately, without needing to match any rule.** The feed is polled as a fourth URL in the deal-poll cycle (3.2), after the front page, through the same shared poll client, the same access gate, and the same conditional-GET and failure accounting as the front feed. A failed freebies feed degrades, never kills: it must not count as deals progress, must not zero the failure counter, and a failure only means no deal-freebie alerts that cycle.
+
+- **Eligibility:** a deal is eligible when it is not expired (no `ozb:title-msg type="expired"`, and `expiry_at` null or in the future) and is not already in the freebie ledger for rule id `0`. Node ids are one id space across deals and classifieds, so rule id `0` stays the single freebie ledger. `upcoming`, `targeted` and `longrunning` items are eligible.
+- **Silent seeding:** the first time the freebies feed is evaluated on a store that has never seen it, every eligible item is marked in the ledger and nothing is sent. The instant of that seeding is recorded in the setting `deal_freebies_seeded_at`. Seeding happens even when the setting is off, so turning it on later does not flood the user with week-old freebies. This is distinct from the worker's cold-start seeding (5.4), which does not cover a store that already has data.
+- **The rules engine does not evaluate the freebies surface.** The feed reaches about eight days back, far past the deals pages 0/1, and letting it change what keyword/threshold rules see would be wrong. Records are still upserted; the freebies surface is skipped in the rules loop.
+- **One notification per node per poll:** if a keyword/threshold rule alerts on the same node in the same poll, the freebie alert is dropped, but its ledger row is still written so it never fires later.
+- **Surface handling:** a deal first seen on the front page keeps its `front` surface and `front_page_first_seen`; a deal first seen in the freebies feed gets a `freebie_first_seen` timestamp (nullable, added by migration v4) so the Activity screen can distinguish a **Deal** freebie from a **Classified** freebie.
+- The notification is titled *Freebie: <deal title>* (the RSS title, entities decoded), carries the merchant host from `ozb:meta url` when present, links to `/node/<id>`, has normal priority, and carries tags `freebie` and `deal`.
+- It carries the same two controls as any other alert (6.4), and its unsubscribe control targets `always_notify_deal_freebie` (the classifieds freebie's targets `always_notify_freebie`).
+- **De-duplication applies unchanged**: a deal notifies once, keyed on its node ID (5.2), under rule id `0`.
 
 ### 6.7 Notifier failure
 

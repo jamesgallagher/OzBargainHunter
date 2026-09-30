@@ -33,15 +33,15 @@
  * poll 1, live) match the same rule, so "one notification" is one *grouped*
  * notification per rule per poll (6.5) — and page 1's 975569 is the first
  * cooldown-suppressed sibling of 975704, not a second alert. The observation
- * cardinality is one row per deal per poll (design 4.1, D46), which is 60 after
- * poll 1 — not the 80 in the card's first acceptance bullet, which counts feed
- * occurrences (a cross-card note from the review of the acquisition card records
- * the correction and the measurement).
+ * cardinality is one row per deal per poll (design 4.1, D46), which is 90 after
+ * poll 1 (60 deals plus the 30 freebies-feed items) — not the 120 that counts
+ * feed occurrences (a cross-card note from the review of the acquisition card
+ * records the correction and the measurement).
  */
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEALS_PATH, FRONT_PATH, startFixtureServer } from '../../scripts/fixture-server.mjs';
+import { DEALS_PATH, FRONT_PATH, FREEBIES_PATH, startFixtureServer } from '../../scripts/fixture-server.mjs';
 import {
   configureCardRules,
   createCaptureProvider,
@@ -160,9 +160,9 @@ describe('integration: the three-poll corpus scenario', () => {
       assert.equal(cold.cycles[0].evaluation.coldStart, true);
     });
 
-    it('writes 60 deals and one observation per deal (60)', () => {
-      assert.equal(cold.snapshots[0].deals, 60);
-      assert.equal(cold.snapshots[0].observations, 60);
+    it('writes 90 deals and one observation per deal (90)', () => {
+      assert.equal(cold.snapshots[0].deals, 90);
+      assert.equal(cold.snapshots[0].observations, 90);
       // One row per deal, not one per feed occurrence: 975704 is observed once
       // at its poll-1 vote count of 17, and 975666 once at page 0's 113 (the
       // first feed in order wins; the front feed carries 99 for it).
@@ -181,20 +181,20 @@ describe('integration: the three-poll corpus scenario', () => {
       assert.equal(expired[0].poll_at, iso(POLL_1_AT));
     });
 
-    it('asks the fixture server for exactly three URLs, in order, and never page 2', () => {
-      const cycle = cold.requests.slice(0, 3);
-      assert.equal(cold.requests.length, 9, 'three polls, three requests each');
+    it('asks the fixture server for exactly four URLs, in order, and never page 2', () => {
+      const cycle = cold.requests.slice(0, 4);
+      assert.equal(cold.requests.length, 12, 'three polls, four requests each');
       assert.deepEqual(
         cycle.map((r) => r.key),
-        [`${DEALS_PATH}?page=0`, `${DEALS_PATH}?page=1`, FRONT_PATH],
-        'deals page 0, deals page 1, front page — in that order',
+        [`${DEALS_PATH}?page=0`, `${DEALS_PATH}?page=1`, FRONT_PATH, FREEBIES_PATH],
+        'deals page 0, deals page 1, front page, freebies feed — in that order',
       );
-      assert.deepEqual(cycle.map((r) => r.status), [200, 200, 200]);
+      assert.deepEqual(cycle.map((r) => r.status), [200, 200, 200, 200]);
       assert.ok(
         !cold.requests.some((r) => r.url.includes('page=2')),
         'the two-page cap holds: the fixture server was never asked for page 2',
       );
-      assert.equal(cold.requests.length % 3, 0, 'every cycle is exactly three requests');
+      assert.equal(cold.requests.length % 4, 0, 'every cycle is exactly four requests');
     });
   });
 
@@ -229,7 +229,7 @@ describe('integration: the three-poll corpus scenario', () => {
 
     it('observes the new deal 975721 and the risen vote count on 975704', () => {
       assert.ok(cold.store.getDeal(975721), '975721 (U98 Fuel, new at poll 2) is stored');
-      assert.equal(cold.snapshots[1].deals, 61);
+      assert.equal(cold.snapshots[1].deals, 91);
       assert.deepEqual(
         cold.snapshots[1].obs[975704].map((o) => o.votes_pos),
         [17, 24],
@@ -239,27 +239,27 @@ describe('integration: the three-poll corpus scenario', () => {
 
     it('takes 975666 once, although it is in both poll-2 feeds', () => {
       assert.equal(cold.snapshots[1].obs[975666].length, 2, 'one row per poll');
-      assert.equal(cold.snapshots[1].observations, 90, '60 at poll 1 + 30 at poll 2');
+      assert.equal(cold.snapshots[1].observations, 120, '90 at poll 1 + 30 at poll 2');
     });
 
-    it('is answered 200 / 304 / 200 — the mid-cycle conditional request is real', () => {
+    it('is answered 200 / 304 / 200 / 304 — the mid-cycle conditional request is real', () => {
       assert.deepEqual(
-        cold.requests.slice(3, 6).map((r) => r.status),
-        [200, 304, 200],
-        'page 0 changed, page 1 did not (a real 304), the front page changed',
+        cold.requests.slice(4, 8).map((r) => r.status),
+        [200, 304, 200, 304],
+        'page 0 changed, page 1 did not (a real 304), the front page changed, the freebies feed did not',
       );
       assert.equal(cold.cycles[1].poll.feeds.length, 2, 'a 304 contributes no feed');
     });
   });
 
-  describe('poll 3 — three 304s, nothing sent', () => {
-    it('gets three 304 responses', () => {
-      const cycle = cold.requests.slice(6, 9);
-      assert.deepEqual(cycle.map((r) => r.status), [304, 304, 304]);
+  describe('poll 3 — four 304s, nothing sent', () => {
+    it('gets four 304 responses', () => {
+      const cycle = cold.requests.slice(8, 12);
+      assert.deepEqual(cycle.map((r) => r.status), [304, 304, 304, 304]);
       assert.deepEqual(
         cycle.map((r) => r.key),
-        [`${DEALS_PATH}?page=0`, `${DEALS_PATH}?page=1`, FRONT_PATH],
-        'still exactly the three poll URLs',
+        [`${DEALS_PATH}?page=0`, `${DEALS_PATH}?page=1`, FRONT_PATH, FREEBIES_PATH],
+        'still exactly the four poll URLs',
       );
       assert.ok(
         cycle.every((r) => r.ifNoneMatch),

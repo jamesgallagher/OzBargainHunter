@@ -8,6 +8,7 @@ import { deadManState } from '../../../lib/acquire/deadman.js';
 import { createFixtureTransport } from '../../support/fixtureTransport.js';
 import { openStore } from '../../../lib/store/index.js';
 import { createOzbClient } from '../../../lib/http/client.js';
+import { createGate } from '../../../lib/gate/index.js';
 import { fixedClock } from '../../../lib/clock.js';
 import { seededRandom } from '../../../lib/random.js';
 
@@ -18,11 +19,13 @@ const P1 = {
   'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
   'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
   'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+  'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
 };
 const P2 = {
   'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/cmp_deals.xml' },
   'https://www.ozbargain.com.au/deals/feed?page=1': { status: 304, fixture: 'http/r1.xml' },
   'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/cmp_front.xml' },
+  'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
 };
 
 function makeClient(transport, clock, store) {
@@ -63,12 +66,14 @@ test('poll 1: 60 deals, 60 observations, front_page_first_seen on 20', async () 
   const { transport, store, result, close } = await runSingle(POLL_1_AT, P1);
   try {
     assertNoPage2(transport);
-    assert.equal(transport.requestLog.length, 3);
+    assert.equal(transport.requestLog.length, 4);
     assert.equal(store.countDeals(), 60);
     assert.equal(store.countAllObservations(), 60);
     assert.equal(store.countFrontPageFirstSeen(), 20);
     assert.equal(result.frontPageAvailable, true);
-    assert.equal(result.lastResponseClass, 'ok');
+    // The freebies feed (the fourth URL) 304s, so the cycle's last response
+    // class is not_modified (the deals pages and the front feed 200'd).
+    assert.equal(result.lastResponseClass, 'not_modified');
   } finally {
     close();
   }
@@ -83,7 +88,9 @@ test('poll 2 (single fresh run): 30 deals (cmp_deals; cmp_front is a subset), 30
     // is the cumulative count across both polls (60 from poll 1 + 975721).
     assert.equal(store.countDeals(), 30);
     assert.equal(store.countAllObservations(), 30);
-    assert.equal(result.lastResponseClass, 'ok');
+    // The freebies feed (the fourth URL) 304s, so the cycle's last response
+    // class is not_modified (the deals page 0 and the front feed 200'd).
+    assert.equal(result.lastResponseClass, 'not_modified');
   } finally {
     close();
   }
@@ -140,6 +147,7 @@ test('an unparseable 200 body is recorded as a failure and nothing is upserted f
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/derived/deals-page0-truncated.xml' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
     'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   const { store, result, close } = await runSingle(POLL_1_AT, routes);
   try {
@@ -168,11 +176,11 @@ test('node 975666 appears in the deals feed and the front-page feed at poll 1 an
   }
 });
 
-test('mid-cycle 304 at poll 2: all three requests are made, page 1 is not_modified, the other two are processed', async () => {
+test('mid-cycle 304 at poll 2: all four requests are made, page 1 is not_modified, the others are processed', async () => {
   const { transport, store, result, close } = await runSingle(POLL_2_AT, P2);
   try {
-    // All three URLs were requested, in order.
-    assert.equal(transport.requestLog.length, 3);
+    // All four URLs were requested, in order.
+    assert.equal(transport.requestLog.length, 4);
     assertNoPage2(transport);
     // Page 1 (the 304) is observable in the transport's request log: the
     // third request (page 1) was served a 304, while page 0 and the front
@@ -183,13 +191,16 @@ test('mid-cycle 304 at poll 2: all three requests are made, page 1 is not_modifi
     assert.equal(byUrl['https://www.ozbargain.com.au/deals/feed?page=0'], 200);
     assert.equal(byUrl['https://www.ozbargain.com.au/deals/feed?page=1'], 304);
     assert.equal(byUrl['https://www.ozbargain.com.au/feed'], 200);
+    assert.equal(byUrl['https://www.ozbargain.com.au/freebies/feed'], 304);
     // Page 1 (the 304) contributed nothing; page 0 (cmp_deals, 30) and the
     // front feed (a subset) did. 304 is not an error, so no failures row.
     assert.equal(result.failures, 0);
-    assert.equal(result.lastResponseClass, 'ok');
+    // The freebies feed (the fourth URL) 304s, so the cycle's last response
+    // class is not_modified (page 0 and the front feed 200'd).
+    assert.equal(result.lastResponseClass, 'not_modified');
     // poll_state records the last response class and a clean success.
     const state = store.getPollState();
-    assert.equal(state.last_response_class, 'ok');
+    assert.equal(state.last_response_class, 'not_modified');
     assert.ok(state.last_success_at, 'last_success_at should be set');
     assert.equal(state.consecutive_failures, 0);
   } finally {
@@ -202,6 +213,7 @@ test('promoted front feed at poll 1: 975122 is in deals with front_page_first_se
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
     'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/derived/front-feed-promoted.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   const { store, close } = await runSingle(POLL_1_AT, routes);
   try {
@@ -225,12 +237,13 @@ test('POLL_3 all-304 cycle: last_success_at is preserved (not wiped to NULL), th
   await runDealPoll({ client: makeClient(t1, clock, store), store, clock, log: () => {} });
   const baseline = store.getPollState().last_success_at;
   assert.ok(baseline, 'baseline last_success_at should be set after a successful poll');
-  // POLL_3: all three URLs return 304 (the expected common case, design 3.2).
+  // POLL_3: all four URLs return 304 (the expected common case, design 3.2).
   await clock.advance(5 * 60 * 1000);
   const all304 = {
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 304, fixture: 'http/r0.xml' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 304, fixture: 'http/r1.xml' },
     'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   const t3 = createFixtureTransport(all304);
   const result = await runDealPoll({ client: makeClient(t3, clock, store), store, clock, log: () => {} });
@@ -258,6 +271,7 @@ test('front feed 304 with 200 deals: the cycle commits the deals and keeps the f
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/cmp_deals.xml' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
     'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/cmp_front.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   const { store, result, close } = await runSingle(POLL_2_AT, routes);
   try {
@@ -293,11 +307,13 @@ test('front_page_first_seen is stable across polls: 975666 keeps its poll-1 valu
     assert.equal(deal.front_page_first_seen, '2026-09-19T07:30:00.000Z');
     // 975704 is on the front feed only at poll 2 (cmp_front), so it acquires
     // front_page_first_seen at poll 2 — the COALESCE must not block a first
-    // acquisition, only an overwrite. Poll 2's instant is 08:05:06Z.
+    // acquisition, only an overwrite. Poll 2's instant is 08:05:09Z (poll 1
+    // now makes four requests, so its trailing 3-second pause shifts the
+    // poll-2 start by one interval: 07:30:09 + 35 min = 08:05:09).
     const deal704 = store.getDeal(975704);
     assert.ok(deal704.front_page_first_seen, '975704 front_page_first_seen should be set at poll 2');
-    assert.equal(r2.pollAt, '2026-09-19T08:05:06.000Z');
-    assert.equal(deal704.front_page_first_seen, '2026-09-19T08:05:06.000Z');
+    assert.equal(r2.pollAt, '2026-09-19T08:05:09.000Z');
+    assert.equal(deal704.front_page_first_seen, '2026-09-19T08:05:09.000Z');
   } finally {
     close();
   }
@@ -310,11 +326,12 @@ test('a transport error mid-cycle is recorded as a failure and the cycle continu
   const routes = {
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
     'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   const { transport, store, result, close } = await runSingle(POLL_1_AT, routes);
   try {
-    // All three URLs were requested (page 0, the failing page 1, and front).
-    assert.equal(transport.requestLog.length, 3);
+    // All four URLs were requested (page 0, the failing page 1, front, freebies).
+    assert.equal(transport.requestLog.length, 4);
     assertNoPage2(transport);
     assert.ok(transport.requestLog.some((e) => e.url === 'https://www.ozbargain.com.au/feed'), 'the front feed should still be requested after the page-1 transport error');
     // One failure row, classed transport_error; the deals already fetched are
@@ -336,12 +353,13 @@ test('a fully-failed cycle after a success leaves last_success_at intact and acc
   await runDealPoll({ client: makeClient(t1, clock, store), store, clock, log: () => {} });
   const baseline = store.getPollState().last_success_at;
   assert.ok(baseline, 'baseline last_success_at should be set');
-  // A fully-failed cycle (all three 500 / transient).
+  // A fully-failed cycle (all four 500 / transient).
   await clock.advance(5 * 60 * 1000);
   const all500 = {
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/feed': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 500, body: 'boom' },
   };
   const t2 = createFixtureTransport(all500);
   const result = await runDealPoll({ client: makeClient(t2, clock, store), store, clock, log: () => {} });
@@ -351,6 +369,8 @@ test('a fully-failed cycle after a success leaves last_success_at intact and acc
     // and /healthz depend on it). It is preserved from the baseline.
     assert.ok(state.last_success_at, 'last_success_at must not be NULL after a failed cycle');
     assert.equal(state.last_success_at, baseline);
+    // The freebies feed's failure does not count (F2): a fully-failed cycle
+    // records 3 failures (deals page 0, deals page 1, front), not 4.
     assert.equal(result.failures, 3);
     assert.equal(state.last_response_class, 'transient');
     assert.equal(state.consecutive_failures, 3);
@@ -368,6 +388,7 @@ test('two consecutive failed cycles accumulate consecutive_failures and grow the
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/feed': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 500, body: 'boom' },
   };
   const t1 = createFixtureTransport(all500);
   await runDealPoll({ client: makeClient(t1, clock, store), store, clock, log: () => {} });
@@ -377,10 +398,11 @@ test('two consecutive failed cycles accumulate consecutive_failures and grow the
   await runDealPoll({ client: makeClient(t2, clock, store), store, clock, log: () => {} });
   const s2 = store.getPollState();
   try {
-    // Each all-failed cycle fails 3 URLs. The counter is accumulated across
-    // cycles from the stored value (design 3.5 "three consecutive failures"),
-    // not reset every cycle: 3 after the first, 6 after the second. The
-    // backoff is a real delay (2^n), not the per-cycle URL count.
+    // Each all-failed cycle fails 3 URLs (the freebies feed's failure does
+    // not count, F2). The counter is accumulated across cycles from the
+    // stored value (design 3.5 "three consecutive failures"), not reset
+    // every cycle: 3 after the first, 6 after the second. The backoff is a
+    // real delay (2^n), not the per-cycle URL count.
     assert.equal(s1.consecutive_failures, 3);
     assert.equal(s1.backoff_seconds, 8); // 2^3
     assert.equal(s2.consecutive_failures, 6);
@@ -397,6 +419,7 @@ test('a loopback config base changes the requested URL list (the config seam is 
   const config = {
     OZB_DEALS_FEED_URL: 'http://127.0.0.1:8787/deals/feed',
     OZB_FRONT_FEED_URL: 'http://127.0.0.1:8787/feed',
+    OZB_FREEBIES_FEED_URL: 'http://127.0.0.1:8787/freebies/feed',
   };
   const dir = mkdtempSync(join(tmpdir(), 'ozb-lb-'));
   const clock = fixedClock(POLL_1_AT);
@@ -405,6 +428,7 @@ test('a loopback config base changes the requested URL list (the config seam is 
     'http://127.0.0.1:8787/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
     'http://127.0.0.1:8787/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
     'http://127.0.0.1:8787/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'http://127.0.0.1:8787/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   const transport = createFixtureTransport(routes);
   const client = makeClient(transport, clock, store);
@@ -415,6 +439,7 @@ test('a loopback config base changes the requested URL list (the config seam is 
       'http://127.0.0.1:8787/deals/feed?page=0',
       'http://127.0.0.1:8787/deals/feed?page=1',
       'http://127.0.0.1:8787/feed',
+      'http://127.0.0.1:8787/freebies/feed',
     ]);
     // The production base must NOT appear in the requested URLs.
     assert.ok(!urls.some((u) => u.includes('ozbargain.com.au')), 'a loopback-configured poll must not call the production site');
@@ -442,6 +467,7 @@ test('C1: a broken deals feed (500/500) with a front-feed 304 does not launder t
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   };
   let lastResult;
   for (let i = 0; i < 3; i += 1) {
@@ -494,10 +520,12 @@ test('C1: the counter is derived from the cycle totals, not the last URL (order-
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
     'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
   });
   const sb = await runOne({
     'https://www.ozbargain.com.au/deals/feed?page=0': { status: 304, fixture: 'http/feed_feed.xml' },
     'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
     'https://www.ozbargain.com.au/feed': { status: 500, body: 'boom' },
   });
   // Both orderings store the same counter (2) and backoff (2^2 = 4), even
@@ -512,15 +540,16 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   const dir = mkdtempSync(join(tmpdir(), 'ozb-c2-'));
   const clock = fixedClock(POLL_1_AT);
   const store = openStore({ path: join(dir, 'test.db'), clock });
-  // A stub client that fails every request with a transport error (all three
-  // URLs, so each cycle records 3 failures). It does not advance the clock
-  // (the real client's own backoff would overflow a fixed clock over 60
-  // failures), so this isolates the poll.js/store clamp.
+  // A stub client that fails every request with a transport error (the three
+  // non-freebies URLs count; the freebies feed's failure does not, F2, so
+  // each cycle records 3 failures). It does not advance the clock (the real
+  // client's own backoff would overflow a fixed clock over 60 failures), so
+  // this isolates the poll.js/store clamp.
   const stubClient = { blocked: false, async request() { throw new Error('transport down'); } };
   // An always-open gate isolates the poll_state counter and its clamp from
-  // the gate: every one of the 20 cycles fetches all three URLs (3 failures
-  // each, 60 total). Gate behaviour over repeated failing cycles is covered
-  // by G5.
+  // the gate: every one of the 20 cycles fetches all four URLs (3 failures
+  // each, 60 total; the freebies feed's failure does not count, F2). Gate
+  // behaviour over repeated failing cycles is covered by G5.
   const openGate = {
     mode: () => 'open',
     isOpen: () => true,
@@ -538,7 +567,7 @@ test('C2: 20 consecutive all-failed cycles do not wedge the store (backoff bound
   }
   try {
     const s = store.getPollState();
-    // 20 failing cycles × 3 URLs = 60 failures, accumulated in the
+    // 20 failing cycles × 3 counting URLs = 60 failures, accumulated in the
     // poll_state counter (isolated from the gate by the always-open stub
     // gate above).
     assert.equal(s.consecutive_failures, 60);
@@ -950,4 +979,241 @@ test('a setPollState write that throws while unwinding a DeniedPathError still s
     realStore.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- Deal freebies (design 6.6): the fourth URL, a distinct surface ---
+
+test('the freebies feed goes through the gate and conditional GET: a 200 stores the validators, the next poll carries them and gets a 304', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-freebie-cg-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const FREEBIES = 'https://www.ozbargain.com.au/freebies/feed';
+  // A gate that records every response it is fed, delegating state to a real
+  // gate over the same store (so the freebies surface is observed going
+  // through the gate, exactly like the other surfaces).
+  const realGate = createGate({ store, clock, config: {}, log: () => {} });
+  const gateCalls = [];
+  const gate = { ...realGate, recordResponse: (r) => { gateCalls.push(r); realGate.recordResponse(r); } };
+  // Poll 1: the freebies feed 200s with validators.
+  const routes1 = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+    [FREEBIES]: { status: 200, fixture: 'http/freebies_feed.xml', headers: { etag: '"freebie-etag"', 'last-modified': 'Wed, 19 Sep 2026 07:30:00 GMT' } },
+  };
+  const t1 = createFixtureTransport(routes1);
+  const c1 = createOzbClient({ transport: t1, store, clock, random: seededRandom(1), log: () => {}, gate });
+  await runDealPoll({ client: c1, store, clock, log: () => {}, gate });
+  // The freebies 200 is fed to the gate under the deals-cycle surface
+  // (review round 1 F1: the gate's surface is 'deals' for all four
+  // deal-cycle URLs, so a 403 on any of them stops the gate). The two deals
+  // pages and the freebies feed 200 (three 'ok' calls); the front feed 304
+  // (one 'not_modified' call).
+  assert.equal(gateCalls.filter((r) => r.surface === 'deals' && r.class === 'ok').length, 3, 'the freebies 200 and the two deals pages are recorded to the gate under the deals surface');
+  assert.equal(gateCalls.filter((r) => r.surface === 'deals' && r.class === 'not_modified').length, 1, 'the front feed 304 is recorded to the gate under the deals surface');
+  // The validators are stored for the freebies URL.
+  const feedState = store.getFeedState(FREEBIES);
+  assert.equal(feedState.etag, '"freebie-etag"');
+  assert.equal(feedState.last_modified, 'Wed, 19 Sep 2026 07:30:00 GMT');
+  // Poll 2: the next request carries the stored validators; the server answers 304.
+  await clock.advance(5 * 60 * 1000);
+  const routes2 = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 304, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 304, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+    [FREEBIES]: { status: 304, fixture: 'http/freebies_feed.xml' },
+  };
+  const t2 = createFixtureTransport(routes2);
+  const c2 = createOzbClient({ transport: t2, store, clock, random: seededRandom(1), log: () => {}, gate });
+  await runDealPoll({ client: c2, store, clock, log: () => {}, gate });
+  const freebieCall = t2.requestLog.find((e) => e.url === FREEBIES);
+  assert.equal(freebieCall.options.headers['if-none-match'], '"freebie-etag"', 'the second poll must carry the stored ETag');
+  assert.equal(freebieCall.options.headers['if-modified-since'], 'Wed, 19 Sep 2026 07:30:00 GMT', 'the second poll must carry the stored Last-Modified');
+  // The 304 leaves feed_state untouched (the validators persist for the next poll).
+  const feedState2 = store.getFeedState(FREEBIES);
+  assert.equal(feedState2.etag, '"freebie-etag"');
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('a 500 or timeout on the freebies feed degrades without driving the poller into backoff, while a front-feed failure still counts', async () => {
+  const runScenario = async (routes) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ozb-freebie-500-'));
+    const clock = fixedClock(POLL_1_AT);
+    const store = openStore({ path: join(dir, 'test.db'), clock });
+    const result = await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+    const state = store.getPollState();
+    const deals = store.countDeals();
+    const failures = store.getFailures();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+    return { result, state, deals, failures };
+  };
+  // A: the freebies feed 500s; the deals pages and the front feed 200.
+  const a = await runScenario({
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 500, body: 'boom' },
+  });
+  // B: the front feed 500s; the deals pages 200 and the freebies feed 304.
+  const b = await runScenario({
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
+  });
+  // C: a timeout (transport error) on the freebies feed (no route for the
+  // freebies URL); the deals pages and the front feed 200.
+  const c = await runScenario({
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+  });
+  // Every scenario commits the 60 deals from the two deals pages.
+  assert.equal(a.deals, 60);
+  assert.equal(b.deals, 60);
+  assert.equal(c.deals, 60);
+  // A and C (the freebies feed) record a failures row (transient /
+  // transport_error) but do NOT add to the cycle's failure counter (review
+  // round 1 F2: the freebies feed degrades without certifying a failing
+  // poll). B (the front feed) still counts as a failure.
+  assert.equal(a.result.failures, 0, 'a freebies 500 does not add to the cycle failure counter');
+  assert.equal(b.result.failures, 1, 'a front-feed 500 still adds to the cycle failure counter');
+  assert.equal(c.result.failures, 0, 'a freebies timeout does not add to the cycle failure counter');
+  // A and B: the failure is classed transient (500); C: a timeout is
+  // classed transport_error.
+  assert.equal(a.failures[0].response_class, 'transient');
+  assert.equal(b.failures[0].response_class, 'transient');
+  assert.equal(c.failures[0].response_class, 'transport_error');
+  // A and C: the freebies failure does not drive the poller into backoff
+  // (counter 0, backoff 0), but last_success_at still advances (a deals
+  // feed was reached). B: the front-feed failure counts (counter 1,
+  // backoff 2^1 = 2).
+  assert.equal(a.state.consecutive_failures, 0, 'a freebies 500 does not drive the poller into backoff');
+  assert.equal(b.state.consecutive_failures, 1);
+  assert.equal(c.state.consecutive_failures, 0, 'a freebies timeout does not drive the poller into backoff');
+  assert.equal(a.state.backoff_seconds, 0);
+  assert.equal(b.state.backoff_seconds, 2);
+  assert.equal(c.state.backoff_seconds, 0);
+  assert.ok(a.state.last_success_at);
+  assert.ok(b.state.last_success_at);
+  assert.ok(c.state.last_success_at);
+  // Front-page availability differs only in B, where the front feed itself
+  // failed — exactly as a front-feed failure would.
+  assert.equal(a.result.frontPageAvailable, true);
+  assert.equal(b.result.frontPageAvailable, false);
+  assert.equal(c.result.frontPageAvailable, true);
+});
+
+test('a 304 on the freebies feed alone does not certify a failing cycle: the counter accumulates and last_success_at is not advanced', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-freebie-304-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  // A successful baseline poll establishes last_success_at.
+  await runDealPoll({ client: makeClient(createFixtureTransport(P1), clock, store), store, clock, log: () => {} });
+  const baseline = store.getPollState().last_success_at;
+  assert.ok(baseline, 'baseline last_success_at should be set');
+  // A failing cycle: the deals feed is down (500/500). The front feed and the
+  // freebies feed both 304. Neither 304 may certify the poll healthy: the
+  // counter accumulates and last_success_at is preserved (a deals feed was
+  // not reached).
+  const failCycle = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/feed': { status: 304, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 304, fixture: 'http/freebies_feed.xml' },
+  };
+  await clock.advance(5 * 60 * 1000);
+  const result = await runDealPoll({ client: makeClient(createFixtureTransport(failCycle), clock, store), store, clock, log: () => {} });
+  try {
+    const state = store.getPollState();
+    // Two failures (the two deals pages). The freebies 304 is not a failure
+    // and does not zero the counter or certify the cycle.
+    assert.equal(result.failures, 2);
+    assert.equal(state.consecutive_failures, 2);
+    assert.equal(state.backoff_seconds, 4); // 2^2
+    // last_success_at is NOT advanced by the freebies (or front) 304: a
+    // deals feed was not reached.
+    assert.equal(state.last_success_at, baseline);
+    // The front feed 304 still reports the front page as available.
+    assert.equal(result.frontPageAvailable, true);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Review round 1 F2: a broken freebies feed degrades without driving the
+// poller into backoff ---
+
+test('F2: deals pages 200 and freebies 500 repeated over 3 cycles: consecutiveFailures stays 0, backoffSeconds stays 0, last_success_at advances', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-f2-500-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 500, body: 'boom' },
+  };
+  let prevSuccessAt = null;
+  for (let i = 0; i < 3; i += 1) {
+    await clock.advance(5 * 60 * 1000);
+    await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+    const state = store.getPollState();
+    assert.equal(state.consecutive_failures, 0, `cycle ${i + 1}: consecutiveFailures stays 0`);
+    assert.equal(state.backoff_seconds, 0, `cycle ${i + 1}: backoffSeconds stays 0`);
+    assert.ok(state.last_success_at, `cycle ${i + 1}: last_success_at is set`);
+    assert.ok(prevSuccessAt === null || state.last_success_at > prevSuccessAt, `cycle ${i + 1}: last_success_at advances`);
+    prevSuccessAt = state.last_success_at;
+  }
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('F2: deals pages 200 and freebies unparseable repeated over 3 cycles: consecutiveFailures stays 0, backoffSeconds stays 0, last_success_at advances', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-f2-unparseable-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 200, fixture: 'http/r0.xml' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 200, body: 'not xml' },
+  };
+  let prevSuccessAt = null;
+  for (let i = 0; i < 3; i += 1) {
+    await clock.advance(5 * 60 * 1000);
+    await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+    const state = store.getPollState();
+    assert.equal(state.consecutive_failures, 0, `cycle ${i + 1}: consecutiveFailures stays 0`);
+    assert.equal(state.backoff_seconds, 0, `cycle ${i + 1}: backoffSeconds stays 0`);
+    assert.ok(state.last_success_at, `cycle ${i + 1}: last_success_at is set`);
+    assert.ok(prevSuccessAt === null || state.last_success_at > prevSuccessAt, `cycle ${i + 1}: last_success_at advances`);
+    prevSuccessAt = state.last_success_at;
+  }
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('F2: deals page 0 failing and freebies 200: the counter still increments (freebies must not launder a failing cycle)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ozb-f2-launder-'));
+  const clock = fixedClock(POLL_1_AT);
+  const store = openStore({ path: join(dir, 'test.db'), clock });
+  const routes = {
+    'https://www.ozbargain.com.au/deals/feed?page=0': { status: 500, body: 'boom' },
+    'https://www.ozbargain.com.au/deals/feed?page=1': { status: 200, fixture: 'http/r1.xml' },
+    'https://www.ozbargain.com.au/feed': { status: 200, fixture: 'http/feed_feed.xml' },
+    'https://www.ozbargain.com.au/freebies/feed': { status: 200, fixture: 'http/freebies_feed.xml' },
+  };
+  await runDealPoll({ client: makeClient(createFixtureTransport(routes), clock, store), store, clock, log: () => {} });
+  const state = store.getPollState();
+  // The deals page 0 failure counts (1 failure), even though the freebies
+  // feed 200s. Freebies must not launder a failing cycle (the existing 304
+  // rule applied to 200 as well).
+  assert.equal(state.consecutive_failures, 1, 'the deals page 0 failure increments the counter');
+  assert.equal(state.backoff_seconds, 2, 'the backoff is 2^1 = 2');
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
 });

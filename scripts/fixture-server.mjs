@@ -12,13 +12,15 @@
  *
  * Behaviour:
  *
- * - **Three poll URLs.** `/deals/feed?page=0`, `/deals/feed?page=1` and
- *   `/feed`, mapped to the corpus timeline in `fixtures/README.md` §2.
+ * - **Four poll URLs.** `/deals/feed?page=0`, `/deals/feed?page=1`, `/feed`
+ *   and `/freebies/feed`, mapped to the corpus timeline in
+ *   `fixtures/README.md` §2.
  * - **The timeline advances on successive requests.** Each URL has an ordered
  *   list of fixture files; the Nth request for a URL serves the Nth entry,
  *   clamped at the last one. So poll 1 gets `r0.xml` / `r1.xml` /
- *   `feed_feed.xml`, poll 2 gets `cmp_deals.xml` / `r1.xml` / `cmp_front.xml`
- *   and poll 3 gets the poll-2 bodies again.
+ *   `feed_feed.xml` / `freebies_feed.xml`, poll 2 gets `cmp_deals.xml` /
+ *   `r1.xml` / `cmp_front.xml` / `freebies_feed.xml` and poll 3 gets the
+ *   poll-2 bodies again.
  * - **A real conditional request.** Every 200 carries a strong `ETag` derived
  *   from the bytes served. When the client's `If-None-Match` matches the version
  *   it is about to be served, the server answers `304` with no body — so the
@@ -26,7 +28,7 @@
  *   code the app is told to expect.
  * - **It records every request** (URL, status, and whether it carried
  *   `If-None-Match`), which is what lets a test assert that a poll cycle is
- *   exactly three requests in order and never `page=2`.
+ *   exactly four requests in order and never `page=2`.
  * - **It listens on loopback only** (`127.0.0.1`), which is also the only host
  *   the network guard permits, so a test can use it while the guard is armed.
  *
@@ -54,6 +56,8 @@ export const FIXTURES_DIR = fileURLToPath(new URL('../fixtures/', import.meta.ur
 export const DEALS_PATH = '/deals/feed';
 /** The path the front-page feed is requested at. */
 export const FRONT_PATH = '/feed';
+/** The path the freebies feed is requested at. */
+export const FREEBIES_PATH = '/freebies/feed';
 /** The path the classifieds page is requested at. */
 export const CLASSIFIEDS_PATH = '/classified';
 
@@ -69,6 +73,7 @@ export const TIMELINE = Object.freeze({
   [`${DEALS_PATH}?page=0`]: ['http/r0.xml', 'http/cmp_deals.xml', 'http/cmp_deals.xml'],
   [`${DEALS_PATH}?page=1`]: ['http/r1.xml', 'http/r1.xml'],
   [FRONT_PATH]: ['http/feed_feed.xml', 'http/cmp_front.xml', 'http/cmp_front.xml'],
+  [FREEBIES_PATH]: ['http/freebies_feed.xml'],
   [CLASSIFIEDS_PATH]: ['http/classifieds-page.html'],
 });
 
@@ -102,6 +107,7 @@ export function resolveKey(requestUrl) {
     return { key: `${DEALS_PATH}?page=${normalised}`, page: normalised };
   }
   if (url.pathname === FRONT_PATH) return { key: FRONT_PATH, page: null };
+  if (url.pathname === FREEBIES_PATH) return { key: FREEBIES_PATH, page: null };
   if (url.pathname === CLASSIFIEDS_PATH) return { key: CLASSIFIEDS_PATH, page: null };
   return { key: null, page: null };
 }
@@ -661,24 +667,26 @@ export function createFixtureServer({
     },
     /**
      * The config a caller points the application at.
-     * @returns {{ OZB_DEALS_FEED_URL: string, OZB_FRONT_FEED_URL: string, OZB_CLASSIFIEDS_URL: string }}
+     * @returns {{ OZB_DEALS_FEED_URL: string, OZB_FRONT_FEED_URL: string, OZB_FREEBIES_FEED_URL: string, OZB_CLASSIFIEDS_URL: string }}
      */
     appConfig() {
       if (!this.origin) throw new Error('fixture server: call start() before appConfig()');
       return {
         OZB_DEALS_FEED_URL: `${this.origin}${DEALS_PATH}`,
         OZB_FRONT_FEED_URL: `${this.origin}${FRONT_PATH}`,
+        OZB_FREEBIES_FEED_URL: `${this.origin}${FREEBIES_PATH}`,
         OZB_CLASSIFIEDS_URL: `${this.origin}${CLASSIFIEDS_PATH}`,
       };
     },
     /**
      * The requests the application made for one poll cycle, in order: deals
-     * page 0, deals page 1, the front page. Used by the cycle assertions.
+     * page 0, deals page 1, the front page, the freebies feed. Used by the
+     * cycle assertions.
      * @param {number} cycle 1-based cycle number
      * @returns {object[]}
      */
     cycleRequests(cycle) {
-      return requests.slice((cycle - 1) * 3, cycle * 3);
+      return requests.slice((cycle - 1) * 4, cycle * 4);
     },
     /** Stop listening. Destroys live connections first (the application's
      *  keep-alive socket) so the close does not hang. */
@@ -722,6 +730,7 @@ if (isMain) {
   }
   console.log(`  OZB_DEALS_FEED_URL=${server.appConfig().OZB_DEALS_FEED_URL}`);
   console.log(`  OZB_FRONT_FEED_URL=${server.appConfig().OZB_FRONT_FEED_URL}`);
+  console.log(`  OZB_FREEBIES_FEED_URL=${server.appConfig().OZB_FREEBIES_FEED_URL}`);
   console.log(`  OZB_CLASSIFIEDS_URL=${server.appConfig().OZB_CLASSIFIEDS_URL}`);
   const stop = async () => {
     await server.close();

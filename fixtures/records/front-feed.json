@@ -49,6 +49,7 @@
           "label": "Wireless Router"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/04/975704l.jpg?h=1b74c47d\"/></div><p>UDR7 on a good price @PLE as part of their 35 year anniversary celebration. Personally I found this super easy to setup and create multiple networks to isolate my devices and have granular control on …</p>"
     },
     {
@@ -87,6 +88,7 @@
           "label": "Catan Studio"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/99/975699l.jpg?h=d2f3a043\"/></div><p>It&#039;s the 21st Century and Catan is at a crossroads. Long gone is the agrarian society of the island&#039;s Viking ancestors. Today&#039;s Catanians need energy to keep society moving and …</p>"
     },
     {
@@ -125,6 +127,7 @@
           "label": "Game Controller"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/77/975677l.jpg?h=ecbf717b\"/></div><p>Big W has the Backbone One Gen 2 USB-C on clearance for $69. The PlayStation edition is also the same price. JB Hifi price matched when I bought in-store. PlayStation …</p>"
     },
     {
@@ -148,6 +151,7 @@
           "label": "Home & Garden"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/75/975675l.jpg?h=7d0e7c77\"/></div><p>My first Deal here. Needed to buy a motion sensor light for my laundry and walk in robes. It was cheaper than Bunnings in this website. I tried my luck with Price Beat Guarantee at Bunnings and staff …</p>"
     },
     {
@@ -191,6 +195,7 @@
           "label": "SIM Card"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/70/975670l.jpg?h=9d44ffcc\"/></div><p>TopCashback link: (1) SIM must be activated within 30 days of purchase and must remain connected on a OnePass Mobile plan for a minimum 75 days to be eligible for cashback. (2) Cashback is …</p>"
     },
     {
@@ -219,6 +224,7 @@
           "label": "Bittorrent"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/66/975666l.jpg?h=c8d0ee84\"/></div><p>Temporary discount for 1 million signed up users, as well as TorBox&#039;s belated 3rd birthday, posted on their Discord. New accounts only. Works with all payment methods, not just crypto. Using a …</p>"
     },
     {
@@ -251,6 +257,9 @@
           "slug": "coolabah",
           "label": "Coolabah"
         }
+      ],
+      "title_msg_types": [
+        "upcoming"
       ],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/62/975662l.jpg?h=9fc7d5ae\"/></div><p> Product Details: This Kamado Ceramic BBQ features a stainless steel grill rack, bamboo handles and built-in temperature gauge. Multifunctional – it can be used to smoke, chargrill, bake, …</p>"
     },
@@ -300,6 +309,7 @@
           "label": "Xiaomi WPB1007MI"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/57/975657l.jpg?h=c5639248\"/></div><p>Product model WPB1007MI Battery type Lithium-ion battery Rated capacity* 5,900mAh (5V/3A) Battery power 37Wh: The product has two built-in 5,000mAh batteries Wireless output 7.5W MAX Input …</p>"
     },
     {
@@ -348,6 +358,7 @@
           "label": "Steak"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/54/975654l.jpg?h=2f1542d2\"/></div><p>Use code Free delivery at checkout (shown on page) price will drop to $100. Delivery area map. 5kg Try and See Beef Mixed Box - Grass Fed What&#039;s in the box? Mixed 5kg may contain a mix of the …</p>"
     },
     {
@@ -426,6 +437,7 @@
           "label": "Rechargeable Battery"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/52/975652l.jpg?h=9829324b\"/></div><p>Australian Landscaping Supplies are running a EGO Power+ promo. The LM1703E model is 30% off and is included in the EGO Power+ Spring Redemption promo where you can get a bonus LB6150E blower …</p>"
     },
     {
@@ -489,6 +501,7 @@
           "label": "UHD TV"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/50/975650l.jpg?h=20348eaf\"/></div><p>This seems like an impressive bang-for-buck choice. 98&quot; for under $3k. $2985 via Price Check button. Bonus standard delivery and installation is available within 30km of a The Good Guys store. …</p>"
     },
     {
@@ -537,6 +550,7 @@
           "label": "Video Game"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/47/975647l.jpg?h=0eede5c8\"/></div><p>PAPERHEAD &quot;EP.0&quot; is a mix of a fast-paced movement boomer shooter and an adventure horror game, featuring a unique soundtrack. In &quot;EP.0&quot; (Episode 0), you wake up in a prison …</p>"
     },
     {
@@ -585,6 +599,7 @@
           "label": "Video Game"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/45/975645l.jpg?h=c9b63f83\"/></div><p>You wake up as an army soldier in the middle of a mutant apocalypse, trying to figure out what the hell happened and blasting some heads on the way. Deadshot is a retro styled first person shooter …</p>"
     },
     {
@@ -643,6 +658,7 @@
           "label": "nbn"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/40/975640l.jpg?h=e1ea34a2\"/></div><p> Cashback is eligible only on Energy (electricity &amp; gas), Broadband, and Solar products on a completed purchase &amp; payment of a policy. A completed quote is not an eligible purchase and will …</p>"
     },
     {
@@ -686,6 +702,7 @@
           "label": "Reward Points"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/39/975639l.jpg?h=90c8c0bc\"/></div><p>Initial 6 weeks free cover &amp; 25,000/50,000 Live Better rewards points Must maintain direct debit, Must hold eligible cover for 42 consecutive days from the policy start date, The initial 6 …</p>"
     },
     {
@@ -759,6 +776,7 @@
           "label": "Wallet"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/35/975635l.jpg?h=1c472b05\"/></div><p>20% off will be applied at checkout. Included times: iPhone 18 Pro and 18 Pro Max Apple Silicone &amp; Clear Cases $63.20 (was $79). iPhone 18 Pro and 18 Pro Max Apple TechWoven Cases $79.20 (was …</p>"
     },
     {
@@ -812,6 +830,7 @@
           "label": "Video Game"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/31/975631l.jpg?h=1871d2a9\"/></div><p>Free Charmander Wearing Friede’s Goggles with a Special Background Timed Research. Redeem Here Research Tasks Catch 10 Pokémon Catch 20 Pokémon Use 5 Berries to help catch Pokémon Make 10 …</p>"
     },
     {
@@ -844,6 +863,9 @@
           "slug": "naan",
           "label": "Naan"
         }
+      ],
+      "title_msg_types": [
+        "targeted"
       ],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/30/975630.jpg?h=54072809\"/></div><p>Checked my Rewards app earlier and surprised to see this come up as a freebie. Already went to Woolies and got a packet. </p>"
     },
@@ -898,6 +920,7 @@
           "label": "Wireless Router"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/29/975629l.jpg?h=f3b3c024\"/></div><p>Not the newest router out there but wifi 6, suitable enough for home use with 5ghz and 2.4ghz on 500/50 NBN. Comes as a 3 pack so will have good coverage of dead zones. Price is $100 but got it for …</p>"
     },
     {
@@ -936,6 +959,7 @@
           "label": "Niseko"
         }
       ],
+      "title_msg_types": [],
       "description_html": "<div><img src=\"https://files.ozbargain.com.au/n/27/975627l.jpg?h=b42ac077\"/></div><p>It&#039;s ski booking season and nobody&#039;s posted Japan snow fares since April, so I ran every capital to Sapporo and Tokyo for December through March. The cheap weeks are late February and …</p>"
     }
   ]

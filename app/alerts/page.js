@@ -7,7 +7,7 @@
 
 import { getStore } from '../../lib/web/db.js';
 import LocalTime from '../components/local-time.js';
-import { DataTable, EmptyState, PageHeader, Subnav } from '../components/ui.js';
+import { Badge, DataTable, EmptyState, PageHeader, Subnav } from '../components/ui.js';
 
 export const metadata = { title: 'Alerts' };
 const activityLinks = [{ label: 'Alerts', href: '/alerts' }, { label: 'Suppressions', href: '/suppressions' }];
@@ -28,11 +28,29 @@ export default function AlertsPage() {
       rows.push({
         id: `${rule.id}-${entry.node_id}-${entry.fired_at}`,
         firedAt: entry.fired_at,
+        kind: 'rule',
         ruleId: rule.id,
         title: entry.title ?? `node ${entry.node_id}`,
         url: `https://www.ozbargain.com.au/node/${entry.node_id}`,
       });
     }
+  }
+  // Freebie ledger rows (the reserved rule id 0) since `since`: a freebie is
+  // not a rule, so it is listed alongside the rule rows with its own badge.
+  // The surface (Deal vs Classified) comes from the deal's `freebie_first_seen`
+  // (design 6.6, D49): set means the node was first seen in the freebies feed
+  // (a deal), null means a classifieds freebie.
+  const freebieLedger = store.getFreebieLedger(since);
+  for (const entry of freebieLedger) {
+    rows.push({
+      id: `freebie-${entry.node_id}-${entry.fired_at}`,
+      firedAt: entry.fired_at,
+      kind: 'freebie',
+      ruleId: 0,
+      surface: entry.freebie_first_seen != null ? 'Deal' : 'Classified',
+      title: entry.title ?? `node ${entry.node_id}`,
+      url: `https://www.ozbargain.com.au/node/${entry.node_id}`,
+    });
   }
   rows.sort((a, b) => (a.firedAt < b.firedAt ? 1 : -1));
 
@@ -43,7 +61,11 @@ export default function AlertsPage() {
       {rows.length ? (
         <DataTable className="alerts" columns={['When', 'Rule', 'Deal / listing']} rows={rows.map((r) => [
           <LocalTime key="time" iso={r.firedAt} />,
-          <span key="rule">Rule #{r.ruleId}</span>,
+          <span key="rule">
+            {r.kind === 'freebie'
+              ? <><Badge tone="accent">Freebie</Badge> <span>{r.surface}</span></>
+              : <span>Rule #{r.ruleId}</span>}
+          </span>,
           <a key="deal" href={r.url} target="_blank" rel="noreferrer">{r.title} <span aria-hidden="true">↗</span></a>,
         ])} />
       ) : <EmptyState title="No alerts yet." body="Alerts will appear here after a rule fires." />}

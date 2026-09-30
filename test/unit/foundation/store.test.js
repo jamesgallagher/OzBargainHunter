@@ -19,9 +19,9 @@ function withStore(fn) {
   }
 }
 
-test('a fresh database is created at schema version 3 with all thirteen tables', () => {
+test('a fresh database is created at schema version 4 with all thirteen tables', () => {
   withStore((store) => {
-    assert.equal(store.schemaVersion, 3);
+    assert.equal(store.schemaVersion, 4);
     const expected = [
       'access_gate',
       'deals',
@@ -386,6 +386,8 @@ test('openStore migrates a v1 database with a duplicate observation pair to v3 w
   db.exec('DROP INDEX idx_gate_events_at');
   db.exec('DROP TABLE gate_events');
   db.exec('DROP TABLE access_gate');
+  // And no freebie column (added by the v4 migration).
+  db.exec('ALTER TABLE deals DROP COLUMN freebie_first_seen');
   // Two rows, same (deal_id, observed_at): one per feed, as v1 left them.
   db.prepare(
     `INSERT INTO observations (deal_id, votes_pos, votes_neg, comment_count, click_count, observed_at)
@@ -401,10 +403,10 @@ test('openStore migrates a v1 database with a duplicate observation pair to v3 w
   build.close();
 
   // 2. Re-open: the migrations must de-duplicate before creating the index,
-  // and the v3 migration must create the gate tables.
+  // and the v3 migration must create the gate tables (and v4 the freebie column).
   const store = openStore({ path: dbPath, clock });
   const db2 = store.getDb();
-  assert.equal(store.schemaVersion, 3, 'migrated to v3');
+  assert.equal(store.schemaVersion, 4, 'migrated to v4');
   const gate = db2.prepare("SELECT state FROM access_gate WHERE id = 1").get();
   assert.equal(gate.state, 'open', 'the gate row is seeded open by the v3 migration');
   const obs = db2.prepare('SELECT id, deal_id, observed_at FROM observations ORDER BY id').all();

@@ -78,13 +78,14 @@ describe('integration: the live server and its middleware', () => {
       ...env,
       OZB_DEALS_FEED_URL: `${fx.origin}/deals/feed`,
       OZB_FRONT_FEED_URL: `${fx.origin}/feed`,
+      OZB_FREEBIES_FEED_URL: `${fx.origin}/freebies/feed`,
       OZB_CLASSIFIEDS_URL: `${fx.origin}/classified`,
     });
 
     // Polling with nobody watching (2.2): two full cycles reach the fixture
-    // server (three URLs each, 3.2) before this file has sent the application
+    // server (four URLs each, 3.2) before this file has sent the application
     // a single request. Capture the evidence now, before any request below.
-    await waitFor(() => fx.requests.length >= 6, {
+    await waitFor(() => fx.requests.length >= 8, {
       timeoutMs: 60_000,
       intervalMs: 100,
       what: 'two deal-poll cycles to reach the fixture server',
@@ -128,11 +129,12 @@ describe('integration: the live server and its middleware', () => {
       assert.ok(unwatched.lastSuccessAt, 'the worker recorded a successful poll');
     });
 
-    it('served the fixture server three URLs per cycle, in order, and never page 2', () => {
+    it('served the fixture server four URLs per cycle, in order, and never page 2', () => {
       assert.ok(!unwatched.urls.some((u) => u.includes('page=2')), 'the two-page cap holds');
       assert.match(unwatched.urls[0], /\/deals\/feed\?page=0$/);
       assert.match(unwatched.urls[1], /\/deals\/feed\?page=1$/);
       assert.match(unwatched.urls[2], /\/feed$/);
+      assert.match(unwatched.urls[3], /\/freebies\/feed$/);
     });
   });
 

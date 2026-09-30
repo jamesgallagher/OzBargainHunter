@@ -13,6 +13,7 @@ import {
   DEALS_PATH,
   FIXTURES_DIR,
   FRONT_PATH,
+  FREEBIES_PATH,
   createFixtureServer,
   etagFor,
   resolveKey,
@@ -36,10 +37,11 @@ describe('integration: the fixture server', () => {
     assert.match(fx.origin, /^http:\/\/127\.0\.0\.1:\d+$/);
   });
 
-  it('maps the three poll URLs to the corpus timeline (fixtures/README.md §2)', async () => {
+  it('maps the four poll URLs to the corpus timeline (fixtures/README.md §2)', async () => {
     assert.deepEqual(TIMELINE[`${DEALS_PATH}?page=0`], ['http/r0.xml', 'http/cmp_deals.xml', 'http/cmp_deals.xml']);
     assert.deepEqual(TIMELINE[`${DEALS_PATH}?page=1`], ['http/r1.xml', 'http/r1.xml']);
     assert.deepEqual(TIMELINE[FRONT_PATH], ['http/feed_feed.xml', 'http/cmp_front.xml', 'http/cmp_front.xml']);
+    assert.deepEqual(TIMELINE[FREEBIES_PATH], ['http/freebies_feed.xml']);
     assert.deepEqual(TIMELINE[CLASSIFIEDS_PATH], ['http/classifieds-page.html']);
   });
 
@@ -140,6 +142,7 @@ describe('integration: the fixture server', () => {
     assert.deepEqual(resolveKey(`${DEALS_PATH}?page=0`), { key: `${DEALS_PATH}?page=0`, page: 0 });
     assert.deepEqual(resolveKey(`${DEALS_PATH}?page=1`), { key: `${DEALS_PATH}?page=1`, page: 1 });
     assert.deepEqual(resolveKey(FRONT_PATH), { key: FRONT_PATH, page: null });
+    assert.deepEqual(resolveKey(FREEBIES_PATH), { key: FREEBIES_PATH, page: null });
     assert.deepEqual(resolveKey(CLASSIFIEDS_PATH), { key: CLASSIFIEDS_PATH, page: null });
     // No page param at all is page 0, which is how the first request of a
     // cycle looks if a caller forgets the query.

@@ -31,10 +31,10 @@ test('isDevMockTransport: true only when the flag is truthy and not production',
   assert.equal(isDevMockTransport({ OZB_DEV_MOCK_TRANSPORT: '1', NODE_ENV: 'production' }), false);
 });
 
-test('createDevMockTransport serves the four poll URLs from fixtures and never calls fetch', async () => {
+test('createDevMockTransport serves the five poll URLs from fixtures and never calls fetch', async () => {
   const transport = createDevMockTransport(CONFIG);
   const urls = [...buildDealPollUrls(CONFIG), CONFIG.OZB_CLASSIFIEDS_URL];
-  assert.equal(urls.length, 4);
+  assert.equal(urls.length, 5);
 
   // Sabotage globalThis.fetch: if the mock reaches for the network it throws.
   const realFetch = globalThis.fetch;

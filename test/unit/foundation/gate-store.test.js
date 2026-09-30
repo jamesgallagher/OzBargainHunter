@@ -53,9 +53,9 @@ function rollBackTo(build, version, statements) {
 }
 
 describe('store: the persisted access gate (3.7)', () => {
-  test('a fresh database is created at schema version 3 with all thirteen tables', () => {
+  test('a fresh database is created at schema version 4 with all thirteen tables', () => {
     withStore((store) => {
-      assert.equal(store.schemaVersion, 3);
+      assert.equal(store.schemaVersion, 4);
       assert.deepEqual([...store.tables].sort(), V3_TABLES);
       assert.equal(store.tables.length, 13);
     });
@@ -99,6 +99,7 @@ describe('store: the persisted access gate (3.7)', () => {
     db.exec('DROP TABLE access_gate');
     db.exec('DROP INDEX idx_observations_deal_poll');
     db.exec('ALTER TABLE ledger DROP COLUMN sent');
+    db.exec('ALTER TABLE deals DROP COLUMN freebie_first_seen');
     db.prepare(
       `INSERT INTO observations (deal_id, votes_pos, votes_neg, comment_count, click_count, observed_at)
        VALUES (1, 10, 0, 5, 100, '2026-09-19T07:30:00Z')`,
@@ -111,10 +112,10 @@ describe('store: the persisted access gate (3.7)', () => {
     rollBackTo(build, 1, []);
     build.close();
 
-    // 2. Re-open: the v2 + v3 migrations must run in order.
+    // 2. Re-open: the v2, v3 and v4 migrations must run in order.
     const store = openStore({ path: dbPath, clock });
     const db2 = store.getDb();
-    assert.equal(store.schemaVersion, 3, 'migrated to v3');
+    assert.equal(store.schemaVersion, 4, 'migrated to v4');
     // The v2 migration de-duplicated before creating the index.
     const obs = db2.prepare('SELECT id, deal_id, observed_at FROM observations ORDER BY id').all();
     assert.equal(obs.length, 1, 'one row per (deal, poll) pair after migration');
@@ -138,12 +139,13 @@ describe('store: the persisted access gate (3.7)', () => {
       'DROP INDEX idx_gate_events_at',
       'DROP TABLE gate_events',
       'DROP TABLE access_gate',
+      'ALTER TABLE deals DROP COLUMN freebie_first_seen',
     ]);
     build.close();
 
-    // 2. Re-open: only the v3 migration runs.
+    // 2. Re-open: the v3 and v4 migrations run.
     const store = openStore({ path: dbPath, clock });
-    assert.equal(store.schemaVersion, 3, 'migrated to v3');
+    assert.equal(store.schemaVersion, 4, 'migrated to v4');
     const gate = store.getGate();
     assert.ok(gate, 'the gate row was created by the v3 migration');
     assert.equal(gate.state, 'open');
