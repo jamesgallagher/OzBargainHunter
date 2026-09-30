@@ -213,7 +213,7 @@ export async function startWorker({
   }
 
   /**
-   * The deal-poll task: fetch the three URLs, evaluate the rules, fan out.
+   * The deal-poll task: fetch the four URLs, evaluate the rules, fan out.
    */
   async function dealPollTask() {
     // Cold start: the first poll from an empty database seeds silently.

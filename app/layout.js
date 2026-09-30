@@ -19,6 +19,7 @@
 import { getStore } from '../lib/web/db.js';
 import { systemClock } from '../lib/clock.js';
 import { viewGate } from '../lib/gate/view.js';
+import { VERSION } from '../lib/config.js';
 import AppShell from './components/app-shell.js';
 import { healthWithGate } from './components/ui.js';
 import './globals.css';
@@ -37,7 +38,10 @@ export const metadata = {
   },
   description: 'Personal OzBargain deal and classifieds watcher',
   icons: {
-    icon: '/favicon.ico',
+    // The `?v=` query string cache-busts the icon: a new package version
+    // changes the URL so browsers re-fetch the icon. The icon route stays
+    // authenticated (not public) — the query string does not change that.
+    icon: `/favicon.ico?v=${VERSION}`,
   },
   viewport: {
     width: 'device-width',

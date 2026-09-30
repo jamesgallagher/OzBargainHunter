@@ -91,6 +91,7 @@ def deal_records(path: pathlib.Path) -> list[dict]:
                 "comment_count": int(meta.get("comment-count")),
                 "click_count": int(meta.get("click-count")),
                 "categories": categories(item),
+                "title_msg_types": [m.get("type") for m in item.findall("ozb:title-msg", NS) if m.get("type")],
                 "description_html": item.find("description").text or "",
             }
         )
@@ -223,7 +224,10 @@ def listing_records(path: pathlib.Path) -> list[dict]:
 def write(name: str, payload) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     target = OUT / name
-    target.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # Explicit LF line endings: the canonical fixtures are LF, and Python's
+    # text-mode default on Windows would otherwise write CRLF.
+    with open(target, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
     print(f"wrote {target.relative_to(ROOT)} ({len(payload['records'])} records)")
 
 

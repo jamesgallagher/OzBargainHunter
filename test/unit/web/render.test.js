@@ -9,7 +9,7 @@ import { fixedClock } from '../../../lib/clock.js';
 import { setStoreForTest } from '../../../lib/web/db.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import Layout from '../../../app/layout.js';
+import Layout, { metadata } from '../../../app/layout.js';
 import StatusPage from '../../../app/page.js';
 import RulesPage from '../../../app/rules/page.js';
 import NewRulePage from '../../../app/rules/new/page.js';
@@ -204,12 +204,126 @@ describe('render: one render test per screen (7.1)', () => {
     assert.match(html, /cooldown/, 'the suppression kind');
   });
 
-  test('screen 7 (thresholds) renders the threshold rule and the freebie checkbox', async () => {
+  test('screen 7 (thresholds) renders the Freebie alerts card with two independent switches and the threshold rule', async () => {
     const html = renderToStaticMarkup(await ThresholdsPage());
     assert.match(html, /Thresholds/, 'the screen heading');
+    assert.match(html, /Freebie alerts/, 'the Freebie alerts card heading');
+    assert.match(html, /Alert on anything OzBargain lists as a freebie/, 'the card description');
+    assert.match(html, /Deals/, 'the Deals switch label');
+    assert.match(html, /Classifieds/, 'the Classifieds switch label');
+    assert.match(html, /\/thresholds\/freebie-deals/, 'the deals form posts to its own segment');
+    assert.match(html, /\/thresholds\/freebie/, 'the classifieds form posts to its own segment');
     assert.match(html, /5\+ upvotes/, 'the threshold rule label');
-    assert.match(html, /Always notify on freebie/, 'the freebie checkbox');
-    assert.match(html, /\/thresholds\/freebie/, 'the freebie form posts to its own segment');
+  });
+
+  test('screen 7: both freebie switches default checked (absent means on)', async () => {
+    // A fresh store with no freebie settings: both switches are checked
+    // (absent = on).
+    const freshDir = mkdtempSync(join(tmpdir(), 'ozb-freebie-fresh-'));
+    const freshStore = openStore({ path: join(freshDir, 'test.db'), clock: fixedClock('2026-09-19T07:30:00Z') });
+    setStoreForTest(freshStore);
+    try {
+      const html = renderToStaticMarkup(await ThresholdsPage());
+      assert.match(html, /<input id="deal-freebie-setting" type="checkbox" name="freebie_deals" checked/, 'the Deals switch is checked (absent = on)');
+      assert.match(html, /<input id="classifieds-freebie-setting" type="checkbox" name="freebie" checked/, 'the Classifieds switch is checked (absent = on)');
+    } finally {
+      setStoreForTest(store);
+      freshStore.close();
+      rmSync(freshDir, { recursive: true, force: true });
+    }
+  });
+
+  test('screen 7: a setting of "0" unchecks its switch; "1" keeps it checked', async () => {
+    store.setSetting('always_notify_deal_freebie', '0');
+    store.setSetting('always_notify_freebie', '1');
+    try {
+      const html = renderToStaticMarkup(await ThresholdsPage());
+      assert.match(html, /<input id="deal-freebie-setting" type="checkbox" name="freebie_deals"\/>/, 'the Deals switch is unchecked (setting "0")');
+      assert.doesNotMatch(html, /<input id="deal-freebie-setting" type="checkbox" name="freebie_deals" checked/, 'the Deals switch is not checked');
+      assert.match(html, /<input id="classifieds-freebie-setting" type="checkbox" name="freebie" checked/, 'the Classifieds switch is checked (setting "1")');
+    } finally {
+      store.deleteSetting('always_notify_deal_freebie');
+      store.deleteSetting('always_notify_freebie');
+    }
+  });
+
+  test('screen 7: the classifieds hint is shown when classifieds polling is off or no session is stored', async () => {
+    // The store has no classifieds_enabled and no ozb_account_cookie, so the
+    // hint is shown.
+    const html = renderToStaticMarkup(await ThresholdsPage());
+    assert.match(html, /Classifieds polling is off, so no classified freebies will be seen/, 'the classifieds hint is shown');
+    assert.match(html, /\/classifieds-session/, 'the hint links to the classifieds session');
+  });
+
+  test('screen 7: the classifieds hint is hidden when classifieds polling is on and a session is stored', async () => {
+    store.setSetting('classifieds_enabled', '1');
+    store.setSetting('ozb_account_cookie', 'some-cookie');
+    try {
+      const html = renderToStaticMarkup(await ThresholdsPage());
+      assert.doesNotMatch(html, /Classifieds polling is off, so no classified freebies will be seen/, 'the classifieds hint is hidden');
+    } finally {
+      store.deleteSetting('classifieds_enabled');
+      store.deleteSetting('ozb_account_cookie');
+    }
+  });
+
+  test('the rules page shows the freebie alerts line reflecting the two settings', async () => {
+    const html = renderToStaticMarkup(RulesPage());
+    assert.match(html, /Freebie alerts: Deals on · Classifieds on/, 'the freebie alerts line (absent = on)');
+    assert.match(html, /\/thresholds/, 'the line links to the thresholds settings');
+  });
+
+  test('the rules page freebie line reflects a setting of "0"', async () => {
+    store.setSetting('always_notify_deal_freebie', '0');
+    try {
+      const html = renderToStaticMarkup(RulesPage());
+      assert.match(html, /Freebie alerts: Deals off · Classifieds on/, 'the freebie alerts line reflects the off setting');
+    } finally {
+      store.deleteSetting('always_notify_deal_freebie');
+    }
+  });
+
+  test('screen 5 (alert history) lists a freebie ledger row with its Freebie · Deal or Freebie · Classified badge', async () => {
+    // Seed a freebie ledger row (rule 0) for a deal that was first seen in the
+    // freebies feed (freebie_first_seen set) and one for a classifieds freebie
+    // (freebie_first_seen null).
+    const now = '2026-09-19T07:30:00Z';
+    // A deal freebie: the node is in the deals table with freebie_first_seen set.
+    store.upsertDeal({
+      node_id: 977067,
+      title: '[iOS, Android] Free Pair of adidas Shoes Avatar Clothing @ Pokémon GO',
+      url: 'https://www.ozbargain.com.au/node/977067',
+      author: 'RichardL',
+      posted_at: now,
+      categories: [],
+      merchant_url: null,
+      expiry_at: null,
+      first_seen: now,
+      freebie_first_seen: now,
+    });
+    store.insertLedger({ node_id: 977067, rule_id: 0, fired_at: now, sent: 1 });
+    // A classifieds freebie: the node is in the deals table with freebie_first_seen null.
+    store.upsertDeal({
+      node_id: 975712,
+      title: 'Classifieds Freebie Listing',
+      url: 'https://www.ozbargain.com.au/node/975712',
+      author: 'ausdkunst',
+      posted_at: now,
+      categories: [],
+      merchant_url: null,
+      expiry_at: null,
+      first_seen: now,
+    });
+    store.insertLedger({ node_id: 975712, rule_id: 0, fired_at: now, sent: 1 });
+
+    const html = renderToStaticMarkup(AlertsPage());
+    // The deal freebie row shows a Freebie badge and the Deal surface.
+    assert.ok(html.includes('[iOS, Android] Free Pair of adidas Shoes Avatar Clothing @ Pokémon GO'), 'the deal freebie title is listed');
+    assert.ok(html.includes('Freebie'), 'the Freebie badge is shown');
+    assert.ok(html.includes('Deal'), 'the Deal surface is shown for the deal freebie');
+    // The classifieds freebie row shows a Freebie badge and the Classified surface.
+    assert.ok(html.includes('Classifieds Freebie Listing'), 'the classifieds freebie title is listed');
+    assert.ok(html.includes('Classified'), 'the Classified surface is shown for the classifieds freebie');
   });
 
   test('screen 8 (delivery) renders the mechanism cards and test-send', async () => {
@@ -307,6 +421,23 @@ describe('render: the layout last-checked timestamp (M-m8)', () => {
       freshStore.close();
       rmSync(freshDir, { recursive: true, force: true });
     }
+  });
+});
+
+// The layout metadata's icon is cache-busted with the package version
+// (?v=<VERSION>): a new version changes the URL so browsers re-fetch the
+// icon. The icon route stays authenticated (not public) — the query string
+// does not change that.
+describe('render: the layout metadata icon is cache-busted by the package version', () => {
+  test('the layout metadata icon URL starts with /favicon.ico?v=', () => {
+    assert.ok(
+      typeof metadata.icons.icon === 'string',
+      'the layout metadata exposes a string icon',
+    );
+    assert.ok(
+      metadata.icons.icon.startsWith('/favicon.ico?v='),
+      `the icon URL starts with /favicon.ico?v= (got ${metadata.icons.icon})`,
+    );
   });
 });
 

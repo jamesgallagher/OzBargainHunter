@@ -3,7 +3,7 @@
  * only non-matching deals; poll two adds live deal 900003 with 24 votes.
  */
 
-import { CLASSIFIEDS_PATH, DEALS_PATH, FRONT_PATH } from '../../scripts/fixture-server.mjs';
+import { CLASSIFIEDS_PATH, DEALS_PATH, FRONT_PATH, FREEBIES_PATH } from '../../scripts/fixture-server.mjs';
 
 export const ALERT_DEAL_TITLE = 'Ubiquiti Unifi Dream Router 7 (UDR7) $399 Delivered @ PLE';
 
@@ -55,6 +55,7 @@ export function buildAlertTimeline({ now = new Date() } = {}) {
       ],
       [`${DEALS_PATH}?page=1`]: [{ body: pollOne, contentType: 'application/rss+xml; charset=utf-8' }],
       [FRONT_PATH]: [{ body: pollOne, contentType: 'application/rss+xml; charset=utf-8' }],
+      [FREEBIES_PATH]: [{ body: feed([]), contentType: 'application/rss+xml; charset=utf-8' }],
       [CLASSIFIEDS_PATH]: [{ fixture: 'http/classifieds-page.html' }],
     },
     title: ALERT_DEAL_TITLE,

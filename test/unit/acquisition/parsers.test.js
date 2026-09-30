@@ -30,6 +30,27 @@ test('parseDealsFeed on cmp_front.xml deep-equals the 20 records in front-feed.j
   assert.deepEqual(actual, expected);
 });
 
+// The freebies feed (design 6.6, D49): the same deals parser handles it. It
+// parses to 30 records, each with a node id, and the parser extracts the
+// `ozb:title-msg` types (`title_msg_types`) the deal-freebie eligibility rule
+// reads. The expired count is derived from the fixture, not hard-coded.
+test('parseDealsFeed on freebies_feed.xml parses to 30 records with node ids and extracts title_msg_types', () => {
+  const xml = readFixture('fixtures/http/freebies_feed.xml');
+  const actual = parseDealsFeed(xml);
+  assert.equal(actual.length, 30, '30 records');
+  assert.ok(actual.every((r) => typeof r.node_id === 'number'), 'every record has a node id');
+  // The expired count is counted from the fixture (the `expired` title-msg),
+  // not hard-coded: 11 of the 30 freebies carry `ozb:title-msg type="expired"`.
+  const expired = actual.filter((r) => r.title_msg_types?.includes('expired'));
+  assert.equal(expired.length, 11, '11 expired freebies (counted from the fixture)');
+  // The other title-msg types the eligibility rule distinguishes.
+  const census = actual.reduce((acc, r) => {
+    for (const t of r.title_msg_types ?? []) acc[t] = (acc[t] ?? 0) + 1;
+    return acc;
+  }, {});
+  assert.deepEqual(census, { expired: 11, upcoming: 4, targeted: 1, longrunning: 1 });
+});
+
 test('parseClassifiedsPage on classifieds-page.html deep-equals the 25 records and reports uid 226301', () => {
   const html = readFixture('fixtures/http/classifieds-page.html');
   const expected = readRecordFixture('fixtures/records/classifieds.json').records;

@@ -23,6 +23,7 @@ import { createFixtureTransport } from '../../support/fixtureTransport.js';
 const P0 = 'https://www.ozbargain.com.au/deals/feed?page=0';
 const P1 = 'https://www.ozbargain.com.au/deals/feed?page=1';
 const FRONT = 'https://www.ozbargain.com.au/feed';
+const FREEBIES = 'https://www.ozbargain.com.au/freebies/feed';
 const CLS = 'https://www.ozbargain.com.au/classified';
 
 const MIN = 60000;
@@ -334,6 +335,7 @@ describe('gate: end-to-end (design 3.7)', () => {
       env.routes[P0] = { status: 500 };
       env.routes[P1] = { status: 500 };
       env.routes[FRONT] = { status: 500 };
+      env.routes[FREEBIES] = { status: 304, fixture: 'http/freebies_feed.xml' };
       await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
       await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
       await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
@@ -360,11 +362,11 @@ describe('gate: end-to-end (design 3.7)', () => {
       assert.equal(g.failing_cycles, 0);
       assert.equal(g.b5_tier, 0);
       assert.equal(env.transport.calls, callsBefore + 1, 'the probe is exactly one request');
-      // The next full cycle makes three requests.
+      // The next full cycle makes four requests (the freebies feed is the fourth URL).
       env.routes[P1] = { status: 200, fixture: 'http/r1.xml' };
       env.routes[FRONT] = { status: 200, fixture: 'http/feed_feed.xml' };
       await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
-      assert.equal(env.transport.calls, callsBefore + 4);
+      assert.equal(env.transport.calls, callsBefore + 5);
     } finally {
       env.close();
     }
@@ -376,6 +378,7 @@ describe('gate: end-to-end (design 3.7)', () => {
       env.routes[P0] = { status: 200, body: 'not xml' };
       env.routes[P1] = { status: 404 };
       env.routes[FRONT] = { status: 200, fixture: 'http/feed_feed.xml' };
+      env.routes[FREEBIES] = { status: 304, fixture: 'http/freebies_feed.xml' };
       const result = await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
       assert.equal(result.failures, 2, 'the unparseable and not_found rows are recorded');
       const g = env.store.getGate();
@@ -428,11 +431,12 @@ describe('gate: end-to-end (design 3.7)', () => {
       assert.equal(env.transport.calls, callsBefore + 1, 'the first tick after the cool-off is exactly the probe');
       assert.equal(env.store.getGate().state, 'open');
 
-      // The next tick makes three requests.
+      // The next tick makes four requests (the freebies feed is the fourth URL).
       env.routes[P1] = { status: 200, fixture: 'http/r1.xml' };
       env.routes[FRONT] = { status: 200, fixture: 'http/feed_feed.xml' };
+      env.routes[FREEBIES] = { status: 304, fixture: 'http/freebies_feed.xml' };
       await runDealPoll({ client: env.client, store: env.store, clock: env.clock, config: env.config, log: env.log, gate: env.gate });
-      assert.equal(env.transport.calls, callsBefore + 4);
+      assert.equal(env.transport.calls, callsBefore + 5);
     } finally {
       env.close();
     }

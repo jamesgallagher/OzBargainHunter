@@ -159,7 +159,7 @@ export async function runClassifiedsFetch({ store, config, pollAt, log = () => {
 }
 
 /**
- * Run one deal poll cycle end to end: fetch the three URLs through the real
+ * Run one deal poll cycle end to end: fetch the four URLs through the real
  * transport, upsert and observe, evaluate the rules, compose and fan out.
  *
  * Each cycle gets its own `fixedClock` pinned at the poll instant, because the
