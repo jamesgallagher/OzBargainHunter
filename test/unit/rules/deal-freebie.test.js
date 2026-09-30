@@ -21,6 +21,16 @@ const HTTP_FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '.
 // records are the corpus the deal-freebie evaluator reads.
 const freebiesFeed = parseDealsFeed(fs.readFileSync(path.join(HTTP_FIXTURES, 'freebies_feed.xml'), 'utf8'));
 
+// The classifieds corpus (design 6.6): a real classifieds freebie (type
+// 'free') is the other half of the Activity freebie ledger, and its
+// `freebie_first_seen` is null (badge "Freebie · Classified").
+const RECORDS_FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'records');
+const classifiedsById = (() => {
+  const m = new Map();
+  for (const r of JSON.parse(fs.readFileSync(path.join(RECORDS_FIXTURES, 'classifieds.json'), 'utf8')).records) m.set(r.node_id, r);
+  return m;
+})();
+
 // The corpus's own timeline (fixtures/README.md section 1).
 const POLL_1_AT = '2026-09-19T07:30:00Z';
 const POLL_2_AT = '2026-09-19T08:05:00Z';
@@ -298,6 +308,81 @@ describe('deal freebie: surface safety', () => {
     deal = store.getDeal(400000);
     assert.ok(deal.front_page_first_seen, 'front_page_first_seen is preserved after the freebies poll');
     assert.ok(deal.freebie_first_seen, 'freebie_first_seen is set after the freebies poll');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Activity (review round 1 F3): `getFreebieLedger` returns only freebies the
+// user actually saw. Silent seeding rows, rows written while the setting was
+// off, and a node dropped because a rule alerted (all `sent = 0`) do not
+// appear. A real deal freebie (`sent = 1`) and a real classifieds freebie
+// (`sent = 1`, `freebie_first_seen` null) do.
+// ---------------------------------------------------------------------------
+describe('deal freebie: Activity (sent filter)', () => {
+  it('after seeding, getFreebieLedger returns 0 rows (seeding rows are sent = 0)', () => {
+    const store = makeStore();
+    evaluatePoll({
+      feeds: [{ surface: 'freebies', records: freebiesFeed }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    assert.ok(store.getSetting(DEAL_FREEBIE_SEEDED_AT_KEY), 'seeding happened');
+    const rows = store.getFreebieLedger('2000-01-01T00:00:00Z');
+    assert.equal(rows.length, 0, 'no sent freebies after seeding');
+  });
+
+  it('one real deal freebie gives exactly one row', () => {
+    const store = makeStore();
+    // Seed first (no alerts).
+    evaluatePoll({
+      feeds: [{ surface: 'freebies', records: freebiesFeed }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    // A new freebie appears at poll 2.
+    const newFreebie = synthFreebie(999999);
+    const out = evaluatePoll({
+      feeds: [{ surface: 'freebies', records: [newFreebie] }],
+      store, clock: frozenClock(POLL_2_AT), pollAt: POLL_2_AT,
+    });
+    const dealFreebieAlerts = out.alerts.filter((a) => a.kind === 'deal_freebie');
+    assert.equal(dealFreebieAlerts.length, 1, 'one deal_freebie alert');
+    const rows = store.getFreebieLedger('2000-01-01T00:00:00Z');
+    assert.equal(rows.length, 1, 'one sent freebie row');
+    assert.equal(rows[0].node_id, 999999);
+    assert.ok(rows[0].freebie_first_seen, 'a deal freebie has freebie_first_seen set');
+  });
+
+  it('a node dropped for a rule alert gives no freebie row (sent = 0)', () => {
+    const store = makeStore();
+    // Pre-set the seeding key so this is a pure drop test, not a seeding.
+    store.setSetting(DEAL_FREEBIE_SEEDED_AT_KEY, POLL_1_AT);
+    const sharedNode = synthFreebie(500000, { title: 'Free Shared Thing' });
+    insertRule(store, { id: 1, type: 'match', parameters: { term: 'shared' }, surfaces: 'deals' });
+    evaluatePoll({
+      feeds: [
+        { surface: 'deals', records: [sharedNode] },
+        { surface: 'freebies', records: [sharedNode] },
+      ],
+      store, clock: frozenClock(POLL_2_AT), pollAt: POLL_2_AT,
+    });
+    assert.ok(store.hasLedger(500000, FREEBIE_RULE_ID), 'the rule-0 ledger row was written');
+    const rows = store.getFreebieLedger('2000-01-01T00:00:00Z');
+    assert.equal(rows.length, 0, 'the dropped node does not appear in Activity');
+  });
+
+  it('a real classifieds freebie still appears with freebie_first_seen null (badge Freebie · Classified)', () => {
+    const store = makeStore();
+    // The unpinned freebie (975712) retyped to free — a real classifieds freebie.
+    const freebie = { ...classifiedsById.get(975712), type: 'free' };
+    const out = evaluatePoll({
+      feeds: [{ surface: 'classifieds', records: [freebie] }],
+      store, clock: frozenClock(POLL_1_AT), pollAt: POLL_1_AT,
+    });
+    const freebieAlerts = out.alerts.filter((a) => a.kind === 'freebie');
+    assert.equal(freebieAlerts.length, 1, 'one classifieds freebie alert');
+    const rows = store.getFreebieLedger('2000-01-01T00:00:00Z');
+    assert.equal(rows.length, 1, 'the classifieds freebie appears in Activity');
+    assert.equal(rows[0].node_id, 975712);
+    assert.equal(rows[0].freebie_first_seen, null, 'freebie_first_seen is null (badge Freebie · Classified)');
   });
 });
 
